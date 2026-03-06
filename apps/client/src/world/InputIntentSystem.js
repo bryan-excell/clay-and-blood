@@ -1,3 +1,5 @@
+import { AuthoritySystem } from './AuthoritySystem.js';
+
 /**
  * Converts controller-specific input into controller-agnostic IntentComponent data.
  */
@@ -20,6 +22,17 @@ export class InputIntentSystem {
     static updateEntity(entity) {
         const intent = entity.getComponent('intent');
         if (!intent) return;
+        if (!AuthoritySystem.canSimulateOnClient(entity)) {
+            intent.set({
+                moveX: 0,
+                moveY: 0,
+                wantsSprint: false,
+                wantsDash: false,
+                wantsAttackPrimary: false,
+                wantsAttackSecondary: false,
+            });
+            return;
+        }
 
         const control = entity.getComponent('control');
         if (control && control.controlMode !== 'local') {

@@ -26,4 +26,8 @@ export class AuthorityComponent extends Component {
         this.ownerId = nextOwnerId;
         return true;
     }
+
+    canSimulateOnClient() {
+        return this.authority === 'client' || this.authority === 'shared';
+    }
 }

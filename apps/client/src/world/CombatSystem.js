@@ -1,3 +1,5 @@
+import { AuthoritySystem } from './AuthoritySystem.js';
+
 /**
  * Consumes attack intent and dispatches weapon actions.
  */
@@ -11,6 +13,10 @@ export class CombatSystem {
             const intent = entity.getComponent('intent');
             const combat = entity.getComponent('playerCombat');
             if (!intent || !combat) continue;
+            if (!AuthoritySystem.canSimulateOnClient(entity)) {
+                intent.clearTransient();
+                continue;
+            }
 
             if (!combat.isLocallyControlled()) {
                 intent.clearTransient();

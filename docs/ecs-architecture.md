@@ -54,6 +54,7 @@ Current implementation anchor:
 - Combat triggers (primary/secondary + aim) are routed through `IntentComponent` and gated by `ControlComponent`.
 - `CombatSystem` consumes attack intent and invokes weapon actions before physics.
 - `PlayerStateMachine` now owns locomotion/dash only; weapon/combat state lives in `PlayerCombatComponent`.
+- Systems run local simulation only when `AuthoritySystem.canSimulateOnClient(entity)` is true.
 - `EntityManager.updateComponents()` applies ordered phase updates.
 - `EntityManager.updateRemainingComponents()` is a temporary fallback for unmapped components.
 

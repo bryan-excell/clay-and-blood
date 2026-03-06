@@ -7,6 +7,7 @@ import { InputIntentSystem } from '../world/InputIntentSystem.js';
 import { LocomotionSystem } from '../world/LocomotionSystem.js';
 import { DashSystem } from '../world/DashSystem.js';
 import { CombatSystem } from '../world/CombatSystem.js';
+import { AuthoritySystem } from '../world/AuthoritySystem.js';
 import { gameState } from '../core/GameState.js';
 import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
@@ -196,6 +197,7 @@ export class GameScene extends Phaser.Scene {
         if (!nextEntity) return false;
         const nextControl = nextEntity.getComponent('control');
         if (!nextControl) return false;
+        if (!AuthoritySystem.canSimulateOnClient(nextEntity)) return false;
 
         const current = this.getLocallyControlledEntity();
         if (current && current.id === nextEntity.id) return true;
@@ -560,6 +562,7 @@ export class GameScene extends Phaser.Scene {
     _simulateLocalPlayerMovement(deltaTime) {
         const controlled = this.getLocallyControlledEntity();
         if (!controlled) return;
+        if (!AuthoritySystem.canSimulateOnClient(controlled)) return;
 
         const transform = controlled.getComponent('transform');
         const circle = controlled.getComponent('circle');
