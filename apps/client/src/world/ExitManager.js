@@ -5,6 +5,9 @@ import { KeyboardInputComponent } from "../components/KeyboardInputComponent.js"
 import { PlayerStateMachine } from "../components/PlayerStateMachine.js";
 import { VisibilityComponent } from "../components/VisibilityComponent.js";
 import { TransformComponent } from "../components/TransformComponent.js";
+import { ControlComponent } from "../components/ControlComponent.js";
+import { AuthorityComponent } from "../components/AuthorityComponent.js";
+import { IntentComponent } from "../components/IntentComponent.js";
 import { findEmptyTile } from "../utils/helpers.js";
 import { EntityLevelGenerator } from "./EntityLevelGenerator.js";
 import { networkManager } from "../core/NetworkManager.js";
@@ -174,13 +177,24 @@ export class ExitManager {
                 COLOR_PLAYER
             ));
             
-            // 3. Input component
+            // 3. Control, authority, and resolved intent
+            playerEntity.addComponent(new ControlComponent({
+                controlMode: 'local',
+                controllerId: null
+            }));
+            playerEntity.addComponent(new AuthorityComponent({
+                authority: 'client',
+                ownerId: null
+            }));
+            playerEntity.addComponent(new IntentComponent());
+
+            // 4. Input component
             playerEntity.addComponent(new KeyboardInputComponent());
 
-            // 4. State machine (movement/attacks)
+            // 5. State machine (movement/attacks)
             playerEntity.addComponent(new PlayerStateMachine());
 
-            // 5. Visibility
+            // 6. Visibility
             playerEntity.addComponent(new VisibilityComponent(320));
             
             // Get the newly created visual component for camera following

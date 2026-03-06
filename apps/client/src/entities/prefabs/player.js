@@ -1,8 +1,11 @@
-import { TransformComponent } from "../../components/TransformComponent.js"
+import { TransformComponent } from "../../components/TransformComponent.js";
 import { CircleComponent } from '../../components/CircleComponent.js';
 import { KeyboardInputComponent } from '../../components/KeyboardInputComponent.js';
 import { PlayerStateMachine } from '../../components/PlayerStateMachine.js';
 import { VisibilityComponent } from '../../components/VisibilityComponent.js';
+import { ControlComponent } from '../../components/ControlComponent.js';
+import { AuthorityComponent } from '../../components/AuthorityComponent.js';
+import { IntentComponent } from '../../components/IntentComponent.js';
 import { PLAYER_RADIUS, COLOR_PLAYER } from '../../config.js';
 
 /**
@@ -16,7 +19,11 @@ export function createPlayer(scene, config = {}) {
         x = 0,
         y = 0,
         radius = PLAYER_RADIUS,
-        color = COLOR_PLAYER
+        color = COLOR_PLAYER,
+        controlMode = 'local',
+        controllerId = null,
+        authority = 'client',
+        ownerId = null
     } = config;
 
     const player = scene.entityFactory.createEntity('player');
@@ -31,13 +38,18 @@ export function createPlayer(scene, config = {}) {
     // Warm torchlight fill with dark outline
     player.addComponent(new CircleComponent(radius, color, 1, 0x5c3a00, 3));
 
-    // 3. Add input handling
+    // 3. Add control, authority, and resolved intent data
+    player.addComponent(new ControlComponent({ controlMode, controllerId }));
+    player.addComponent(new AuthorityComponent({ authority, ownerId }));
+    player.addComponent(new IntentComponent());
+
+    // 4. Add input handling
     player.addComponent(new KeyboardInputComponent());
-    
-    // 4. Add the state machine to control movement and attacks
+
+    // 5. Add the state machine to control movement and attacks
     player.addComponent(new PlayerStateMachine());
 
-    // 5. Field of view — drives lighting and future stealth/AI systems
+    // 6. Field of view - drives lighting and future stealth/AI systems
     player.addComponent(new VisibilityComponent(320));
 
     // Set up camera following

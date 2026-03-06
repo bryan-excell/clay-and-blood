@@ -19,6 +19,8 @@ export const PLAYER_SPEED = 200;
 export const PLAYER_SPRINT_MULTIPLIER = 1.75;
 export const PLAYER_DASH_SPEED = 800;
 export const PLAYER_DASH_DURATION = 250; // ms
+const SOLID_TILE_TYPES = new Set([TILE_WALL, TILE_VOID]);
+const SWEEP_EPSILON = 1e-6;
 
 /**
  * Compute movement velocity from held directional input.
@@ -87,7 +89,7 @@ export function resolvePlayerCollisions(x, y, grid, vxHint = 0, vyHint = 0) {
     const r = PLAYER_RADIUS;
     const gridH = grid.length;
     const gridW = gridH > 0 ? grid[0].length : 0;
-    const isSolid = (tile) => tile === TILE_WALL || tile === TILE_VOID;
+    const isSolid = (tile) => SOLID_TILE_TYPES.has(tile);
     const radiusCells = 2;
 
     // Iterative depenetration to robustly resolve corner and deep-overlap cases.
@@ -153,6 +155,136 @@ export function resolvePlayerCollisions(x, y, grid, vxHint = 0, vyHint = 0) {
 }
 
 /**
+ * Sweep a moving point against an AABB.
+ * (Used with walls expanded by PLAYER_RADIUS for swept-circle CCD.)
+ * @param {number} px
+ * @param {number} py
+ * @param {number} dx
+ * @param {number} dy
+ * @param {number} left
+ * @param {number} top
+ * @param {number} right
+ * @param {number} bottom
+ * @returns {{ t:number, nx:number, ny:number } | null}
+ */
+function sweepPointVsAabb(px, py, dx, dy, left, top, right, bottom) {
+    let tNearX, tFarX, tNearY, tFarY;
+
+    if (Math.abs(dx) < SWEEP_EPSILON) {
+        if (px < left || px > right) return null;
+        tNearX = -Infinity;
+        tFarX = Infinity;
+    } else {
+        tNearX = (left - px) / dx;
+        tFarX = (right - px) / dx;
+        if (tNearX > tFarX) [tNearX, tFarX] = [tFarX, tNearX];
+    }
+
+    if (Math.abs(dy) < SWEEP_EPSILON) {
+        if (py < top || py > bottom) return null;
+        tNearY = -Infinity;
+        tFarY = Infinity;
+    } else {
+        tNearY = (top - py) / dy;
+        tFarY = (bottom - py) / dy;
+        if (tNearY > tFarY) [tNearY, tFarY] = [tFarY, tNearY];
+    }
+
+    const tEntry = Math.max(tNearX, tNearY);
+    const tExit = Math.min(tFarX, tFarY);
+    if (tEntry > tExit) return null;
+    if (tExit < 0 || tEntry > 1) return null;
+
+    let nx = 0;
+    let ny = 0;
+    if (tNearX > tNearY) nx = dx > 0 ? -1 : 1;
+    else ny = dy > 0 ? -1 : 1;
+    return { t: Math.max(0, tEntry), nx, ny };
+}
+
+/**
+ * Continuous swept-circle movement against solid tiles (wall/void) with slide.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} dx
+ * @param {number} dy
+ * @param {number[][] | null | undefined} grid
+ * @returns {{ x:number, y:number }}
+ */
+function sweepPlayerMove(x, y, dx, dy, grid) {
+    if (!grid) return { x: x + dx, y: y + dy };
+    if (Math.abs(dx) < SWEEP_EPSILON && Math.abs(dy) < SWEEP_EPSILON) return { x, y };
+
+    const r = PLAYER_RADIUS;
+    const rows = grid.length;
+    const cols = rows > 0 ? grid[0].length : 0;
+    const isSolid = (tile) => SOLID_TILE_TYPES.has(tile);
+
+    let remDx = dx;
+    let remDy = dy;
+
+    for (let iter = 0; iter < 4; iter++) {
+        if (Math.abs(remDx) < SWEEP_EPSILON && Math.abs(remDy) < SWEEP_EPSILON) break;
+
+        const endX = x + remDx;
+        const endY = y + remDy;
+        const minX = Math.min(x, endX) - r;
+        const maxX = Math.max(x, endX) + r;
+        const minY = Math.min(y, endY) - r;
+        const maxY = Math.max(y, endY) + r;
+        const minCellX = Math.max(0, Math.floor(minX / TILE_SIZE));
+        const maxCellX = Math.min(cols - 1, Math.floor(maxX / TILE_SIZE));
+        const minCellY = Math.max(0, Math.floor(minY / TILE_SIZE));
+        const maxCellY = Math.min(rows - 1, Math.floor(maxY / TILE_SIZE));
+
+        let best = null;
+
+        for (let ty = minCellY; ty <= maxCellY; ty++) {
+            for (let tx = minCellX; tx <= maxCellX; tx++) {
+                if (!isSolid(grid[ty][tx])) continue;
+
+                const left = tx * TILE_SIZE - r;
+                const top = ty * TILE_SIZE - r;
+                const right = (tx + 1) * TILE_SIZE + r;
+                const bottom = (ty + 1) * TILE_SIZE + r;
+                const hit = sweepPointVsAabb(x, y, remDx, remDy, left, top, right, bottom);
+                if (!hit) continue;
+                if (!best || hit.t < best.t) best = hit;
+            }
+        }
+
+        if (!best) {
+            x += remDx;
+            y += remDy;
+            break;
+        }
+
+        const advanceT = Math.max(0, best.t - SWEEP_EPSILON);
+        x += remDx * advanceT;
+        y += remDy * advanceT;
+
+        const remainT = Math.max(0, 1 - advanceT);
+        let slideDx = remDx * remainT;
+        let slideDy = remDy * remainT;
+
+        // Remove velocity component into the wall normal (slide response).
+        const into = slideDx * best.nx + slideDy * best.ny;
+        if (into < 0) {
+            slideDx -= best.nx * into;
+            slideDy -= best.ny * into;
+        }
+
+        remDx = slideDx;
+        remDy = slideDy;
+
+        // Resolve any tiny residual overlap from numeric precision before next sweep.
+        ({ x, y } = resolvePlayerCollisions(x, y, grid, remDx, remDy));
+    }
+
+    return { x, y };
+}
+
+/**
  * Shared movement integration for both client prediction and server authority.
  * Dash start is handled externally by updating dash state before calling this.
  * @param {{x:number,y:number,dashVx?:number,dashVy?:number,dashTimeLeftMs?:number}} state
@@ -186,8 +318,9 @@ export function stepPlayerKinematics(state, input, dtMs, grid) {
     const substepMs = dtMs / substeps;
 
     for (let i = 0; i < substeps; i++) {
-        x += vx * (substepMs / 1000);
-        y += vy * (substepMs / 1000);
+        const stepDx = vx * (substepMs / 1000);
+        const stepDy = vy * (substepMs / 1000);
+        ({ x, y } = sweepPlayerMove(x, y, stepDx, stepDy, grid));
         ({ x, y } = resolvePlayerCollisions(x, y, grid, vx, vy));
     }
 
