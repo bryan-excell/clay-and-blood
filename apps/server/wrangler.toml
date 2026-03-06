@@ -1,0 +1,15 @@
+name = "clay-and-blood-server"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[resolve_alias]
+"@clay-and-blood/shared" = "../../packages/shared/src/index.js"
+
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom"]

@@ -1,0 +1,17 @@
+{
+  "name": "@clay-and-blood/client",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@clay-and-blood/shared": "*",
+    "phaser": "^3.55.2"
+  },
+  "devDependencies": {
+    "vite": "^6.2.0"
+  }
+}
