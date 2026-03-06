@@ -1,8 +1,9 @@
 import { TILE_SIZE, PLAYER_RADIUS, COLOR_PLAYER } from "../config.js";
 import { gameState } from "../core/GameState.js";
 import { CircleComponent } from "../components/CircleComponent.js";
-import { PhysicsCapability } from "../components/PhysicsCapability.js";
 import { KeyboardInputComponent } from "../components/KeyboardInputComponent.js";
+import { PlayerStateMachine } from "../components/PlayerStateMachine.js";
+import { VisibilityComponent } from "../components/VisibilityComponent.js";
 import { TransformComponent } from "../components/TransformComponent.js";
 import { findEmptyTile } from "../utils/helpers.js";
 import { EntityLevelGenerator } from "./EntityLevelGenerator.js";
@@ -173,23 +174,23 @@ export class ExitManager {
                 COLOR_PLAYER
             ));
             
-            // 3. Physics component
-            playerEntity.addComponent(new PhysicsCapability(
-                'dynamic',
-                { drag: 0 }
-            ));
-            
-            // 4. Input component
+            // 3. Input component
             playerEntity.addComponent(new KeyboardInputComponent());
+
+            // 4. State machine (movement/attacks)
+            playerEntity.addComponent(new PlayerStateMachine());
+
+            // 5. Visibility
+            playerEntity.addComponent(new VisibilityComponent(320));
             
             // Get the newly created visual component for camera following
             const newVisualComponent = playerEntity.getComponent('circle');
             if (newVisualComponent && newVisualComponent.gameObject) {
                 this.scene.cameras.main.startFollow(newVisualComponent.gameObject);
             }
-        } else if (visualComponent.gameObject && visualComponent.gameObject.body) {
-            // If visual and physics are still intact, just reset the position
-            visualComponent.gameObject.body.reset(safeX, safeY);
+        } else if (visualComponent.gameObject) {
+            // If visual is intact, move it directly.
+            visualComponent.gameObject.setPosition(safeX, safeY);
         }
     }
 

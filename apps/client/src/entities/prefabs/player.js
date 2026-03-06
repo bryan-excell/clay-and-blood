@@ -1,6 +1,5 @@
 import { TransformComponent } from "../../components/TransformComponent.js"
 import { CircleComponent } from '../../components/CircleComponent.js';
-import { PhysicsCapability } from '../../components/PhysicsCapability.js';
 import { KeyboardInputComponent } from '../../components/KeyboardInputComponent.js';
 import { PlayerStateMachine } from '../../components/PlayerStateMachine.js';
 import { VisibilityComponent } from '../../components/VisibilityComponent.js';
@@ -32,18 +31,13 @@ export function createPlayer(scene, config = {}) {
     // Warm torchlight fill with dark outline
     player.addComponent(new CircleComponent(radius, color, 1, 0x5c3a00, 3));
 
-    // 3. Add physics capabilities to the existing game object
-    player.addComponent(new PhysicsCapability('dynamic', {
-        drag: 0  // Add some drag for better control
-    }));
-
-    // 4. Add input handling
+    // 3. Add input handling
     player.addComponent(new KeyboardInputComponent());
     
-    // 5. Add the state machine to control movement and attacks
+    // 4. Add the state machine to control movement and attacks
     player.addComponent(new PlayerStateMachine());
 
-    // 6. Field of view — drives lighting and future stealth/AI systems
+    // 5. Field of view — drives lighting and future stealth/AI systems
     player.addComponent(new VisibilityComponent(320));
 
     // Set up camera following

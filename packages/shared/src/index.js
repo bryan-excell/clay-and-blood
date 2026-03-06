@@ -19,6 +19,142 @@ export const PLAYER_SPEED = 200;
 export const PLAYER_SPRINT_MULTIPLIER = 1.75;
 export const PLAYER_DASH_SPEED = 800;
 export const PLAYER_DASH_DURATION = 250; // ms
+
+/**
+ * Compute movement velocity from held directional input.
+ * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean}} input
+ * @returns {{ vx:number, vy:number }}
+ */
+export function movementVelocityFromInput(input = {}) {
+    let vx = 0;
+    let vy = 0;
+    if (input.left)  vx -= 1;
+    if (input.right) vx += 1;
+    if (input.up)    vy -= 1;
+    if (input.down)  vy += 1;
+
+    if (vx !== 0 && vy !== 0) {
+        const len = Math.sqrt(vx * vx + vy * vy);
+        vx /= len;
+        vy /= len;
+    }
+
+    const speed = input.sprint
+        ? PLAYER_SPEED * PLAYER_SPRINT_MULTIPLIER
+        : PLAYER_SPEED;
+    return { vx: vx * speed, vy: vy * speed };
+}
+
+/**
+ * Derive dash velocity from current directional input.
+ * Returns null when no directional input is held.
+ * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean}} input
+ * @returns {{ dashVx:number, dashVy:number, dashTimeLeftMs:number } | null}
+ */
+export function dashStateFromInput(input = {}) {
+    let dvx = 0;
+    let dvy = 0;
+    if (input.left)  dvx -= 1;
+    if (input.right) dvx += 1;
+    if (input.up)    dvy -= 1;
+    if (input.down)  dvy += 1;
+
+    if (dvx === 0 && dvy === 0) return null;
+    if (dvx !== 0 && dvy !== 0) {
+        const len = Math.sqrt(dvx * dvx + dvy * dvy);
+        dvx /= len;
+        dvy /= len;
+    }
+    return {
+        dashVx: dvx * PLAYER_DASH_SPEED,
+        dashVy: dvy * PLAYER_DASH_SPEED,
+        dashTimeLeftMs: PLAYER_DASH_DURATION,
+    };
+}
+
+/**
+ * Resolve a player circle against a tile grid.
+ * @param {number} x
+ * @param {number} y
+ * @param {number[][] | null | undefined} grid
+ * @returns {{ x:number, y:number }}
+ */
+export function resolvePlayerCollisions(x, y, grid) {
+    if (!grid) return { x, y };
+
+    const r = PLAYER_RADIUS;
+    const gridH = grid.length;
+    const gridW = gridH > 0 ? grid[0].length : 0;
+    const cellX = Math.floor(x / TILE_SIZE);
+    const cellY = Math.floor(y / TILE_SIZE);
+
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            const nx = cellX + dx;
+            const ny = cellY + dy;
+            if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
+            if (grid[ny][nx] !== 1) continue;
+
+            const rLeft = nx * TILE_SIZE;
+            const rTop = ny * TILE_SIZE;
+            const rRight = rLeft + TILE_SIZE;
+            const rBot = rTop + TILE_SIZE;
+
+            const nearX = Math.max(rLeft, Math.min(x, rRight));
+            const nearY = Math.max(rTop, Math.min(y, rBot));
+            const distX = x - nearX;
+            const distY = y - nearY;
+            const dist = Math.sqrt(distX * distX + distY * distY);
+
+            if (dist < r) {
+                if (dist === 0) {
+                    y -= r;
+                } else {
+                    const overlap = r - dist;
+                    x += (distX / dist) * overlap;
+                    y += (distY / dist) * overlap;
+                }
+            }
+        }
+    }
+
+    x = Math.max(r, Math.min(gridW * TILE_SIZE - r, x));
+    y = Math.max(r, Math.min(gridH * TILE_SIZE - r, y));
+    return { x, y };
+}
+
+/**
+ * Shared movement integration for both client prediction and server authority.
+ * Dash start is handled externally by updating dash state before calling this.
+ * @param {{x:number,y:number,dashVx?:number,dashVy?:number,dashTimeLeftMs?:number}} state
+ * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean}} input
+ * @param {number} dtMs
+ * @param {number[][] | null | undefined} grid
+ * @returns {{x:number,y:number,vx:number,vy:number,dashVx:number,dashVy:number,dashTimeLeftMs:number}}
+ */
+export function stepPlayerKinematics(state, input, dtMs, grid) {
+    let dashVx = state.dashVx ?? 0;
+    let dashVy = state.dashVy ?? 0;
+    let dashTimeLeftMs = Math.max(0, state.dashTimeLeftMs ?? 0);
+
+    let vx = 0;
+    let vy = 0;
+    if (dashTimeLeftMs > 0) {
+        vx = dashVx;
+        vy = dashVy;
+        dashTimeLeftMs = Math.max(0, dashTimeLeftMs - dtMs);
+    } else {
+        ({ vx, vy } = movementVelocityFromInput(input));
+        dashVx = 0;
+        dashVy = 0;
+    }
+
+    let x = state.x + vx * (dtMs / 1000);
+    let y = state.y + vy * (dtMs / 1000);
+    ({ x, y } = resolvePlayerCollisions(x, y, grid));
+
+    return { x, y, vx, vy, dashVx, dashVy, dashTimeLeftMs };
+}
 export const PLAYER_HEALTH_MAX = 100;
 
 // Projectile constants

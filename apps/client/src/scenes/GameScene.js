@@ -8,14 +8,17 @@ import { findEmptyTile } from '../utils/helpers.js';
 import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
-import { PLAYER_RADIUS, TILE_SIZE, PLAYER_SPEED, PLAYER_SPRINT_MULTIPLIER } from '../config.js';
+import { PLAYER_RADIUS, TILE_SIZE } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
-import { getExitDestination, PLAYER_DASH_SPEED, PLAYER_DASH_DURATION, PLAYER_HEALTH_MAX } from '@clay-and-blood/shared';
+import {
+    getExitDestination,
+    PLAYER_HEALTH_MAX,
+    dashStateFromInput,
+    stepPlayerKinematics,
+} from '@clay-and-blood/shared';
 
 // ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
 
-const SERVER_TICK_DT = 0.05; // 50 ms in seconds, matches server TICK_MS
-const SERVER_DASH_TICKS = Math.ceil(PLAYER_DASH_DURATION / (SERVER_TICK_DT * 1000)); // = 5
 const REMOTE_INTERPOLATION_DELAY_MS = 100;
 const REMOTE_INTERPOLATION_DELAY_TICKS = 2; // 2 * 50 ms = 100 ms
 const REMOTE_MAX_EXTRAPOLATION_TICKS = 2;   // cap extrapolation to 100 ms
@@ -24,95 +27,6 @@ const LOCAL_RECONCILE_DEADZONE_PX = 1.5;
 const LOCAL_RECONCILE_NUDGE_RATIO = 0.35;
 const LOCAL_RECONCILE_MAX_NUDGE_PX = 6;
 const LOCAL_RECONCILE_HARD_SNAP_PX = 96;
-
-/**
- * Pure-JS collision resolution matching the server's resolveCollisions().
- * Returns the corrected {x, y} after pushing out of wall tiles.
- */
-function resolveCollisionsLocal(x, y, grid) {
-    const r = PLAYER_RADIUS;
-    const gridH = grid.length;
-    const gridW = gridH > 0 ? grid[0].length : 0;
-    const cellX = Math.floor(x / TILE_SIZE);
-    const cellY = Math.floor(y / TILE_SIZE);
-
-    for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-            const nx = cellX + dx;
-            const ny = cellY + dy;
-            if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
-            if (grid[ny][nx] !== 1) continue;
-
-            const rLeft  = nx * TILE_SIZE;
-            const rTop   = ny * TILE_SIZE;
-            const rRight = rLeft + TILE_SIZE;
-            const rBot   = rTop  + TILE_SIZE;
-
-            const nearX = Math.max(rLeft, Math.min(x, rRight));
-            const nearY = Math.max(rTop,  Math.min(y, rBot));
-            const distX = x - nearX;
-            const distY = y - nearY;
-            const dist  = Math.sqrt(distX * distX + distY * distY);
-
-            if (dist < r) {
-                if (dist === 0) {
-                    y -= r;
-                } else {
-                    const overlap = r - dist;
-                    x += (distX / dist) * overlap;
-                    y += (distY / dist) * overlap;
-                }
-            }
-        }
-    }
-
-    x = Math.max(r, Math.min(gridW * TILE_SIZE - r, x));
-    y = Math.max(r, Math.min(gridH * TILE_SIZE - r, y));
-    return { x, y };
-}
-
-/**
- * Simulate one server tick of movement for reconciliation replay.
- * @param {number} x
- * @param {number} y
- * @param {object} input  - { up, down, left, right, sprint, dashVx, dashVy, dashTicksLeft }
- * @param {number[][]} grid - wall grid for collision, or null to skip
- * @returns {{ x, y, dashTicksLeft }} position after one server tick
- */
-function simulateServerTick(x, y, input, grid) {
-    let vx = 0, vy = 0;
-    let newDashTicksLeft = input.dashTicksLeft;
-
-    if (input.dashTicksLeft > 0) {
-        vx = input.dashVx;
-        vy = input.dashVy;
-        newDashTicksLeft--;
-    } else {
-        if (input.left)  vx -= 1;
-        if (input.right) vx += 1;
-        if (input.up)    vy -= 1;
-        if (input.down)  vy += 1;
-
-        if (vx !== 0 && vy !== 0) {
-            const len = Math.sqrt(vx * vx + vy * vy);
-            vx /= len;
-            vy /= len;
-        }
-
-        const speed = input.sprint
-            ? PLAYER_SPEED * PLAYER_SPRINT_MULTIPLIER
-            : PLAYER_SPEED;
-        vx *= speed;
-        vy *= speed;
-    }
-
-    let newX = x + vx * SERVER_TICK_DT;
-    let newY = y + vy * SERVER_TICK_DT;
-
-    if (grid) ({ x: newX, y: newY } = resolveCollisionsLocal(newX, newY, grid));
-
-    return { x: newX, y: newY, dashTicksLeft: newDashTicksLeft };
-}
 
 /**
  * Main game scene, updated for entity-based levels
@@ -183,14 +97,11 @@ export class GameScene extends Phaser.Scene {
             strokeThickness: 3,
         }).setScrollFactor(0).setDepth(200);
 
-        // --- Server reconciliation ---
-        // Pending inputs are those sent to the server but not yet acknowledged.
-        // Each entry: { seq, up, down, left, right, sprint, dashVx, dashVy, dashTicksLeft }
-        this._pendingInputs = [];
-        // Local mirror of the server-side dash state so replays match exactly.
-        this._localDashState = { dashVx: 0, dashVy: 0, dashTicksLeft: 0 };
+        // --- Networking state ---
         // Latest server tick seen by this client, used for tick-based interpolation.
         this._latestServerTick = 0;
+        // Local dash state for deterministic client prediction.
+        this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
 
         this._setupNetworkListeners();
         networkManager.connect();
@@ -264,7 +175,7 @@ export class GameScene extends Phaser.Scene {
             }
             for (const p of players) {
                 if (p.sessionId === networkManager.sessionId) {
-                    this._applyServerCorrection(p.x, p.y, p.seq ?? 0);
+                    this._applyServerCorrection(p.x, p.y);
                 } else {
                     this._pushRemoteSnapshot(
                         p.sessionId,
@@ -292,38 +203,17 @@ export class GameScene extends Phaser.Scene {
             for (const rp of this.remotePlayers.values()) {
                 rp.circle.setVisible(rp.stageId === levelId);
             }
-            // Clear the pending input buffer; positions reset on level change
-            this._pendingInputs = [];
-            this._localDashState = { dashVx: 0, dashVy: 0, dashTicksLeft: 0 };
+            this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
         });
 
-        // Track local dash state so the reconciliation replay can mirror it
-        eventBus.on('player:dashStarted', ({ input, seq }) => {
-            let dvx = 0, dvy = 0;
-            if (input.left)  dvx -= 1;
-            if (input.right) dvx += 1;
-            if (input.up)    dvy -= 1;
-            if (input.down)  dvy += 1;
-            if (dvx !== 0 && dvy !== 0) {
-                const len = Math.sqrt(dvx * dvx + dvy * dvy);
-                dvx /= len; dvy /= len;
-            }
-            if (dvx !== 0 || dvy !== 0) {
+        eventBus.on('player:dashStarted', ({ input }) => {
+            const dash = dashStateFromInput(input);
+            if (dash) {
                 this._localDashState = {
-                    dashVx:        dvx * PLAYER_DASH_SPEED,
-                    dashVy:        dvy * PLAYER_DASH_SPEED,
-                    dashTicksLeft: SERVER_DASH_TICKS,
+                    dashVx: dash.dashVx,
+                    dashVy: dash.dashVy,
+                    dashTimeLeftMs: dash.dashTimeLeftMs,
                 };
-            }
-            // Push the dash input into the pending buffer immediately (seq already assigned)
-            if (seq >= 0) {
-                this._pendingInputs.push({
-                    seq,
-                    ...input,
-                    dashVx:        this._localDashState.dashVx,
-                    dashVy:        this._localDashState.dashVy,
-                    dashTicksLeft: this._localDashState.dashTicksLeft,
-                });
             }
         });
 
@@ -488,16 +378,12 @@ export class GameScene extends Phaser.Scene {
      *
      * This eliminates rubber-banding while keeping client-side prediction.
      */
-    _applyServerCorrection(serverX, serverY, serverSeq) {
+    _applyServerCorrection(serverX, serverY) {
         if (!this.player) return;
         const circle = this.player.getComponent('circle');
-        if (!circle || !circle.gameObject || !circle.gameObject.body) return;
+        if (!circle || !circle.gameObject) return;
         const transform = this.player.getComponent('transform');
-
-        // Drop inputs the server has already consumed (kept for telemetry/debug).
-        this._pendingInputs = this._pendingInputs.filter(i => i.seq > serverSeq);
         // Use authoritative server position directly as the correction target.
-        // Pending-input replay here is unstable with our current stateful-input model.
         const x = serverX;
         const y = serverY;
 
@@ -505,8 +391,8 @@ export class GameScene extends Phaser.Scene {
         // Apply bounded micro-corrections to avoid periodic hard teleports.
         const go   = circle.gameObject;
         const body = go.body;
-        const currentX = body.x + body.halfWidth;
-        const currentY = body.y + body.halfHeight;
+        const currentX = body ? body.x + body.halfWidth : go.x;
+        const currentY = body ? body.y + body.halfHeight : go.y;
         const errX = x - currentX;
         const errY = y - currentY;
         const dist = Math.sqrt(errX * errX + errY * errY);
@@ -514,8 +400,8 @@ export class GameScene extends Phaser.Scene {
             return;
         }
 
-        const vx = body.velocity.x;
-        const vy = body.velocity.y;
+        const vx = body ? body.velocity.x : 0;
+        const vy = body ? body.velocity.y : 0;
         let targetX = x;
         let targetY = y;
 
@@ -535,11 +421,13 @@ export class GameScene extends Phaser.Scene {
 
         go.x = targetX;
         go.y = targetY;
-        body.x = targetX - body.halfWidth;
-        body.y = targetY - body.halfHeight;
-        body.prev.x = body.x;
-        body.prev.y = body.y;
-        body.velocity.set(vx, vy);
+        if (body) {
+            body.x = targetX - body.halfWidth;
+            body.y = targetY - body.halfHeight;
+            body.prev.x = body.x;
+            body.prev.y = body.y;
+            body.velocity.set(vx, vy);
+        }
         if (transform) {
             transform.position.x = targetX;
             transform.position.y = targetY;
@@ -548,55 +436,70 @@ export class GameScene extends Phaser.Scene {
     }
 
     setupCollisions() {
-        console.log("Setting up collisions for all entities");
-        
-        // Get the player entity
-        const playerEntity = this.player;
-        
-        // Get the player's physics component via its visual component
-        const playerVisual = playerEntity.getComponent('circle');
-        
-        if (playerVisual && playerVisual.gameObject && playerVisual.gameObject.body) {
-            console.log("Setting up player collisions");
-            
-            // Setup collisions with walls
-            this.physics.add.collider(
-                playerVisual.gameObject, 
-                this.levelManager.collisionGroups.walls,
-                null, // No callback needed for basic wall collisions
-                null,
-                this
-            );
+        // Player movement/collision is handled manually (deterministic tile solver).
+        console.log("Player uses manual movement/collision; skipping Arcade player colliders");
+    }
 
-            // Get all exit entities and set up overlaps with each
-            const exitEntities = this.entityManager.getEntitiesByType('exit');
-            console.log(`Found ${exitEntities.length} exit entities for collision setup`);
-            
-            for (const exitEntity of exitEntities) {
-                const exitVisual = exitEntity.getComponent('rectangle');
-                
-                if (exitVisual && exitVisual.gameObject && exitVisual.gameObject.body) {
-                    // Setup overlap detection between player and this exit
-                    this.physics.add.overlap(
-                        playerVisual.gameObject,
-                        exitVisual.gameObject,
-                        () => {
-                            const exitComponent = exitEntity.getComponent('exit');
-                            if (exitComponent) {
-                                this.exitManager.handleExit(playerEntity, exitComponent.exitIndex);
-                            }
-                        },
-                        null, // No custom process callback needed
-                        this
-                    );
-                    
-                    console.log(`Set up overlap detection between player and exit ${exitEntity.id}`);
-                } else {
-                    console.warn(`Exit entity ${exitEntity.id} is missing visual component or physics body`);
-                }
+    _simulateLocalPlayerMovement(deltaTime) {
+        if (!this.player) return;
+        const transform = this.player.getComponent('transform');
+        const circle = this.player.getComponent('circle');
+        if (!transform || !circle?.gameObject) return;
+        const keyboard = this.player.getComponent('keyboard');
+        if (!keyboard) return;
+
+        const levelData = gameState.levels?.[gameState.currentLevelId];
+        const grid = levelData?.grid ?? null;
+
+        const stepped = stepPlayerKinematics(
+            {
+                x: transform.position.x,
+                y: transform.position.y,
+                dashVx: this._localDashState.dashVx,
+                dashVy: this._localDashState.dashVy,
+                dashTimeLeftMs: this._localDashState.dashTimeLeftMs,
+            },
+            keyboard.inputState,
+            deltaTime,
+            grid
+        );
+
+        const newX = stepped.x;
+        const newY = stepped.y;
+        this._localDashState.dashVx = stepped.dashVx;
+        this._localDashState.dashVy = stepped.dashVy;
+        this._localDashState.dashTimeLeftMs = stepped.dashTimeLeftMs;
+
+        transform.position.x = newX;
+        transform.position.y = newY;
+        circle.gameObject.setPosition(newX, newY);
+
+        this._checkManualExitOverlap(newX, newY);
+    }
+
+    _checkManualExitOverlap(playerX, playerY) {
+        const playerEntity = this.player;
+        if (!playerEntity) return;
+        const exits = this.entityManager.getEntitiesByType('exit');
+
+        for (const exitEntity of exits) {
+            const rect = exitEntity.getComponent('rectangle');
+            const exitComp = exitEntity.getComponent('exit');
+            if (!rect || !exitComp) continue;
+            const ex = rect.gameObject?.x ?? exitEntity.getComponent('transform')?.position.x;
+            const ey = rect.gameObject?.y ?? exitEntity.getComponent('transform')?.position.y;
+            if (!Number.isFinite(ex) || !Number.isFinite(ey)) continue;
+
+            const halfW = rect.width / 2;
+            const halfH = rect.height / 2;
+            const nearX = Math.max(ex - halfW, Math.min(playerX, ex + halfW));
+            const nearY = Math.max(ey - halfH, Math.min(playerY, ey + halfH));
+            const dx = playerX - nearX;
+            const dy = playerY - nearY;
+            if (dx * dx + dy * dy <= PLAYER_RADIUS * PLAYER_RADIUS) {
+                this.exitManager.handleExit(playerEntity, exitComp.exitIndex);
+                return;
             }
-        } else {
-            console.error("Player entity missing visual component or physics body - cannot set up collisions");
         }
     }
 
@@ -628,34 +531,14 @@ export class GameScene extends Phaser.Scene {
 
         // Update all entities
         this.entityManager.update(deltaTime);
+        this._simulateLocalPlayerMovement(deltaTime);
 
         // Send current input state to the authoritative server.
         // If the message was actually sent (not throttled), buffer it for reconciliation.
         if (this.player) {
             const keyboard = this.player.getComponent('keyboard');
             if (keyboard) {
-                const seq = networkManager.sendInput(keyboard.inputState);
-                if (seq >= 0) {
-                    const { up, down, left, right, sprint } = keyboard.inputState;
-
-                    // Advance the local dash counter (mirrors server decrement each tick)
-                    if (this._localDashState.dashTicksLeft > 0) {
-                        this._localDashState.dashTicksLeft--;
-                    }
-
-                    this._pendingInputs.push({
-                        seq,
-                        up, down, left, right, sprint,
-                        dashVx:        this._localDashState.dashVx,
-                        dashVy:        this._localDashState.dashVy,
-                        dashTicksLeft: this._localDashState.dashTicksLeft,
-                    });
-
-                    // Cap the buffer to prevent unbounded growth if the server goes silent
-                    if (this._pendingInputs.length > 120) {
-                        this._pendingInputs.splice(0, this._pendingInputs.length - 120);
-                    }
-                }
+                networkManager.sendInput(keyboard.inputState);
             }
         }
     }

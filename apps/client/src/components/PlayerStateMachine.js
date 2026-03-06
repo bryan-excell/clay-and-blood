@@ -47,10 +47,10 @@ export class PlayerStateMachine extends Component {
         this.dashDirection = { x: 0, y: 0 };
         this.maxDashCooldown = 1000; // 1 second cooldown between dashes
         this.maxDashDuration = 250;  // dash lasts 250ms
+        this.desiredVelocity = { x: 0, y: 0 };
         
         // Set dependencies
         this.requireComponent('keyboard');
-        this.requireComponent('physics');
     }
     
     /**
@@ -381,9 +381,6 @@ export class PlayerStateMachine extends Component {
         if (this.currentMovementState === this.movementStates.DASHING) {
             this.dashDuration -= deltaTime;
 
-            // Cancel velocity into any wall being touched this frame
-            this._clampDashVelocityToWalls();
-
             if (this.dashDuration <= 0) {
                 // Dash has finished
                 this.dashDuration = 0;
@@ -475,54 +472,8 @@ export class PlayerStateMachine extends Component {
 
         // Let GameScene know a dash started so it can update the reconciliation input buffer
         eventBus.emit('player:dashStarted', { input: keyboard.inputState, seq: dashSeq });
-
-        // Apply dash movement through physics
-        this.applyDashForce();
-    }
-    
-    /**
-     * Apply force for dash movement
-     */
-    applyDashForce() {
-        const physics = this.entity.getComponent('physics');
-        if (!physics) return;
-
-        const dashSpeed = 800;
-        let dashVelocityX = this.dashDirection.x * dashSpeed;
-        let dashVelocityY = this.dashDirection.y * dashSpeed;
-
-        // Don't dash into a wall the player is already pressing against
-        const body = physics.findVisualComponent()?.gameObject?.body;
-        if (body) {
-            if (dashVelocityX < 0 && body.blocked.left)  dashVelocityX = 0;
-            if (dashVelocityX > 0 && body.blocked.right) dashVelocityX = 0;
-            if (dashVelocityY < 0 && body.blocked.up)    dashVelocityY = 0;
-            if (dashVelocityY > 0 && body.blocked.down)  dashVelocityY = 0;
-        }
-
-        physics.setVelocity(dashVelocityX, dashVelocityY);
-    }
-
-    /**
-     * Every dash frame: zero out velocity components that are hitting a wall,
-     * preventing the sustained high velocity from tunneling through.
-     */
-    _clampDashVelocityToWalls() {
-        const physics = this.entity.getComponent('physics');
-        if (!physics) return;
-        const body = physics.findVisualComponent()?.gameObject?.body;
-        if (!body) return;
-
-        let vx = body.velocity.x;
-        let vy = body.velocity.y;
-        if (vx < 0 && body.blocked.left)  vx = 0;
-        if (vx > 0 && body.blocked.right) vx = 0;
-        if (vy < 0 && body.blocked.up)    vy = 0;
-        if (vy > 0 && body.blocked.down)  vy = 0;
-
-        if (vx !== body.velocity.x || vy !== body.velocity.y) {
-            physics.setVelocity(vx, vy);
-        }
+        this.desiredVelocity.x = this.dashDirection.x * 800;
+        this.desiredVelocity.y = this.dashDirection.y * 800;
     }
     
     /**
@@ -636,9 +587,6 @@ export class PlayerStateMachine extends Component {
             return;
         }
         
-        const physics = this.entity.getComponent('physics');
-        if (!physics) return;
-        
         // Calculate movement direction
         const direction = {
             x: 0,
@@ -675,10 +623,12 @@ export class PlayerStateMachine extends Component {
             }
             
             // Apply movement
-            physics.setVelocity(direction.x * speed, direction.y * speed);
+            this.desiredVelocity.x = direction.x * speed;
+            this.desiredVelocity.y = direction.y * speed;
         } else {
             // No movement
-            physics.setVelocity(0, 0);
+            this.desiredVelocity.x = 0;
+            this.desiredVelocity.y = 0;
         }
     }
-} 
+}
