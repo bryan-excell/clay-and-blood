@@ -77,45 +77,74 @@ export function dashStateFromInput(input = {}) {
  * @param {number} x
  * @param {number} y
  * @param {number[][] | null | undefined} grid
+ * @param {number} [vxHint]
+ * @param {number} [vyHint]
  * @returns {{ x:number, y:number }}
  */
-export function resolvePlayerCollisions(x, y, grid) {
+export function resolvePlayerCollisions(x, y, grid, vxHint = 0, vyHint = 0) {
     if (!grid) return { x, y };
 
     const r = PLAYER_RADIUS;
     const gridH = grid.length;
     const gridW = gridH > 0 ? grid[0].length : 0;
-    const cellX = Math.floor(x / TILE_SIZE);
-    const cellY = Math.floor(y / TILE_SIZE);
+    const isSolid = (tile) => tile === TILE_WALL || tile === TILE_VOID;
+    const radiusCells = 2;
 
-    for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-            const nx = cellX + dx;
-            const ny = cellY + dy;
-            if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
-            if (grid[ny][nx] !== 1) continue;
+    // Iterative depenetration to robustly resolve corner and deep-overlap cases.
+    for (let iter = 0; iter < 5; iter++) {
+        let collided = false;
+        const cellX = Math.floor(x / TILE_SIZE);
+        const cellY = Math.floor(y / TILE_SIZE);
 
-            const rLeft = nx * TILE_SIZE;
-            const rTop = ny * TILE_SIZE;
-            const rRight = rLeft + TILE_SIZE;
-            const rBot = rTop + TILE_SIZE;
+        for (let dy = -radiusCells; dy <= radiusCells; dy++) {
+            for (let dx = -radiusCells; dx <= radiusCells; dx++) {
+                const nx = cellX + dx;
+                const ny = cellY + dy;
+                if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
+                if (!isSolid(grid[ny][nx])) continue;
 
-            const nearX = Math.max(rLeft, Math.min(x, rRight));
-            const nearY = Math.max(rTop, Math.min(y, rBot));
-            const distX = x - nearX;
-            const distY = y - nearY;
-            const dist = Math.sqrt(distX * distX + distY * distY);
+                const rLeft = nx * TILE_SIZE;
+                const rTop = ny * TILE_SIZE;
+                const rRight = rLeft + TILE_SIZE;
+                const rBot = rTop + TILE_SIZE;
 
-            if (dist < r) {
-                if (dist === 0) {
-                    y -= r;
-                } else {
+                const nearX = Math.max(rLeft, Math.min(x, rRight));
+                const nearY = Math.max(rTop, Math.min(y, rBot));
+                const distX = x - nearX;
+                const distY = y - nearY;
+                const distSq = distX * distX + distY * distY;
+                if (distSq >= r * r) continue;
+
+                collided = true;
+                if (distSq > 1e-12) {
+                    const dist = Math.sqrt(distSq);
                     const overlap = r - dist;
                     x += (distX / dist) * overlap;
                     y += (distY / dist) * overlap;
+                    continue;
+                }
+
+                // Center is inside tile (dist==0): choose axis by nearest escape,
+                // then bias direction to oppose incoming velocity when available.
+                const toLeft = x - rLeft;
+                const toRight = rRight - x;
+                const toTop = y - rTop;
+                const toBottom = rBot - y;
+                const minEdge = Math.min(toLeft, toRight, toTop, toBottom);
+
+                if (minEdge === toLeft || minEdge === toRight) {
+                    const pushLeft = (toLeft <= toRight);
+                    const dir = Math.abs(vxHint) > 0.001 ? (vxHint > 0 ? -1 : 1) : (pushLeft ? -1 : 1);
+                    x = dir < 0 ? (rLeft - r) : (rRight + r);
+                } else {
+                    const pushUp = (toTop <= toBottom);
+                    const dir = Math.abs(vyHint) > 0.001 ? (vyHint > 0 ? -1 : 1) : (pushUp ? -1 : 1);
+                    y = dir < 0 ? (rTop - r) : (rBot + r);
                 }
             }
         }
+
+        if (!collided) break;
     }
 
     x = Math.max(r, Math.min(gridW * TILE_SIZE - r, x));
@@ -149,9 +178,18 @@ export function stepPlayerKinematics(state, input, dtMs, grid) {
         dashVy = 0;
     }
 
-    let x = state.x + vx * (dtMs / 1000);
-    let y = state.y + vy * (dtMs / 1000);
-    ({ x, y } = resolvePlayerCollisions(x, y, grid));
+    let x = state.x;
+    let y = state.y;
+    const totalMoveDist = Math.sqrt((vx * dtMs / 1000) ** 2 + (vy * dtMs / 1000) ** 2);
+    const maxSubstepDist = Math.max(1, PLAYER_RADIUS * 0.5);
+    const substeps = Math.max(1, Math.ceil(totalMoveDist / maxSubstepDist));
+    const substepMs = dtMs / substeps;
+
+    for (let i = 0; i < substeps; i++) {
+        x += vx * (substepMs / 1000);
+        y += vy * (substepMs / 1000);
+        ({ x, y } = resolvePlayerCollisions(x, y, grid, vx, vy));
+    }
 
     return { x, y, vx, vy, dashVx, dashVy, dashTimeLeftMs };
 }
