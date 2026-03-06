@@ -8,9 +8,106 @@ import { findEmptyTile } from '../utils/helpers.js';
 import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
-import { PLAYER_RADIUS, TILE_SIZE } from '../config.js';
+import { PLAYER_RADIUS, TILE_SIZE, PLAYER_SPEED, PLAYER_SPRINT_MULTIPLIER } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
-import { getExitDestination } from '@clay-and-blood/shared';
+import { getExitDestination, PLAYER_DASH_SPEED, PLAYER_DASH_DURATION } from '@clay-and-blood/shared';
+
+// ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
+
+const SERVER_TICK_DT = 0.05; // 50 ms in seconds, matches server TICK_MS
+const SERVER_DASH_TICKS = Math.ceil(PLAYER_DASH_DURATION / (SERVER_TICK_DT * 1000)); // = 5
+const REMOTE_INTERPOLATION_DELAY_MS = 100;
+const REMOTE_SNAPSHOT_BUFFER_SIZE = 40;
+const LOCAL_RECONCILE_EPSILON_PX = 0.5;
+
+/**
+ * Pure-JS collision resolution matching the server's resolveCollisions().
+ * Returns the corrected {x, y} after pushing out of wall tiles.
+ */
+function resolveCollisionsLocal(x, y, grid) {
+    const r = PLAYER_RADIUS;
+    const gridH = grid.length;
+    const gridW = gridH > 0 ? grid[0].length : 0;
+    const cellX = Math.floor(x / TILE_SIZE);
+    const cellY = Math.floor(y / TILE_SIZE);
+
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            const nx = cellX + dx;
+            const ny = cellY + dy;
+            if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
+            if (grid[ny][nx] !== 1) continue;
+
+            const rLeft  = nx * TILE_SIZE;
+            const rTop   = ny * TILE_SIZE;
+            const rRight = rLeft + TILE_SIZE;
+            const rBot   = rTop  + TILE_SIZE;
+
+            const nearX = Math.max(rLeft, Math.min(x, rRight));
+            const nearY = Math.max(rTop,  Math.min(y, rBot));
+            const distX = x - nearX;
+            const distY = y - nearY;
+            const dist  = Math.sqrt(distX * distX + distY * distY);
+
+            if (dist < r) {
+                if (dist === 0) {
+                    y -= r;
+                } else {
+                    const overlap = r - dist;
+                    x += (distX / dist) * overlap;
+                    y += (distY / dist) * overlap;
+                }
+            }
+        }
+    }
+
+    x = Math.max(r, Math.min(gridW * TILE_SIZE - r, x));
+    y = Math.max(r, Math.min(gridH * TILE_SIZE - r, y));
+    return { x, y };
+}
+
+/**
+ * Simulate one server tick of movement for reconciliation replay.
+ * @param {number} x
+ * @param {number} y
+ * @param {object} input  - { up, down, left, right, sprint, dashVx, dashVy, dashTicksLeft }
+ * @param {number[][]} grid - wall grid for collision, or null to skip
+ * @returns {{ x, y, dashTicksLeft }} position after one server tick
+ */
+function simulateServerTick(x, y, input, grid) {
+    let vx = 0, vy = 0;
+    let newDashTicksLeft = input.dashTicksLeft;
+
+    if (input.dashTicksLeft > 0) {
+        vx = input.dashVx;
+        vy = input.dashVy;
+        newDashTicksLeft--;
+    } else {
+        if (input.left)  vx -= 1;
+        if (input.right) vx += 1;
+        if (input.up)    vy -= 1;
+        if (input.down)  vy += 1;
+
+        if (vx !== 0 && vy !== 0) {
+            const len = Math.sqrt(vx * vx + vy * vy);
+            vx /= len;
+            vy /= len;
+        }
+
+        const speed = input.sprint
+            ? PLAYER_SPEED * PLAYER_SPRINT_MULTIPLIER
+            : PLAYER_SPEED;
+        vx *= speed;
+        vy *= speed;
+    }
+
+    let newX = x + vx * SERVER_TICK_DT;
+    let newY = y + vy * SERVER_TICK_DT;
+
+    if (grid) ({ x: newX, y: newY } = resolveCollisionsLocal(newX, newY, grid));
+
+    return { x: newX, y: newY, dashTicksLeft: newDashTicksLeft };
+}
 
 /**
  * Main game scene, updated for entity-based levels
@@ -67,6 +164,14 @@ export class GameScene extends Phaser.Scene {
         // --- Multiplayer ---
         // Map of remote sessionId -> Phaser.GameObjects.Arc (circle)
         this.remotePlayers = new Map();
+
+        // --- Server reconciliation ---
+        // Pending inputs are those sent to the server but not yet acknowledged.
+        // Each entry: { seq, up, down, left, right, sprint, dashVx, dashVy, dashTicksLeft }
+        this._pendingInputs = [];
+        // Local mirror of the server-side dash state so replays match exactly.
+        this._localDashState = { dashVx: 0, dashVy: 0, dashTicksLeft: 0 };
+
         this._setupNetworkListeners();
         networkManager.connect();
 
@@ -136,17 +241,14 @@ export class GameScene extends Phaser.Scene {
         eventBus.on('network:stateSnapshot', ({ players }) => {
             for (const p of players) {
                 if (p.sessionId === networkManager.sessionId) {
-                    this._applyServerCorrection(p.x, p.y);
+                    this._applyServerCorrection(p.x, p.y, p.seq ?? 0);
                 } else {
-                    const rp = this.remotePlayers.get(p.sessionId);
-                    if (rp) {
-                        rp.targetX = p.x;
-                        rp.targetY = p.y;
-                        rp.stageId = p.levelId;
-                        rp.circle.setVisible(p.levelId === gameState.currentLevelId);
-                    } else {
-                        this._addRemotePlayer(p.sessionId, p.x, p.y, p.levelId || 'town-square');
-                    }
+                    this._pushRemoteSnapshot(
+                        p.sessionId,
+                        p.x,
+                        p.y,
+                        p.levelId || 'town-square'
+                    );
                 }
             }
         });
@@ -165,6 +267,39 @@ export class GameScene extends Phaser.Scene {
         eventBus.on('level:transition', ({ levelId }) => {
             for (const rp of this.remotePlayers.values()) {
                 rp.circle.setVisible(rp.stageId === levelId);
+            }
+            // Clear the pending input buffer; positions reset on level change
+            this._pendingInputs = [];
+            this._localDashState = { dashVx: 0, dashVy: 0, dashTicksLeft: 0 };
+        });
+
+        // Track local dash state so the reconciliation replay can mirror it
+        eventBus.on('player:dashStarted', ({ input, seq }) => {
+            let dvx = 0, dvy = 0;
+            if (input.left)  dvx -= 1;
+            if (input.right) dvx += 1;
+            if (input.up)    dvy -= 1;
+            if (input.down)  dvy += 1;
+            if (dvx !== 0 && dvy !== 0) {
+                const len = Math.sqrt(dvx * dvx + dvy * dvy);
+                dvx /= len; dvy /= len;
+            }
+            if (dvx !== 0 || dvy !== 0) {
+                this._localDashState = {
+                    dashVx:        dvx * PLAYER_DASH_SPEED,
+                    dashVy:        dvy * PLAYER_DASH_SPEED,
+                    dashTicksLeft: SERVER_DASH_TICKS,
+                };
+            }
+            // Push the dash input into the pending buffer immediately (seq already assigned)
+            if (seq >= 0) {
+                this._pendingInputs.push({
+                    seq,
+                    ...input,
+                    dashVx:        this._localDashState.dashVx,
+                    dashVy:        this._localDashState.dashVy,
+                    dashTicksLeft: this._localDashState.dashTicksLeft,
+                });
             }
         });
 
@@ -195,46 +330,116 @@ export class GameScene extends Phaser.Scene {
         const isVisible = stageId === gameState.currentLevelId;
         circle.setVisible(isVisible);
         this.lightingRenderer?.maskGameObject(circle);
-        // targetX/Y track the latest server position; renderUpdate lerps toward them
-        this.remotePlayers.set(sessionId, { circle, stageId, targetX: x, targetY: y });
+        this.remotePlayers.set(sessionId, {
+            circle,
+            stageId,
+            snapshots: [{ timeMs: performance.now(), x, y, stageId }],
+        });
         console.log(`[Network] Remote player joined: ${sessionId} in stage ${stageId}`);
     }
 
+    _pushRemoteSnapshot(sessionId, x, y, stageId) {
+        let rp = this.remotePlayers.get(sessionId);
+        if (!rp) {
+            this._addRemotePlayer(sessionId, x, y, stageId);
+            rp = this.remotePlayers.get(sessionId);
+            if (!rp) return;
+        }
+
+        const nowMs = performance.now();
+        rp.stageId = stageId;
+        rp.circle.setVisible(stageId === gameState.currentLevelId);
+        rp.snapshots.push({ timeMs: nowMs, x, y, stageId });
+
+        if (rp.snapshots.length > REMOTE_SNAPSHOT_BUFFER_SIZE) {
+            rp.snapshots.splice(0, rp.snapshots.length - REMOTE_SNAPSHOT_BUFFER_SIZE);
+        }
+    }
+
+    _sampleRemoteSnapshot(rp, renderTimeMs) {
+        const samples = rp.snapshots;
+        if (!samples || samples.length === 0) return null;
+        if (samples.length === 1) return samples[0];
+        if (renderTimeMs <= samples[0].timeMs) return samples[0];
+
+        const last = samples[samples.length - 1];
+        if (renderTimeMs >= last.timeMs) return last;
+
+        let i = 0;
+        while (i < samples.length - 1 && samples[i + 1].timeMs < renderTimeMs) i++;
+
+        const a = samples[i];
+        const b = samples[i + 1];
+
+        if (!b || a.stageId !== b.stageId) return b || a;
+
+        const span = Math.max(1, b.timeMs - a.timeMs);
+        const t = Phaser.Math.Clamp((renderTimeMs - a.timeMs) / span, 0, 1);
+        return {
+            x: Phaser.Math.Linear(a.x, b.x, t),
+            y: Phaser.Math.Linear(a.y, b.y, t),
+            stageId: b.stageId,
+        };
+    }
+
     /**
-     * Gently correct the local player's Phaser physics body toward the server's
-     * authoritative position.  Small drift is ignored; large drift snaps immediately.
+     * Server reconciliation (Gambetta Part 2).
      *
-     * NOTE: We move the body position WITHOUT calling body.reset(), because reset()
-     * also zeroes velocity, which fights the client-side prediction and causes
-     * rubber-banding.  Instead we move body.x/y directly, leaving velocity intact.
+     * 1. Discard all pending inputs the server has already processed (seq ≤ serverSeq).
+     * 2. Start from the server's authoritative position.
+     * 3. Re-simulate every remaining pending input using the same movement math
+     *    as the server, producing the best estimate of our current position.
+     * 4. Snap the Phaser body to that estimate.
+     *
+     * This eliminates rubber-banding while keeping client-side prediction.
      */
-    _applyServerCorrection(serverX, serverY) {
+    _applyServerCorrection(serverX, serverY, serverSeq) {
         if (!this.player) return;
         const circle = this.player.getComponent('circle');
         if (!circle || !circle.gameObject || !circle.gameObject.body) return;
+        const transform = this.player.getComponent('transform');
 
-        const go     = circle.gameObject;
-        const body   = go.body;
-        const dx     = serverX - go.x;
-        const dy     = serverY - go.y;
-        const distSq = dx * dx + dy * dy;
+        // Drop inputs the server has already consumed
+        this._pendingInputs = this._pendingInputs.filter(i => i.seq > serverSeq);
 
-        if (distSq > 128 * 128) {
-            // Very large drift – snap position, keep velocity
-            go.x = serverX;
-            go.y = serverY;
-            body.x = serverX - body.halfWidth;
-            body.y = serverY - body.halfHeight;
-        } else if (distSq > 8 * 8) {
-            // Small drift – nudge 20% toward server, keep velocity
-            const corrX = go.x + dx * 0.2;
-            const corrY = go.y + dy * 0.2;
-            go.x = corrX;
-            go.y = corrY;
-            body.x = corrX - body.halfWidth;
-            body.y = corrY - body.halfHeight;
+        // Get the wall grid for replay collision resolution
+        const levelData = gameState.levels?.[gameState.currentLevelId];
+        const grid = levelData?.grid ?? null;
+
+        // Re-simulate pending inputs on top of the authoritative position
+        let x = serverX;
+        let y = serverY;
+        for (const input of this._pendingInputs) {
+            ({ x, y } = simulateServerTick(x, y, input, grid));
         }
-        // Under 8 px – within normal prediction error, ignore
+
+        // Apply the reconciled position to the Phaser body.
+        // Ignore tiny corrections; they show up as visible shimmer with no gameplay benefit.
+        const go   = circle.gameObject;
+        const body = go.body;
+        const currentX = body.x + body.halfWidth;
+        const currentY = body.y + body.halfHeight;
+        const errX = x - currentX;
+        const errY = y - currentY;
+        if (Math.abs(errX) < LOCAL_RECONCILE_EPSILON_PX && Math.abs(errY) < LOCAL_RECONCILE_EPSILON_PX) {
+            return;
+        }
+
+        const vx = body.velocity.x;
+        const vy = body.velocity.y;
+        go.x = x;
+        go.y = y;
+        body.x = x - body.halfWidth;
+        body.y = y - body.halfHeight;
+        body.prev.x = body.x;
+        body.prev.y = body.y;
+        body.velocity.set(vx, vy);
+
+        if (transform) {
+            transform.position.x = x;
+            transform.position.y = y;
+        }
+        circle._skipNextPositionUpdate = true;
     }
 
     setupCollisions() {
@@ -319,11 +524,33 @@ export class GameScene extends Phaser.Scene {
         // Update all entities
         this.entityManager.update(deltaTime);
 
-        // Send current input state to the authoritative server
+        // Send current input state to the authoritative server.
+        // If the message was actually sent (not throttled), buffer it for reconciliation.
         if (this.player) {
             const keyboard = this.player.getComponent('keyboard');
             if (keyboard) {
-                networkManager.sendInput(keyboard.inputState);
+                const seq = networkManager.sendInput(keyboard.inputState);
+                if (seq >= 0) {
+                    const { up, down, left, right, sprint } = keyboard.inputState;
+
+                    // Advance the local dash counter (mirrors server decrement each tick)
+                    if (this._localDashState.dashTicksLeft > 0) {
+                        this._localDashState.dashTicksLeft--;
+                    }
+
+                    this._pendingInputs.push({
+                        seq,
+                        up, down, left, right, sprint,
+                        dashVx:        this._localDashState.dashVx,
+                        dashVy:        this._localDashState.dashVy,
+                        dashTicksLeft: this._localDashState.dashTicksLeft,
+                    });
+
+                    // Cap the buffer to prevent unbounded growth if the server goes silent
+                    if (this._pendingInputs.length > 120) {
+                        this._pendingInputs.splice(0, this._pendingInputs.length - 120);
+                    }
+                }
             }
         }
     }
@@ -333,18 +560,18 @@ export class GameScene extends Phaser.Scene {
      * @param {number} delta - ms since last frame
      */
     renderUpdate(delta) {
-        // Decay constant: remote player converges to server position in ~100 ms
-        const t = 1 - Math.pow(0.01, delta / 100);
-
         // Smooth zoom toward target
         const cam = this.cameras.main;
         const zoomT = 1 - Math.pow(0.01, delta / 150);
         cam.setZoom(Phaser.Math.Linear(cam.zoom, this.targetZoom, zoomT));
 
+        const renderTimeMs = performance.now() - REMOTE_INTERPOLATION_DELAY_MS;
         for (const rp of this.remotePlayers.values()) {
-            if (rp.targetX !== undefined && rp.circle.visible) {
-                rp.circle.x = Phaser.Math.Linear(rp.circle.x, rp.targetX, t);
-                rp.circle.y = Phaser.Math.Linear(rp.circle.y, rp.targetY, t);
+            if (!rp.circle.visible) continue;
+            const sample = this._sampleRemoteSnapshot(rp, renderTimeMs);
+            if (sample) {
+                rp.circle.x = sample.x;
+                rp.circle.y = sample.y;
             }
         }
 

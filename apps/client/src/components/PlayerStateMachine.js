@@ -468,7 +468,10 @@ export class PlayerStateMachine extends Component {
         console.log(`Started dash in direction (${this.dashDirection.x}, ${this.dashDirection.y})`);
 
         // Inform the server immediately so it mirrors the dash (prevents rubber-banding)
-        networkManager.sendDash(keyboard.inputState);
+        const dashSeq = networkManager.sendDash(keyboard.inputState);
+
+        // Let GameScene know a dash started so it can update the reconciliation input buffer
+        eventBus.emit('player:dashStarted', { input: keyboard.inputState, seq: dashSeq });
 
         // Apply dash movement through physics
         this.applyDashForce();

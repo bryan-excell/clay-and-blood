@@ -26,6 +26,7 @@ class NetworkManager {
         this.connected      = false;
         this._lastInputTime = 0;
         this._inputInterval = 50; // send at most 20 input packets/sec (matches server tick)
+        this._seq           = 0;  // monotonic input sequence number
     }
 
     connect() {
@@ -101,20 +102,24 @@ class NetworkManager {
      * Send the local player's current input state to the server.
      * Throttled to match the server tick rate.
      * @param {object} inputState - { up, down, left, right, sprint }
+     * @returns {number} The seq number used, or -1 if the message was throttled/not sent.
      */
     sendInput(inputState) {
-        if (!this.connected) return;
+        if (!this.connected) return -1;
         const now = Date.now();
-        if (now - this._lastInputTime < this._inputInterval) return;
+        if (now - this._lastInputTime < this._inputInterval) return -1;
         this._lastInputTime = now;
+        const seq = ++this._seq;
         this.send({
             type:   MSG.PLAYER_INPUT,
+            seq,
             up:     !!inputState.up,
             down:   !!inputState.down,
             left:   !!inputState.left,
             right:  !!inputState.right,
             sprint: !!inputState.sprint,
         });
+        return seq;
     }
 
     /**
@@ -122,11 +127,14 @@ class NetworkManager {
      * Call this once when the dash begins; the server will simulate dash velocity
      * for PLAYER_DASH_DURATION ms.
      * @param {object} inputState - Current input state (used to derive direction)
+     * @returns {number} The seq number used for this dash input.
      */
     sendDash(inputState) {
-        if (!this.connected) return;
+        if (!this.connected) return -1;
+        const seq = ++this._seq;
         this.send({
             type:   MSG.PLAYER_INPUT,
+            seq,
             up:     !!inputState.up,
             down:   !!inputState.down,
             left:   !!inputState.left,
@@ -136,6 +144,7 @@ class NetworkManager {
         });
         // Reset throttle so the next regular sendInput fires after the normal interval
         this._lastInputTime = Date.now();
+        return seq;
     }
 
     /**
