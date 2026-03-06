@@ -6,8 +6,8 @@ import { LightingRenderer } from '../world/LightingRenderer.js';
 import { InputIntentSystem } from '../world/InputIntentSystem.js';
 import { LocomotionSystem } from '../world/LocomotionSystem.js';
 import { DashSystem } from '../world/DashSystem.js';
+import { CombatSystem } from '../world/CombatSystem.js';
 import { gameState } from '../core/GameState.js';
-import { findEmptyTile } from '../utils/helpers.js';
 import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
@@ -77,6 +77,8 @@ export class GameScene extends Phaser.Scene {
 
         // Create player at a safe spot
         this.createPlayerInLevel(initialLevel);
+        this.controlledEntity = this.player;
+        this._spawnPracticeEntitiesForLevel(initialLevelId);
 
         // Increase overlap bias to prevent corner-seam slipping between wall tiles
         this.physics.world.OVERLAP_BIAS = 16;
@@ -161,6 +163,110 @@ export class GameScene extends Phaser.Scene {
         };
     }
 
+    _spawnPracticeEntitiesForLevel(levelId) {
+        if (levelId !== 'town-square') return;
+        if (this.entityManager.getEntitiesByType('golem').length > 0) return;
+
+        const level = this.levelManager.currentLevel || this.levelManager.getLevel(levelId);
+        if (!level?.grid) return;
+
+        const tile = this._findNearestWalkableTile(level.grid, 24, 20, 10);
+        const x = tile.x * TILE_SIZE + TILE_SIZE / 2;
+        const y = tile.y * TILE_SIZE + TILE_SIZE / 2;
+
+        const golem = this.entityFactory.createFromPrefab('golem', {
+            x,
+            y,
+            controlMode: 'remote',
+        });
+
+        const circle = golem?.getComponent('circle');
+        if (circle?.gameObject) {
+            this.lightingRenderer?.maskGameObject(circle.gameObject);
+        }
+    }
+
+    getLocallyControlledEntity() {
+        const localEntity = this.entityManager.getEntitiesWithComponent('control')
+            .find(e => e.getComponent('control')?.controlMode === 'local');
+        return localEntity ?? this.player;
+    }
+
+    setLocallyControlledEntity(nextEntity, reason = 'control:switch') {
+        if (!nextEntity) return false;
+        const nextControl = nextEntity.getComponent('control');
+        if (!nextControl) return false;
+
+        const current = this.getLocallyControlledEntity();
+        if (current && current.id === nextEntity.id) return true;
+
+        const currentControl = current?.getComponent('control');
+        if (currentControl) {
+            currentControl.setControl('remote', currentControl.controllerId, reason);
+        }
+
+        nextControl.setControl('local', networkManager.sessionId ?? 'local', reason);
+        this.controlledEntity = nextEntity;
+
+        const circle = nextEntity.getComponent('circle');
+        if (circle?.gameObject) {
+            this.cameras.main.startFollow(circle.gameObject);
+        }
+
+        this.lightingRenderer?.setPrimaryLightSource(nextEntity.id);
+        this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        return true;
+    }
+
+    tryPossessAtWorldPoint(casterEntity, worldX, worldY) {
+        const candidates = this.entityManager.getEntitiesWithComponent('control')
+            .filter(e => e.id !== casterEntity?.id);
+
+        let best = null;
+        let bestDistSq = Infinity;
+
+        for (const entity of candidates) {
+            const circle = entity.getComponent('circle');
+            const go = circle?.gameObject;
+            if (!go || !go.visible) continue;
+
+            const radius = circle?.radius ?? PLAYER_RADIUS;
+            const dx = worldX - go.x;
+            const dy = worldY - go.y;
+            const distSq = dx * dx + dy * dy;
+            if (distSq <= radius * radius && distSq < bestDistSq) {
+                best = entity;
+                bestDistSq = distSq;
+            }
+        }
+
+        if (!best) return false;
+        return this.setLocallyControlledEntity(best, 'spell:possess');
+    }
+
+    _findNearestWalkableTile(grid, startX, startY, maxRadius = 8) {
+        const h = grid.length;
+        const w = grid[0]?.length ?? 0;
+        const inBounds = (x, y) => x >= 0 && x < w && y >= 0 && y < h;
+
+        if (inBounds(startX, startY) && grid[startY][startX] === 0) {
+            return { x: startX, y: startY };
+        }
+
+        for (let r = 1; r <= maxRadius; r++) {
+            for (let y = startY - r; y <= startY + r; y++) {
+                for (let x = startX - r; x <= startX + r; x++) {
+                    if (!inBounds(x, y) || grid[y][x] !== 0) continue;
+                    return { x, y };
+                }
+            }
+        }
+
+        const fallbackX = Math.max(1, Math.min(w - 2, startX));
+        const fallbackY = Math.max(1, Math.min(h - 2, startY));
+        return { x: fallbackX, y: fallbackY };
+    }
+
     // -----------------------------------------------------------------------
     // Multiplayer
     // -----------------------------------------------------------------------
@@ -214,6 +320,7 @@ export class GameScene extends Phaser.Scene {
                 rp.circle.setVisible(rp.stageId === levelId);
             }
             this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+            this._spawnPracticeEntitiesForLevel(levelId);
         });
 
         eventBus.on('player:dashStarted', ({ input }) => {
@@ -451,15 +558,28 @@ export class GameScene extends Phaser.Scene {
     }
 
     _simulateLocalPlayerMovement(deltaTime) {
-        if (!this.player) return;
-        const transform = this.player.getComponent('transform');
-        const circle = this.player.getComponent('circle');
+        const controlled = this.getLocallyControlledEntity();
+        if (!controlled) return;
+
+        const transform = controlled.getComponent('transform');
+        const circle = controlled.getComponent('circle');
         if (!transform || !circle?.gameObject) return;
-        const keyboard = this.player.getComponent('keyboard');
-        if (!keyboard) return;
+
+        const intent = controlled.getComponent('intent');
+        const keyboard = controlled.getComponent('keyboard');
 
         const levelData = gameState.levels?.[gameState.currentLevelId];
         const grid = levelData?.grid ?? null;
+        const input = intent ? {
+            up: (intent.moveY ?? 0) < -0.0001,
+            down: (intent.moveY ?? 0) > 0.0001,
+            left: (intent.moveX ?? 0) < -0.0001,
+            right: (intent.moveX ?? 0) > 0.0001,
+            sprint: !!intent.wantsSprint,
+            dash: !!intent.wantsDash,
+        } : (keyboard?.inputState ?? {
+            up: false, down: false, left: false, right: false, sprint: false, dash: false
+        });
 
         const stepped = stepPlayerKinematics(
             {
@@ -469,7 +589,7 @@ export class GameScene extends Phaser.Scene {
                 dashVy: this._localDashState.dashVy,
                 dashTimeLeftMs: this._localDashState.dashTimeLeftMs,
             },
-            keyboard.inputState,
+            input,
             deltaTime,
             grid
         );
@@ -484,7 +604,9 @@ export class GameScene extends Phaser.Scene {
         transform.position.y = newY;
         circle.gameObject.setPosition(newX, newY);
 
-        this._checkManualExitOverlap(newX, newY);
+        if (controlled.id === this.player?.id) {
+            this._checkManualExitOverlap(newX, newY);
+        }
     }
 
     _checkManualExitOverlap(playerX, playerY) {
@@ -545,6 +667,7 @@ export class GameScene extends Phaser.Scene {
         InputIntentSystem.update(this.entityManager);
         LocomotionSystem.update(this.entityManager);
         DashSystem.update(this.entityManager, deltaTime);
+        CombatSystem.update(this.entityManager);
 
         // Local player deterministic movement/collision.
         this._simulateLocalPlayerMovement(deltaTime);
@@ -560,9 +683,15 @@ export class GameScene extends Phaser.Scene {
         // Send current input state to the authoritative server.
         // If the message was actually sent (not throttled), buffer it for reconciliation.
         if (this.player) {
-            const keyboard = this.player.getComponent('keyboard');
-            if (keyboard) {
-                networkManager.sendInput(keyboard.inputState);
+            const intent = this.player.getComponent('intent');
+            if (intent) {
+                networkManager.sendInput({
+                    up: (intent.moveY ?? 0) < -0.0001,
+                    down: (intent.moveY ?? 0) > 0.0001,
+                    left: (intent.moveX ?? 0) < -0.0001,
+                    right: (intent.moveX ?? 0) > 0.0001,
+                    sprint: !!intent.wantsSprint,
+                });
             }
         }
     }
@@ -624,7 +753,8 @@ export class GameScene extends Phaser.Scene {
     _updateExitLabel(delta) {
         if (!this._exitLabel || !this.player) return;
 
-        const playerCircle = this.player.getComponent('circle');
+        const localEntity = this.getLocallyControlledEntity();
+        const playerCircle = localEntity?.getComponent('circle');
         if (!playerCircle?.gameObject) return;
 
         const px = playerCircle.gameObject.x;

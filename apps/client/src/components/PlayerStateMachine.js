@@ -69,6 +69,7 @@ export class PlayerStateMachine extends Component {
         scene.input.keyboard.on('keydown-ONE',   () => this._onWeaponKey(1), this);
         scene.input.keyboard.on('keydown-TWO',   () => this._onWeaponKey(2), this);
         scene.input.keyboard.on('keydown-THREE', () => this._onWeaponKey(3), this);
+        scene.input.keyboard.on('keydown-FOUR',  () => this._onWeaponKey(4), this);
 
         // Create weapon HUD
         this.createWeaponUI();
@@ -98,6 +99,7 @@ export class PlayerStateMachine extends Component {
             scene.input.keyboard.off('keydown-ONE',   undefined, this);
             scene.input.keyboard.off('keydown-TWO',   undefined, this);
             scene.input.keyboard.off('keydown-THREE', undefined, this);
+            scene.input.keyboard.off('keydown-FOUR',  undefined, this);
             scene.input.off('pointerdown', this._onPointerDown, this);
             scene.input.off('pointerup',   this._onPointerUp,   this);
         }
@@ -123,18 +125,18 @@ export class PlayerStateMachine extends Component {
         scene.input.on('pointerup',    this._onPointerUp,   this);
     }
 
-    _isLocallyControlled() {
+    isLocallyControlled() {
         const control = this.entity.getComponent('control');
         return !!control && control.controlMode === 'local';
     }
 
     _onWeaponKey(index) {
-        if (!this._isLocallyControlled()) return;
+        if (!this.isLocallyControlled()) return;
         this.setWeapon(index);
     }
 
     _onPointerDown(pointer) {
-        if (!this._isLocallyControlled()) return;
+        if (!this.isLocallyControlled()) return;
         this._writeAimFromPointer(pointer);
 
         const intent = this.entity.getComponent('intent');
@@ -148,7 +150,7 @@ export class PlayerStateMachine extends Component {
     }
 
     _onPointerUp(pointer) {
-        if (!this._isLocallyControlled()) return;
+        if (!this.isLocallyControlled()) return;
         this._writeAimFromPointer(pointer);
 
         const intent = this.entity.getComponent('intent');
@@ -218,10 +220,12 @@ export class PlayerStateMachine extends Component {
             onComplete: () => flash.destroy(),
         });
 
-        networkManager.sendBullet(spawnX, spawnY, nx * speed, ny * speed, gameState.currentLevelId, {
-            projectileType: 'arrow',
-            chargeRatio:    pct,
-        });
+        if (this.entity.id === this.entity.scene.player?.id) {
+            networkManager.sendBullet(spawnX, spawnY, nx * speed, ny * speed, gameState.currentLevelId, {
+                projectileType: 'arrow',
+                chargeRatio:    pct,
+            });
+        }
     }
 
     _writeAimFromPointer(pointer) {
@@ -372,7 +376,7 @@ export class PlayerStateMachine extends Component {
      */
     createWeaponUI() {
         const scene = this.entity.scene;
-        const LABELS = ['1 Bow', '2 Melee', '3 Spear'];
+        const LABELS = ['1 Bow', '2 Melee', '3 Spear', '4 Possess'];
         const slotW = 72;
         const slotH = 28;
         const padding = 6;
@@ -516,7 +520,9 @@ export class PlayerStateMachine extends Component {
         // Inform the server immediately so it mirrors the dash (prevents rubber-banding)
         const keyboard = this.entity.getComponent('keyboard');
         const dashInput = keyboard?.inputState ?? this._intentToInputState(intent);
-        const dashSeq = networkManager.sendDash(dashInput);
+        const dashSeq = this.entity.id === this.entity.scene.player?.id
+            ? networkManager.sendDash(dashInput)
+            : -1;
 
         // Let GameScene know a dash started so it can update the reconciliation input buffer
         eventBus.emit('player:dashStarted', { input: dashInput, seq: dashSeq });
@@ -614,8 +620,6 @@ export class PlayerStateMachine extends Component {
             this.bowChargeTime = Math.min(this.bowChargeTime + deltaTime, BOW_FULL_CHARGE_MS);
             this._updateChargeBar();
         }
-
-        this._consumeAttackIntent();
     }
     
     /**
@@ -679,33 +683,41 @@ export class PlayerStateMachine extends Component {
         };
     }
 
-    _consumeAttackIntent() {
-        if (!this._isLocallyControlled()) return;
-
-        const intent = this.entity.getComponent('intent');
-        if (!intent) return;
-
-        const { x: targetX, y: targetY } = this._resolveAimTarget(intent);
-
-        if (intent.wantsAttackPrimary) {
-            if (this.currentWeapon === 1) {
-                if (this.bowCharging) this._releaseArrow(targetX, targetY);
-                else this._startBowCharge();
-            } else if (this.currentWeapon === 2) {
-                this.swipeMelee(targetX, targetY);
-            } else if (this.currentWeapon === 3) {
-                this.thrustSpear(targetX, targetY);
-            }
+    handlePrimaryAttack(targetX, targetY) {
+        if (this.currentWeapon === 1) {
+            if (this.bowCharging) this._releaseArrow(targetX, targetY);
+            else this._startBowCharge();
+        } else if (this.currentWeapon === 2) {
+            this.swipeMelee(targetX, targetY);
+        } else if (this.currentWeapon === 3) {
+            this.thrustSpear(targetX, targetY);
+        } else if (this.currentWeapon === 4) {
+            this.castPossess(targetX, targetY);
         }
-
-        if (intent.wantsAttackSecondary) {
-            this.attack(this.attackTypes.SECONDARY);
-        }
-
-        intent.clearTransient();
     }
 
-    _resolveAimTarget(intent) {
+    handleSecondaryAttack() {
+        this.attack(this.attackTypes.SECONDARY);
+    }
+
+    castPossess(targetX, targetY) {
+        const scene = this.entity.scene;
+        const possessed = scene.tryPossessAtWorldPoint(this.entity, targetX, targetY);
+
+        const color = possessed ? 0x7fe8ff : 0x555f6a;
+        const fx = scene.add.circle(targetX, targetY, possessed ? 20 : 12, color, 0.55);
+        scene.tweens.add({
+            targets: fx,
+            alpha: 0,
+            scaleX: possessed ? 2.4 : 1.8,
+            scaleY: possessed ? 2.4 : 1.8,
+            duration: possessed ? 180 : 120,
+            ease: 'Quad.easeOut',
+            onComplete: () => fx.destroy(),
+        });
+    }
+
+    resolveAimTarget(intent) {
         const transform = this.entity.getComponent('transform');
         const scene = this.entity.scene;
         if (!transform || !scene) return { x: 0, y: 0 };

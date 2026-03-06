@@ -5,6 +5,7 @@
 
 // Character prefabs
 export { createPlayer } from './player.js';
+export { createGolem } from './golem.js';
 
 // Projectile prefabs
 export { createBullet } from './bullet.js';

@@ -175,6 +175,30 @@ export class LightingRenderer {
         }
     }
 
+    /**
+     * Move the primary light-source role to another entity.
+     * Keeps any existing polygon data if available.
+     * @param {string} entityId
+     */
+    setPrimaryLightSource(entityId) {
+        if (!entityId || entityId === this._playerEntityId) return;
+
+        const previousId = this._playerEntityId;
+        const previousPolygon = this._lightSources.get(previousId) ?? [];
+        this._playerEntityId = entityId;
+
+        if (!this._lightSources.has(entityId)) {
+            this._lightSources.set(entityId, previousPolygon);
+        }
+
+        // Previous primary source becomes optional; remove unless explicitly kept.
+        if (previousId && previousId !== entityId) {
+            this._lightSources.delete(previousId);
+        }
+
+        this._redrawAll();
+    }
+
     destroy() {
         this._unsubVisibility();
         this._unsubLevelTransition();
@@ -199,7 +223,6 @@ export class LightingRenderer {
 
     _onVisibilityUpdated({ entityId, polygon }) {
         if (!this._lightSources.has(entityId)) {
-            console.warn('[Lighting] visibility:updated ignored — entityId not registered:', entityId, '| known:', [...this._lightSources.keys()]);
             return;
         }
         this._lightSources.set(entityId, polygon);

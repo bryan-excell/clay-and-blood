@@ -63,6 +63,12 @@ export class KeyboardInputComponent extends InputComponent {
             previousState.attack !== this.inputState.attack
         );
 
+        // ECS intent-driven entities consume keyboard state via InputIntentSystem.
+        // Skip legacy direct movement/attack side effects for those entities.
+        if (this.entity.hasComponent('intent')) {
+            return;
+        }
+
         // Process movement if input changed or if we're processing continuous movement
         if (inputChanged || (
             this.inputState.up || this.inputState.down || 
