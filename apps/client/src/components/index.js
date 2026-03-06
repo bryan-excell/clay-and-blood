@@ -21,6 +21,7 @@ export { AuthorityComponent } from './AuthorityComponent.js';
 
 // Player-specific Components
 export { PlayerStateMachine } from './PlayerStateMachine.js';
+export { PlayerCombatComponent } from './PlayerCombatComponent.js';
 
 // Visibility / FOV
 export { VisibilityComponent } from './VisibilityComponent.js';

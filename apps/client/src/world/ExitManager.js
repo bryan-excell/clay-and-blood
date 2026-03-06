@@ -3,6 +3,7 @@ import { gameState } from "../core/GameState.js";
 import { CircleComponent } from "../components/CircleComponent.js";
 import { KeyboardInputComponent } from "../components/KeyboardInputComponent.js";
 import { PlayerStateMachine } from "../components/PlayerStateMachine.js";
+import { PlayerCombatComponent } from "../components/PlayerCombatComponent.js";
 import { VisibilityComponent } from "../components/VisibilityComponent.js";
 import { TransformComponent } from "../components/TransformComponent.js";
 import { ControlComponent } from "../components/ControlComponent.js";
@@ -193,6 +194,7 @@ export class ExitManager {
 
             // 5. State machine (movement/attacks)
             playerEntity.addComponent(new PlayerStateMachine());
+            playerEntity.addComponent(new PlayerCombatComponent());
 
             // 6. Visibility
             playerEntity.addComponent(new VisibilityComponent(320));

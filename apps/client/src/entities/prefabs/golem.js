@@ -2,6 +2,7 @@ import { TransformComponent } from "../../components/TransformComponent.js";
 import { CircleComponent } from '../../components/CircleComponent.js';
 import { KeyboardInputComponent } from '../../components/KeyboardInputComponent.js';
 import { PlayerStateMachine } from '../../components/PlayerStateMachine.js';
+import { PlayerCombatComponent } from '../../components/PlayerCombatComponent.js';
 import { VisibilityComponent } from '../../components/VisibilityComponent.js';
 import { ControlComponent } from '../../components/ControlComponent.js';
 import { AuthorityComponent } from '../../components/AuthorityComponent.js';
@@ -34,6 +35,7 @@ export function createGolem(scene, config = {}) {
     // Attached now so future control-switching can drive this entity immediately.
     golem.addComponent(new KeyboardInputComponent());
     golem.addComponent(new PlayerStateMachine());
+    golem.addComponent(new PlayerCombatComponent());
     golem.addComponent(new VisibilityComponent(260));
 
     return golem;

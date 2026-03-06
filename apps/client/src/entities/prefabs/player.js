@@ -2,6 +2,7 @@ import { TransformComponent } from "../../components/TransformComponent.js";
 import { CircleComponent } from '../../components/CircleComponent.js';
 import { KeyboardInputComponent } from '../../components/KeyboardInputComponent.js';
 import { PlayerStateMachine } from '../../components/PlayerStateMachine.js';
+import { PlayerCombatComponent } from '../../components/PlayerCombatComponent.js';
 import { VisibilityComponent } from '../../components/VisibilityComponent.js';
 import { ControlComponent } from '../../components/ControlComponent.js';
 import { AuthorityComponent } from '../../components/AuthorityComponent.js';
@@ -48,6 +49,7 @@ export function createPlayer(scene, config = {}) {
 
     // 5. Add the state machine to control movement and attacks
     player.addComponent(new PlayerStateMachine());
+    player.addComponent(new PlayerCombatComponent());
 
     // 6. Field of view - drives lighting and future stealth/AI systems
     player.addComponent(new VisibilityComponent(320));

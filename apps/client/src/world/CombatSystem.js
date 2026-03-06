@@ -6,24 +6,24 @@ export class CombatSystem {
      * @param {import('../entities/EntityManager.js').EntityManager} entityManager
      */
     static update(entityManager) {
-        const entities = entityManager.getEntitiesWithComponent('playerStateMachine');
+        const entities = entityManager.getEntitiesWithComponent('playerCombat');
         for (const entity of entities) {
             const intent = entity.getComponent('intent');
-            const stateMachine = entity.getComponent('playerStateMachine');
-            if (!intent || !stateMachine) continue;
+            const combat = entity.getComponent('playerCombat');
+            if (!intent || !combat) continue;
 
-            if (!stateMachine.isLocallyControlled()) {
+            if (!combat.isLocallyControlled()) {
                 intent.clearTransient();
                 continue;
             }
 
-            const target = stateMachine.resolveAimTarget(intent);
+            const target = combat.resolveAimTarget(intent);
 
             if (intent.wantsAttackPrimary) {
-                stateMachine.handlePrimaryAttack(target.x, target.y);
+                combat.handlePrimaryAttack(target.x, target.y);
             }
             if (intent.wantsAttackSecondary) {
-                stateMachine.handleSecondaryAttack();
+                combat.handleSecondaryAttack();
             }
 
             intent.clearTransient();

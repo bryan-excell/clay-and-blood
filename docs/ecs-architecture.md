@@ -53,6 +53,7 @@ Current implementation anchor:
 - `InputIntentSystem`, `LocomotionSystem`, and `DashSystem` run explicitly in that order each fixed tick.
 - Combat triggers (primary/secondary + aim) are routed through `IntentComponent` and gated by `ControlComponent`.
 - `CombatSystem` consumes attack intent and invokes weapon actions before physics.
+- `PlayerStateMachine` now owns locomotion/dash only; weapon/combat state lives in `PlayerCombatComponent`.
 - `EntityManager.updateComponents()` applies ordered phase updates.
 - `EntityManager.updateRemainingComponents()` is a temporary fallback for unmapped components.
 

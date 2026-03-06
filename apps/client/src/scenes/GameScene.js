@@ -36,7 +36,7 @@ const PHASE_INPUT_COMPONENTS = ['input', 'keyboard'];
 const PHASE_PHYSICS = ['bullet', 'physics'];
 const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
-const PHASE_PRESENTATION = ['playerStateMachine', 'visibility'];
+const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility'];
 
 /**
  * Main game scene, updated for entity-based levels
