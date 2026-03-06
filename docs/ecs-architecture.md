@@ -59,7 +59,7 @@ Current implementation anchor:
 - `GameRoom` player state is now component-like (`transform`, `intent`, `motion`, `stats`, `net`) to mirror ECS semantics.
 - Server phase logic is centralized in shared adapter functions (`@clay-and-blood/shared/server-tick`).
 - `EntityManager.updateComponents()` applies ordered phase updates.
-- `EntityManager.updateRemainingComponents()` is a temporary fallback for unmapped components.
+- No fallback phase is used in `fixedUpdate`; all runtime-updated behavior must be explicitly phased or system-driven.
 
 ## Event Contract
 

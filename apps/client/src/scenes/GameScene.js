@@ -680,9 +680,6 @@ export class GameScene extends Phaser.Scene {
         updated = this.entityManager.updateComponents(deltaTime, PHASE_VISUAL_SYNC, updated);
         updated = this.entityManager.updateComponents(deltaTime, PHASE_PRESENTATION, updated);
 
-        // Safety net for components not yet mapped to canonical phases.
-        this.entityManager.updateRemainingComponents(deltaTime, updated);
-
         // Send current input state to the authoritative server.
         // If the message was actually sent (not throttled), buffer it for reconciliation.
         if (this.player) {
