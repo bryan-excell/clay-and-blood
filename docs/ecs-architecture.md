@@ -56,6 +56,8 @@ Current implementation anchor:
 - `PlayerStateMachine` now owns locomotion/dash only; weapon/combat state lives in `PlayerCombatComponent`.
 - Systems run local simulation only when `AuthoritySystem.canSimulateOnClient(entity)` is true.
 - `GameRoom` server tick now runs explicit phase functions in order: input/intent -> locomotion+dash -> physics/transform -> snapshot/history -> broadcast.
+- `GameRoom` player state is now component-like (`transform`, `intent`, `motion`, `stats`, `net`) to mirror ECS semantics.
+- Server phase logic is centralized in shared adapter functions (`@clay-and-blood/shared/server-tick`).
 - `EntityManager.updateComponents()` applies ordered phase updates.
 - `EntityManager.updateRemainingComponents()` is a temporary fallback for unmapped components.
 

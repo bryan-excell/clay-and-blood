@@ -6,7 +6,6 @@ import {
     STAGE_HEIGHT,
     PLAYER_RADIUS,
     dashStateFromInput,
-    stepPlayerKinematics,
     resolvePlayerCollisions,
     PLAYER_HEALTH_MAX,
     BULLET_DAMAGE,
@@ -15,6 +14,13 @@ import {
     ARROW_MAX_DAMAGE,
     ARROW_MAX_RANGE,
 } from '@clay-and-blood/shared';
+import {
+    phaseInputIntent,
+    phaseLocomotionDash,
+    phasePhysicsTransform,
+    phaseBuildSnapshotPlayers,
+    phaseBuildHistoryPositions,
+} from '@clay-and-blood/shared/server-tick';
 
 const TICK_MS = 50; // 20 Hz server tick
 const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
@@ -74,7 +80,14 @@ export class GameRoom {
     constructor(state, env) {
         this.state  = state;
         this.env    = env;
-        // sessionId -> { x, y, levelId, lastInput, lastSeq }
+        // sessionId -> component-like state:
+        // {
+        //   transform: { x, y, levelId },
+        //   intent:    { up, down, left, right, sprint },
+        //   motion:    { dashVx, dashVy, dashTimeLeftMs },
+        //   stats:     { hp },
+        //   net:       { lastSeq }
+        // }
         this.players = new Map();
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
@@ -116,12 +129,11 @@ export class GameRoom {
                 const spawnY = Math.floor(startH / 2) * TILE_SIZE + TILE_SIZE / 2;
 
                 this.players.set(sessionId, {
-                    x:         spawnX,
-                    y:         spawnY,
-                    levelId:   'town-square',
-                    hp:        PLAYER_HEALTH_MAX,
-                    lastInput: { up: false, down: false, left: false, right: false, sprint: false, dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-                    lastSeq:   0,
+                    transform: { x: spawnX, y: spawnY, levelId: 'town-square' },
+                    intent:    { up: false, down: false, left: false, right: false, sprint: false },
+                    motion:    { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                    stats:     { hp: PLAYER_HEALTH_MAX },
+                    net:       { lastSeq: 0 },
                 });
 
                 // Ack the join with the caller's session ID
@@ -131,7 +143,12 @@ export class GameRoom {
                 const playerList = [];
                 for (const [sid, p] of this.players.entries()) {
                     if (sid !== sessionId) {
-                        playerList.push({ sessionId: sid, x: p.x, y: p.y, stageId: p.levelId });
+                        playerList.push({
+                            sessionId: sid,
+                            x: p.transform.x,
+                            y: p.transform.y,
+                            stageId: p.transform.levelId
+                        });
                     }
                 }
                 ws.send(JSON.stringify({ type: MSG.GAME_STATE, players: playerList }));
@@ -151,7 +168,7 @@ export class GameRoom {
                 if (!player) break;
 
                 // Preserve existing dash state unless a new dash is requested
-                let { dashVx, dashVy, dashTimeLeftMs } = player.lastInput;
+                let { dashVx, dashVy, dashTimeLeftMs } = player.motion;
 
                 if (data.dash && dashTimeLeftMs <= 0) {
                     const dash = dashStateFromInput(data);
@@ -164,17 +181,19 @@ export class GameRoom {
 
                 this.players.set(sessionId, {
                     ...player,
-                    lastInput: {
+                    intent: {
                         up:     !!data.up,
                         down:   !!data.down,
                         left:   !!data.left,
                         right:  !!data.right,
                         sprint: !!data.sprint,
+                    },
+                    motion: {
                         dashVx,
                         dashVy,
                         dashTimeLeftMs,
                     },
-                    lastSeq: data.seq ?? player.lastSeq,
+                    net: { ...player.net, lastSeq: data.seq ?? player.net.lastSeq },
                 });
                 break;
             }
@@ -198,7 +217,11 @@ export class GameRoom {
                 const snapshot = this._findTickSnapshot(lastKnownTick);
                 const posMap = snapshot
                     ? snapshot.positions
-                    : new Map(Array.from(this.players.entries()).map(([sid, p]) => [sid, p]));
+                    : new Map(Array.from(this.players.entries()).map(([sid, p]) => [sid, ({
+                        x: p.transform.x,
+                        y: p.transform.y,
+                        levelId: p.transform.levelId,
+                    })]));
 
                 let hitSessionId = null;
                 let hitT = Infinity;
@@ -217,11 +240,11 @@ export class GameRoom {
                 if (hitSessionId) {
                     const victim = this.players.get(hitSessionId);
                     if (victim) {
-                        const newHp  = Math.max(0, victim.hp - damage);
+                        const newHp  = Math.max(0, victim.stats.hp - damage);
                         const died   = newHp === 0;
                         this.players.set(hitSessionId, {
                             ...victim,
-                            hp: died ? PLAYER_HEALTH_MAX : newHp,
+                            stats: { ...victim.stats, hp: died ? PLAYER_HEALTH_MAX : newHp },
                         });
                         this.#broadcastAll({
                             type:       MSG.PLAYER_DAMAGED,
@@ -260,9 +283,9 @@ export class GameRoom {
 
                 this.players.set(sessionId, {
                     ...player,
-                    levelId,
-                    x, y,
-                    lastInput: { up: false, down: false, left: false, right: false, sprint: false, dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                    transform: { ...player.transform, levelId, x, y },
+                    intent: { up: false, down: false, left: false, right: false, sprint: false },
+                    motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
                 });
 
                 this.#broadcast({ type: MSG.LEVEL_CHANGE, sessionId, levelId }, ws);
@@ -316,38 +339,14 @@ export class GameRoom {
      * (Intent is represented by the stored per-player lastInput payload.)
      */
     _phaseInputIntent() {
-        const entries = [];
-        for (const [sessionId, player] of this.players.entries()) {
-            entries.push({
-                sessionId,
-                player,
-                lastInput: player.lastInput,
-                grid: this._getGrid(player.levelId),
-            });
-        }
-        return entries;
+        return phaseInputIntent(this.players, (levelId) => this._getGrid(levelId));
     }
 
     /**
      * Phase 2: run locomotion + dash simulation from input intent.
      */
     _phaseLocomotionDash(inputPhaseEntries) {
-        return inputPhaseEntries.map(({ sessionId, player, lastInput, grid }) => {
-            const stepped = stepPlayerKinematics(
-                {
-                    x: player.x,
-                    y: player.y,
-                    dashVx: lastInput.dashVx,
-                    dashVy: lastInput.dashVy,
-                    dashTimeLeftMs: lastInput.dashTimeLeftMs,
-                },
-                lastInput,
-                TICK_MS,
-                grid
-            );
-
-            return { sessionId, player, lastInput, stepped };
-        });
+        return phaseLocomotionDash(inputPhaseEntries, TICK_MS);
     }
 
     /**
@@ -355,46 +354,21 @@ export class GameRoom {
      * (Physics integration and transform write-back are a single operation here.)
      */
     _phasePhysicsTransform(locomotionPhaseEntries) {
-        for (const { sessionId, player, lastInput, stepped } of locomotionPhaseEntries) {
-            this.players.set(sessionId, {
-                ...player,
-                x: stepped.x,
-                y: stepped.y,
-                lastInput: {
-                    ...lastInput,
-                    dashVx: stepped.dashVx,
-                    dashVy: stepped.dashVy,
-                    dashTimeLeftMs: stepped.dashTimeLeftMs,
-                },
-            });
-        }
+        phasePhysicsTransform(this.players, locomotionPhaseEntries);
     }
 
     /**
      * Phase 5: build snapshot payload from authoritative state.
      */
     _phaseBuildSnapshotPlayers() {
-        const players = [];
-        for (const [sessionId, p] of this.players.entries()) {
-            players.push({
-                sessionId,
-                x: p.x,
-                y: p.y,
-                levelId: p.levelId,
-                seq: p.lastSeq,
-            });
-        }
-        return players;
+        return phaseBuildSnapshotPlayers(this.players);
     }
 
     /**
      * Phase 6: record per-tick lag-compensation history.
      */
     _phaseRecordLagCompHistory() {
-        const historyPositions = new Map();
-        for (const [sessionId, p] of this.players.entries()) {
-            historyPositions.set(sessionId, { x: p.x, y: p.y, levelId: p.levelId });
-        }
+        const historyPositions = phaseBuildHistoryPositions(this.players);
 
         this.positionHistory.push({ tick: this.tickCount, positions: historyPositions });
         if (this.positionHistory.length > LAG_COMP_HISTORY_SIZE) {
