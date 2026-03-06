@@ -302,9 +302,37 @@ export class GameRoom {
     // ── Helpers ───────────────────────────────────────────────────────────
 
     _runTick() {
+        const inputPhase = this._phaseInputIntent();
+        const locomotionPhase = this._phaseLocomotionDash(inputPhase);
+        this._phasePhysicsTransform(locomotionPhase);
+
+        const snapshotPlayers = this._phaseBuildSnapshotPlayers();
+        this._phaseRecordLagCompHistory();
+        this._phaseBroadcastSnapshot(snapshotPlayers);
+    }
+
+    /**
+     * Phase 1: capture the authoritative input/intent state for each player.
+     * (Intent is represented by the stored per-player lastInput payload.)
+     */
+    _phaseInputIntent() {
+        const entries = [];
         for (const [sessionId, player] of this.players.entries()) {
-            const { lastInput } = player;
-            const grid = this._getGrid(player.levelId);
+            entries.push({
+                sessionId,
+                player,
+                lastInput: player.lastInput,
+                grid: this._getGrid(player.levelId),
+            });
+        }
+        return entries;
+    }
+
+    /**
+     * Phase 2: run locomotion + dash simulation from input intent.
+     */
+    _phaseLocomotionDash(inputPhaseEntries) {
+        return inputPhaseEntries.map(({ sessionId, player, lastInput, grid }) => {
             const stepped = stepPlayerKinematics(
                 {
                     x: player.x,
@@ -318,6 +346,16 @@ export class GameRoom {
                 grid
             );
 
+            return { sessionId, player, lastInput, stepped };
+        });
+    }
+
+    /**
+     * Phase 3/4: apply physics result to authoritative transform/state.
+     * (Physics integration and transform write-back are a single operation here.)
+     */
+    _phasePhysicsTransform(locomotionPhaseEntries) {
+        for (const { sessionId, player, lastInput, stepped } of locomotionPhaseEntries) {
             this.players.set(sessionId, {
                 ...player,
                 x: stepped.x,
@@ -330,18 +368,31 @@ export class GameRoom {
                 },
             });
         }
+    }
 
-    // Build authoritative snapshot list and push lag-compensation history
+    /**
+     * Phase 5: build snapshot payload from authoritative state.
+     */
+    _phaseBuildSnapshotPlayers() {
         const players = [];
-        const historyPositions = new Map();
         for (const [sessionId, p] of this.players.entries()) {
             players.push({
                 sessionId,
-                x:       p.x,
-                y:       p.y,
+                x: p.x,
+                y: p.y,
                 levelId: p.levelId,
-                seq:     p.lastSeq,
+                seq: p.lastSeq,
             });
+        }
+        return players;
+    }
+
+    /**
+     * Phase 6: record per-tick lag-compensation history.
+     */
+    _phaseRecordLagCompHistory() {
+        const historyPositions = new Map();
+        for (const [sessionId, p] of this.players.entries()) {
             historyPositions.set(sessionId, { x: p.x, y: p.y, levelId: p.levelId });
         }
 
@@ -349,10 +400,15 @@ export class GameRoom {
         if (this.positionHistory.length > LAG_COMP_HISTORY_SIZE) {
             this.positionHistory.shift();
         }
+    }
 
+    /**
+     * Phase 7: broadcast authoritative snapshot for this tick.
+     */
+    _phaseBroadcastSnapshot(players) {
         this.#broadcastAll({
-            type:    MSG.STATE_SNAPSHOT,
-            tick:    this.tickCount++,
+            type: MSG.STATE_SNAPSHOT,
+            tick: this.tickCount++,
             players,
         });
     }

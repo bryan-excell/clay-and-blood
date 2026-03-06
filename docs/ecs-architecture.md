@@ -55,6 +55,7 @@ Current implementation anchor:
 - `CombatSystem` consumes attack intent and invokes weapon actions before physics.
 - `PlayerStateMachine` now owns locomotion/dash only; weapon/combat state lives in `PlayerCombatComponent`.
 - Systems run local simulation only when `AuthoritySystem.canSimulateOnClient(entity)` is true.
+- `GameRoom` server tick now runs explicit phase functions in order: input/intent -> locomotion+dash -> physics/transform -> snapshot/history -> broadcast.
 - `EntityManager.updateComponents()` applies ordered phase updates.
 - `EntityManager.updateRemainingComponents()` is a temporary fallback for unmapped components.
 
