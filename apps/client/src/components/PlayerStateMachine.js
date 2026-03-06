@@ -48,7 +48,10 @@ export class PlayerStateMachine extends Component {
         this.maxDashCooldown = 1000; // 1 second cooldown between dashes
         this.maxDashDuration = 250;  // dash lasts 250ms
         this.desiredVelocity = { x: 0, y: 0 };
-        
+        this._unsubscribeControlChanged = null;
+
+        this.requireComponent('intent');
+        this.optionalComponent('control');
     }
     
     /**
@@ -63,12 +66,24 @@ export class PlayerStateMachine extends Component {
 
         // Set up weapon-switch keys (1/2/3)
         const scene = this.entity.scene;
-        scene.input.keyboard.on('keydown-ONE',   () => this.setWeapon(1), this);
-        scene.input.keyboard.on('keydown-TWO',   () => this.setWeapon(2), this);
-        scene.input.keyboard.on('keydown-THREE', () => this.setWeapon(3), this);
+        scene.input.keyboard.on('keydown-ONE',   () => this._onWeaponKey(1), this);
+        scene.input.keyboard.on('keydown-TWO',   () => this._onWeaponKey(2), this);
+        scene.input.keyboard.on('keydown-THREE', () => this._onWeaponKey(3), this);
 
         // Create weapon HUD
         this.createWeaponUI();
+        this._unsubscribeControlChanged = eventBus.on('control:changed', ({ entityId, controlMode }) => {
+            if (entityId !== this.entity.id) return;
+            if (controlMode !== 'local' && this.bowCharging) {
+                this.bowCharging = false;
+                this.bowChargeTime = 0;
+                this._destroyChargeBar();
+            }
+            if (controlMode !== 'local') {
+                const intent = this.entity.getComponent('intent');
+                intent?.clearTransient();
+            }
+        });
 
         console.log("Player state machine initialized");
         return true;
@@ -87,6 +102,10 @@ export class PlayerStateMachine extends Component {
             scene.input.off('pointerup',   this._onPointerUp,   this);
         }
         this._destroyChargeBar();
+        if (this._unsubscribeControlChanged) {
+            this._unsubscribeControlChanged();
+            this._unsubscribeControlChanged = null;
+        }
         if (this.weaponUI) {
             this.weaponUI.forEach(({ bg, text }) => { bg.destroy(); text.destroy(); });
             this.weaponUI = null;
@@ -104,41 +123,56 @@ export class PlayerStateMachine extends Component {
         scene.input.on('pointerup',    this._onPointerUp,   this);
     }
 
-    _isLocalPlayer() {
-        return this.entity.scene.player && this.entity.id === this.entity.scene.player.id;
+    _isLocallyControlled() {
+        const control = this.entity.getComponent('control');
+        return !!control && control.controlMode === 'local';
+    }
+
+    _onWeaponKey(index) {
+        if (!this._isLocallyControlled()) return;
+        this.setWeapon(index);
     }
 
     _onPointerDown(pointer) {
-        if (!this._isLocalPlayer()) return;
+        if (!this._isLocallyControlled()) return;
+        this._writeAimFromPointer(pointer);
+
+        const intent = this.entity.getComponent('intent');
+        if (!intent) return;
+
         if (pointer.leftButtonDown()) {
-            if (this.currentWeapon === 1) this._startBowCharge(pointer);
-            else if (this.currentWeapon === 2) this.swipeMelee(pointer);
-            else if (this.currentWeapon === 3) this.thrustSpear(pointer);
+            intent.wantsAttackPrimary = true;
         } else if (pointer.rightButtonDown()) {
-            this.attack(this.attackTypes.SECONDARY);
+            intent.wantsAttackSecondary = true;
         }
     }
 
     _onPointerUp(pointer) {
-        if (!this._isLocalPlayer()) return;
-        if (this.currentWeapon === 1 && this.bowCharging) {
-            this._releaseArrow(pointer);
+        if (!this._isLocallyControlled()) return;
+        this._writeAimFromPointer(pointer);
+
+        const intent = this.entity.getComponent('intent');
+        if (!intent) return;
+
+        if (pointer.button === 0 || pointer.leftButtonReleased()) {
+            intent.wantsAttackPrimary = true;
         }
     }
 
     /**
      * Begin charging the bow on left mouse down.
      */
-    _startBowCharge(pointer) {
+    _startBowCharge() {
         this.bowCharging = true;
         this.bowChargeTime = 0;
     }
 
     /**
      * Fire the arrow on left mouse up. Speed scales with charge time.
-     * @param {Phaser.Input.Pointer} pointer
+     * @param {number} targetX
+     * @param {number} targetY
      */
-    _releaseArrow(pointer) {
+    _releaseArrow(targetX, targetY) {
         this.bowCharging = false;
         this._destroyChargeBar();
 
@@ -146,10 +180,8 @@ export class PlayerStateMachine extends Component {
         if (!transform) return;
 
         const scene = this.entity.scene;
-        const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-
-        const dx = worldPoint.x - transform.position.x;
-        const dy = worldPoint.y - transform.position.y;
+        const dx = targetX - transform.position.x;
+        const dy = targetY - transform.position.y;
         const len = Math.sqrt(dx * dx + dy * dy);
         if (len < 0.001) return;
 
@@ -190,6 +222,16 @@ export class PlayerStateMachine extends Component {
             projectileType: 'arrow',
             chargeRatio:    pct,
         });
+    }
+
+    _writeAimFromPointer(pointer) {
+        const intent = this.entity.getComponent('intent');
+        const transform = this.entity.getComponent('transform');
+        if (!intent || !transform) return;
+
+        const worldPoint = this.entity.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        intent.aimX = worldPoint.x - transform.position.x;
+        intent.aimY = worldPoint.y - transform.position.y;
     }
 
     /**
@@ -240,16 +282,16 @@ export class PlayerStateMachine extends Component {
 
     /**
      * Melee swipe: an orange wedge that fans out toward the mouse and fades.
-     * @param {Phaser.Input.Pointer} pointer
+     * @param {number} targetX
+     * @param {number} targetY
      */
-    swipeMelee(pointer) {
+    swipeMelee(targetX, targetY) {
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
 
         const scene = this.entity.scene;
-        const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        const dx = worldPoint.x - transform.position.x;
-        const dy = worldPoint.y - transform.position.y;
+        const dx = targetX - transform.position.x;
+        const dy = targetY - transform.position.y;
         const angle = Math.atan2(dy, dx);
 
         const SWIPE_RADIUS = 55;
@@ -279,18 +321,18 @@ export class PlayerStateMachine extends Component {
 
     /**
      * Spear thrust: a thin silver rectangle that juts out toward the mouse then retracts.
-     * @param {Phaser.Input.Pointer} pointer
+     * @param {number} targetX
+     * @param {number} targetY
      */
-    thrustSpear(pointer) {
+    thrustSpear(targetX, targetY) {
         if (this.spearActive) return;
 
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
 
         const scene = this.entity.scene;
-        const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        const dx = worldPoint.x - transform.position.x;
-        const dy = worldPoint.y - transform.position.y;
+        const dx = targetX - transform.position.x;
+        const dy = targetY - transform.position.y;
         const angle = Math.atan2(dy, dx);
 
         const SPEAR_LENGTH = 100;
@@ -370,8 +412,8 @@ export class PlayerStateMachine extends Component {
     }
 
     /**
-     * Update movement state based on current input
-     * @param {object} inputState - Current input state from KeyboardInputComponent
+     * Update dash cooldown/state from resolved intent.
+     * @param {object} intent
      * @param {number} deltaTime - Time in ms since last update
      */
     updateDashState(intent, deltaTime) {
@@ -572,11 +614,13 @@ export class PlayerStateMachine extends Component {
             this.bowChargeTime = Math.min(this.bowChargeTime + deltaTime, BOW_FULL_CHARGE_MS);
             this._updateChargeBar();
         }
+
+        this._consumeAttackIntent();
     }
     
     /**
-     * Apply movement based on current state and input
-     * @param {object} inputState - Current input state
+     * Apply movement based on current state and resolved intent.
+     * @param {object} intent
      */
     applyMovementFromIntent(intent) {
         // Skip if dashing (handled in startDash)
@@ -633,5 +677,51 @@ export class PlayerStateMachine extends Component {
             sprint: !!intent.wantsSprint,
             dash: !!intent.wantsDash,
         };
+    }
+
+    _consumeAttackIntent() {
+        if (!this._isLocallyControlled()) return;
+
+        const intent = this.entity.getComponent('intent');
+        if (!intent) return;
+
+        const { x: targetX, y: targetY } = this._resolveAimTarget(intent);
+
+        if (intent.wantsAttackPrimary) {
+            if (this.currentWeapon === 1) {
+                if (this.bowCharging) this._releaseArrow(targetX, targetY);
+                else this._startBowCharge();
+            } else if (this.currentWeapon === 2) {
+                this.swipeMelee(targetX, targetY);
+            } else if (this.currentWeapon === 3) {
+                this.thrustSpear(targetX, targetY);
+            }
+        }
+
+        if (intent.wantsAttackSecondary) {
+            this.attack(this.attackTypes.SECONDARY);
+        }
+
+        intent.clearTransient();
+    }
+
+    _resolveAimTarget(intent) {
+        const transform = this.entity.getComponent('transform');
+        const scene = this.entity.scene;
+        if (!transform || !scene) return { x: 0, y: 0 };
+
+        const aimX = Number.isFinite(intent.aimX) ? intent.aimX : 0;
+        const aimY = Number.isFinite(intent.aimY) ? intent.aimY : 0;
+        if (Math.abs(aimX) > 0.001 || Math.abs(aimY) > 0.001) {
+            return { x: transform.position.x + aimX, y: transform.position.y + aimY };
+        }
+
+        const pointer = scene.input?.activePointer;
+        if (pointer) {
+            const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+            return { x: worldPoint.x, y: worldPoint.y };
+        }
+
+        return { x: transform.position.x + 1, y: transform.position.y };
     }
 }

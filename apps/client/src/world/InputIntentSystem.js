@@ -22,14 +22,15 @@ export class InputIntentSystem {
         if (!intent) return;
 
         const control = entity.getComponent('control');
-        if (control && control.controlMode === 'disabled') {
+        if (control && control.controlMode !== 'local') {
             intent.set({
                 moveX: 0,
                 moveY: 0,
                 wantsSprint: false,
                 wantsDash: false,
-                wantsAttackPrimary: false,
-                wantsAttackSecondary: false,
+                // Preserve edge-trigger actions set by non-keyboard adapters
+                wantsAttackPrimary: intent.wantsAttackPrimary,
+                wantsAttackSecondary: intent.wantsAttackSecondary,
             });
             return;
         }
@@ -54,8 +55,9 @@ export class InputIntentSystem {
             moveY,
             wantsSprint: !!keyboard.inputState.sprint,
             wantsDash: !!keyboard.inputState.dash,
-            wantsAttackPrimary: !!keyboard.inputState.attack,
-            wantsAttackSecondary: false,
+            // Merge keyboard action edges with other adapters (pointer, AI, replay).
+            wantsAttackPrimary: !!keyboard.inputState.attack || !!intent.wantsAttackPrimary,
+            wantsAttackSecondary: !!intent.wantsAttackSecondary,
         });
     }
 }
