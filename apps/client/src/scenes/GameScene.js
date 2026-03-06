@@ -28,6 +28,14 @@ const LOCAL_RECONCILE_NUDGE_RATIO = 0.35;
 const LOCAL_RECONCILE_MAX_NUDGE_PX = 6;
 const LOCAL_RECONCILE_HARD_SNAP_PX = 96;
 
+// Fixed-step ECS order contract (see docs/ecs-architecture.md)
+const PHASE_INPUT_INTENT = ['input', 'keyboard', 'intent'];
+const PHASE_LOCOMOTION_AND_DASH = ['playerStateMachine'];
+const PHASE_PHYSICS = ['bullet', 'physics'];
+const PHASE_TRANSFORM_SYNC = ['transform'];
+const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
+const PHASE_PRESENTATION = ['visibility'];
+
 /**
  * Main game scene, updated for entity-based levels
  */
@@ -529,9 +537,21 @@ export class GameScene extends Phaser.Scene {
         // Process all actions
         actionManager.processActions();
 
-        // Update all entities
-        this.entityManager.update(deltaTime);
+        // Canonical ECS order (input -> locomotion/dash -> physics -> transform -> visual -> presentation)
+        let updated = new Set();
+        updated = this.entityManager.updateComponents(deltaTime, PHASE_INPUT_INTENT, updated);
+        updated = this.entityManager.updateComponents(deltaTime, PHASE_LOCOMOTION_AND_DASH, updated);
+
+        // Local player deterministic movement/collision.
         this._simulateLocalPlayerMovement(deltaTime);
+
+        updated = this.entityManager.updateComponents(deltaTime, PHASE_PHYSICS, updated);
+        updated = this.entityManager.updateComponents(deltaTime, PHASE_TRANSFORM_SYNC, updated);
+        updated = this.entityManager.updateComponents(deltaTime, PHASE_VISUAL_SYNC, updated);
+        updated = this.entityManager.updateComponents(deltaTime, PHASE_PRESENTATION, updated);
+
+        // Safety net for components not yet mapped to canonical phases.
+        this.entityManager.updateRemainingComponents(deltaTime, updated);
 
         // Send current input state to the authoritative server.
         // If the message was actually sent (not throttled), buffer it for reconciliation.

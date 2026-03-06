@@ -72,6 +72,49 @@ export class EntityManager {
     }
 
     /**
+     * Update only specific component types across all entities.
+     * Components are updated at most once per call, in the given type order.
+     * @param {number} deltaTime - Time since last update in ms
+     * @param {string[]} componentTypes - Ordered list of component type ids
+     * @param {Set<object>} [updatedComponents] - Optional set to track already-updated components
+     */
+    updateComponents(deltaTime, componentTypes, updatedComponents = null) {
+        const tracked = updatedComponents ?? new Set();
+        const entities = Object.values(this.entities);
+
+        for (const type of componentTypes) {
+            for (const entity of entities) {
+                const component = entity.getComponent(type);
+                if (!component || tracked.has(component) || !component.update) continue;
+                component.update(deltaTime);
+                tracked.add(component);
+            }
+        }
+
+        return tracked;
+    }
+
+    /**
+     * Update components that have not yet been updated in the current frame.
+     * @param {number} deltaTime - Time since last update in ms
+     * @param {Set<object>} updatedComponents - Components already processed this frame
+     */
+    updateRemainingComponents(deltaTime, updatedComponents) {
+        const tracked = updatedComponents ?? new Set();
+        const entities = Object.values(this.entities);
+
+        for (const entity of entities) {
+            for (const component of entity.components.values()) {
+                if (!component.update || tracked.has(component)) continue;
+                component.update(deltaTime);
+                tracked.add(component);
+            }
+        }
+
+        return tracked;
+    }
+
+    /**
      * Get entity by ID
      * @param {string} id - Entity ID
      * @returns {Entity} The entity if found

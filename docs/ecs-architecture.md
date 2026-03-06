@@ -47,6 +47,12 @@ Systems must execute in this order to avoid one-frame lag and hidden race condit
 
 Order is an engine contract, not a convention.
 
+Current implementation anchor:
+
+- `GameScene.fixedUpdate()` executes explicit phase arrays in canonical order.
+- `EntityManager.updateComponents()` applies ordered phase updates.
+- `EntityManager.updateRemainingComponents()` is a temporary fallback for unmapped components.
+
 ## Event Contract
 
 When control routing changes, emit:
