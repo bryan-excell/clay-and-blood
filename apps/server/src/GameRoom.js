@@ -9,9 +9,48 @@ import {
     PLAYER_SPRINT_MULTIPLIER,
     PLAYER_DASH_SPEED,
     PLAYER_DASH_DURATION,
+    PLAYER_HEALTH_MAX,
+    BULLET_DAMAGE,
+    BULLET_MAX_RANGE,
+    ARROW_MIN_DAMAGE,
+    ARROW_MAX_DAMAGE,
+    ARROW_MAX_RANGE,
 } from '@clay-and-blood/shared';
 
 const TICK_MS = 50; // 20 Hz server tick
+const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
+
+/**
+ * Returns the distance along the ray to the first intersection with a circle,
+ * or null if there is no intersection within [0, maxRange].
+ *
+ * @param {number} ox,oy  - Ray origin
+ * @param {number} vx,vy  - Ray velocity (not required to be unit-length)
+ * @param {number} cx,cy  - Circle centre
+ * @param {number} r      - Circle radius
+ * @param {number} maxRange
+ * @returns {number|null}
+ */
+function rayHitDistance(ox, oy, vx, vy, cx, cy, r, maxRange) {
+    const speed = Math.sqrt(vx * vx + vy * vy);
+    if (speed < 0.001) return null;
+    const dx = vx / speed;
+    const dy = vy / speed;
+
+    // Vector from ray origin to circle centre
+    const fx = cx - ox;
+    const fy = cy - oy;
+
+    // Scalar projection of that vector onto the ray direction
+    const t = fx * dx + fy * dy;
+    if (t < 0 || t > maxRange) return null;
+
+    // Closest point on the ray to the circle centre
+    const distSq = (fx - t * dx) ** 2 + (fy - t * dy) ** 2;
+    if (distSq > r * r) return null;
+
+    return t;
+}
 
 /**
  * Resolve a player circle against the wall grid.
@@ -80,6 +119,10 @@ export class GameRoom {
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
         this.tickCount = 0;
+        // Lag-compensation history: array of { tick, positions: Map<sessionId,{x,y,levelId}> }
+
+    // Capped at LAG_COMP_HISTORY_SIZE entries (sliding window ~1 second).
+        this.positionHistory = [];
     }
 
     // ── Durable Object entry ──────────────────────────────────────────────
@@ -116,6 +159,7 @@ export class GameRoom {
                     x:         spawnX,
                     y:         spawnY,
                     levelId:   'town-square',
+                    hp:        PLAYER_HEALTH_MAX,
                     lastInput: { up: false, down: false, left: false, right: false, sprint: false, dashVx: 0, dashVy: 0, dashTicksLeft: 0 },
                     lastSeq:   0,
                 });
@@ -186,15 +230,65 @@ export class GameRoom {
             }
 
             case MSG.BULLET_FIRED: {
-                // Relay bullet to all other clients in the same level
+                const { x, y, velocityX, velocityY, levelId,
+                        projectileType, chargeRatio, lastKnownTick } = data;
+
+                // ── Damage amount ────────────────────────────────────────────
+                let damage;
+                if (projectileType === 'arrow') {
+                    const ratio = Math.max(0, Math.min(1, chargeRatio ?? 0));
+                    damage = Math.round(ARROW_MIN_DAMAGE + (ARROW_MAX_DAMAGE - ARROW_MIN_DAMAGE) * ratio);
+                } else {
+                    damage = BULLET_DAMAGE;
+                }
+                const maxRange = projectileType === 'arrow' ? ARROW_MAX_RANGE : BULLET_MAX_RANGE;
+
+                // ── Lag-compensated hit detection ────────────────────────────
+                // Find the snapshot the shooter saw when they fired.
+                const snapshot = this._findTickSnapshot(lastKnownTick);
+                const posMap = snapshot
+                    ? snapshot.positions
+                    : new Map(Array.from(this.players.entries()).map(([sid, p]) => [sid, p]));
+
+                let hitSessionId = null;
+                let hitT = Infinity;
+
+                for (const [sid, pos] of posMap.entries()) {
+                    if (sid === sessionId) continue;      // don't self-hit
+                    if (pos.levelId !== levelId) continue; // different level
+
+                    const t = rayHitDistance(x, y, velocityX, velocityY, pos.x, pos.y, PLAYER_RADIUS, maxRange);
+                    if (t !== null && t < hitT) {
+                        hitT = t;
+                        hitSessionId = sid;
+                    }
+                }
+
+                if (hitSessionId) {
+                    const victim = this.players.get(hitSessionId);
+                    if (victim) {
+                        const newHp  = Math.max(0, victim.hp - damage);
+                        const died   = newHp === 0;
+                        this.players.set(hitSessionId, {
+                            ...victim,
+                            hp: died ? PLAYER_HEALTH_MAX : newHp,
+                        });
+                        this.#broadcastAll({
+                            type:       MSG.PLAYER_DAMAGED,
+                            sessionId:  hitSessionId,
+                            attackerId: sessionId,
+                            damage,
+                            hp:         died ? PLAYER_HEALTH_MAX : newHp,
+                            died,
+                        });
+                    }
+                }
+
+    // ── Relay bullet visually to all other clients ───────────────
                 this.#broadcast({
                     type:      MSG.BULLET_FIRED,
                     sessionId,
-                    x:         data.x,
-                    y:         data.y,
-                    velocityX: data.velocityX,
-                    velocityY: data.velocityY,
-                    levelId:   data.levelId,
+                    x, y, velocityX, velocityY, levelId,
                 }, ws);
                 break;
             }
@@ -305,8 +399,9 @@ export class GameRoom {
             });
         }
 
-        // Build and broadcast the authoritative snapshot
+    // Build authoritative snapshot list and push lag-compensation history
         const players = [];
+        const historyPositions = new Map();
         for (const [sessionId, p] of this.players.entries()) {
             players.push({
                 sessionId,
@@ -315,6 +410,12 @@ export class GameRoom {
                 levelId: p.levelId,
                 seq:     p.lastSeq,
             });
+            historyPositions.set(sessionId, { x: p.x, y: p.y, levelId: p.levelId });
+        }
+
+        this.positionHistory.push({ tick: this.tickCount, positions: historyPositions });
+        if (this.positionHistory.length > LAG_COMP_HISTORY_SIZE) {
+            this.positionHistory.shift();
         }
 
         this.#broadcastAll({
@@ -322,6 +423,31 @@ export class GameRoom {
             tick:    this.tickCount++,
             players,
         });
+    }
+
+    /**
+     * Find the position-history snapshot for the given tick number.
+     * Falls back to the most-recent snapshot if the tick is not in the buffer
+     * (e.g. the client is slightly behind or the buffer has been trimmed).
+     * @param {number|undefined} tick
+     * @returns {{ tick: number, positions: Map }|null}
+     */
+    _findTickSnapshot(tick) {
+        if (this.positionHistory.length === 0) return null;
+        if (tick == null) return this.positionHistory[this.positionHistory.length - 1];
+
+        for (let i = this.positionHistory.length - 1; i >= 0; i--) {
+            if (this.positionHistory[i].tick === tick) return this.positionHistory[i];
+        }
+
+    // Tick not found – return the closest one by tick distance
+        let best = this.positionHistory[0];
+        let bestDiff = Math.abs(best.tick - tick);
+        for (const snap of this.positionHistory) {
+            const diff = Math.abs(snap.tick - tick);
+            if (diff < bestDiff) { bestDiff = diff; best = snap; }
+        }
+        return best;
     }
 
     /** Return (and cache) the wall grid for a level. */

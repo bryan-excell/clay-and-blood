@@ -19,6 +19,14 @@ export const PLAYER_SPEED = 200;
 export const PLAYER_SPRINT_MULTIPLIER = 1.75;
 export const PLAYER_DASH_SPEED = 800;
 export const PLAYER_DASH_DURATION = 250; // ms
+export const PLAYER_HEALTH_MAX = 100;
+
+// Projectile constants
+export const BULLET_DAMAGE = 10;
+export const BULLET_MAX_RANGE = 800;
+export const ARROW_MIN_DAMAGE = 5;
+export const ARROW_MAX_DAMAGE = 20;
+export const ARROW_MAX_RANGE = 1000;
 
 // WebSocket message types for client <-> server communication
 export const MSG = {
@@ -28,7 +36,8 @@ export const MSG = {
     GAME_STATE:     'game_state',
     STATE_SNAPSHOT: 'state_snapshot',
     LEVEL_CHANGE:   'level_change',
-    BULLET_FIRED:   'bullet_fired',
+    BULLET_FIRED:    'bullet_fired',
+    PLAYER_DAMAGED:  'player_damaged',
 };
 
 /**

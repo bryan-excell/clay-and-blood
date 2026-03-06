@@ -21,12 +21,13 @@ const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8787/room/default'
  */
 class NetworkManager {
     constructor() {
-        this.ws             = null;
-        this.sessionId      = null;
-        this.connected      = false;
-        this._lastInputTime = 0;
-        this._inputInterval = 50; // send at most 20 input packets/sec (matches server tick)
-        this._seq           = 0;  // monotonic input sequence number
+        this.ws              = null;
+        this.sessionId       = null;
+        this.connected       = false;
+        this._inputInterval  = 50; // send at most 20 input packets/sec (matches server tick)
+        this._nextInputAt    = 0;  // monotonic next send time (performance.now ms)
+        this._seq            = 0;  // monotonic input sequence number
+        this._lastServerTick = 0;  // most-recent tick acknowledged from server (for lag comp)
     }
 
     connect() {
@@ -74,6 +75,7 @@ class NetworkManager {
 
             case MSG.STATE_SNAPSHOT:
                 // Periodic authoritative state from the server physics tick
+                this._lastServerTick = msg.tick;
                 eventBus.emit('network:stateSnapshot', { tick: msg.tick, players: msg.players });
                 break;
 
@@ -95,6 +97,16 @@ class NetworkManager {
                     levelId:   msg.levelId,
                 });
                 break;
+
+            case MSG.PLAYER_DAMAGED:
+                eventBus.emit('network:playerDamaged', {
+                    sessionId:  msg.sessionId,
+                    attackerId: msg.attackerId,
+                    damage:     msg.damage,
+                    hp:         msg.hp,
+                    died:       msg.died,
+                });
+                break;
         }
     }
 
@@ -106,9 +118,12 @@ class NetworkManager {
      */
     sendInput(inputState) {
         if (!this.connected) return -1;
-        const now = Date.now();
-        if (now - this._lastInputTime < this._inputInterval) return -1;
-        this._lastInputTime = now;
+        const now = performance.now();
+        if (this._nextInputAt === 0) {
+            this._nextInputAt = now;
+        }
+        if (now < this._nextInputAt) return -1;
+
         const seq = ++this._seq;
         this.send({
             type:   MSG.PLAYER_INPUT,
@@ -119,6 +134,12 @@ class NetworkManager {
             right:  !!inputState.right,
             sprint: !!inputState.sprint,
         });
+
+        // Keep a stable 20 Hz cadence even if frame timing jitters.
+        this._nextInputAt += this._inputInterval;
+        while (this._nextInputAt <= now - this._inputInterval) {
+            this._nextInputAt += this._inputInterval;
+        }
         return seq;
     }
 
@@ -142,8 +163,8 @@ class NetworkManager {
             sprint: !!inputState.sprint,
             dash:   true,
         });
-        // Reset throttle so the next regular sendInput fires after the normal interval
-        this._lastInputTime = Date.now();
+        // Keep post-dash timing aligned to the normal 20 Hz cadence.
+        this._nextInputAt = performance.now() + this._inputInterval;
         return seq;
     }
 
@@ -158,15 +179,24 @@ class NetworkManager {
     }
 
     /**
-     * Notify the server (and other clients) that this player fired a bullet.
-     * @param {number} x         - Spawn world X
-     * @param {number} y         - Spawn world Y
-     * @param {number} velocityX - Horizontal speed (px/s)
-     * @param {number} velocityY - Vertical speed (px/s)
-     * @param {string} levelId   - The level the bullet was fired in
+     * Notify the server (and other clients) that this player fired a projectile.
+     * @param {number} x              - Spawn world X
+     * @param {number} y              - Spawn world Y
+     * @param {number} velocityX      - Horizontal speed (px/s)
+     * @param {number} velocityY      - Vertical speed (px/s)
+     * @param {string} levelId        - The level the projectile was fired in
+     * @param {object} [opts]
+     * @param {string} [opts.projectileType] - 'bullet' (default) or 'arrow'
+     * @param {number} [opts.chargeRatio]    - 0-1, arrow charge fraction (used for damage)
      */
-    sendBullet(x, y, velocityX, velocityY, levelId) {
-        this.send({ type: MSG.BULLET_FIRED, x, y, velocityX, velocityY, levelId });
+    sendBullet(x, y, velocityX, velocityY, levelId, opts = {}) {
+        this.send({
+            type:          MSG.BULLET_FIRED,
+            x, y, velocityX, velocityY, levelId,
+            projectileType: opts.projectileType ?? 'bullet',
+            chargeRatio:    opts.chargeRatio    ?? 1,
+            lastKnownTick:  this._lastServerTick,
+        });
     }
 
     send(data) {

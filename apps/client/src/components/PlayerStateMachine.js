@@ -188,7 +188,10 @@ export class PlayerStateMachine extends Component {
             onComplete: () => flash.destroy(),
         });
 
-        networkManager.sendBullet(spawnX, spawnY, nx * speed, ny * speed, gameState.currentLevelId);
+        networkManager.sendBullet(spawnX, spawnY, nx * speed, ny * speed, gameState.currentLevelId, {
+            projectileType: 'arrow',
+            chargeRatio:    pct,
+        });
     }
 
     /**

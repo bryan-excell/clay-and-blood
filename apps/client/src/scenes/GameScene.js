@@ -10,15 +10,20 @@ import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { PLAYER_RADIUS, TILE_SIZE, PLAYER_SPEED, PLAYER_SPRINT_MULTIPLIER } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
-import { getExitDestination, PLAYER_DASH_SPEED, PLAYER_DASH_DURATION } from '@clay-and-blood/shared';
+import { getExitDestination, PLAYER_DASH_SPEED, PLAYER_DASH_DURATION, PLAYER_HEALTH_MAX } from '@clay-and-blood/shared';
 
 // ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
 
 const SERVER_TICK_DT = 0.05; // 50 ms in seconds, matches server TICK_MS
 const SERVER_DASH_TICKS = Math.ceil(PLAYER_DASH_DURATION / (SERVER_TICK_DT * 1000)); // = 5
 const REMOTE_INTERPOLATION_DELAY_MS = 100;
+const REMOTE_INTERPOLATION_DELAY_TICKS = 2; // 2 * 50 ms = 100 ms
+const REMOTE_MAX_EXTRAPOLATION_TICKS = 2;   // cap extrapolation to 100 ms
 const REMOTE_SNAPSHOT_BUFFER_SIZE = 40;
-const LOCAL_RECONCILE_EPSILON_PX = 0.5;
+const LOCAL_RECONCILE_DEADZONE_PX = 1.5;
+const LOCAL_RECONCILE_NUDGE_RATIO = 0.35;
+const LOCAL_RECONCILE_MAX_NUDGE_PX = 6;
+const LOCAL_RECONCILE_HARD_SNAP_PX = 96;
 
 /**
  * Pure-JS collision resolution matching the server's resolveCollisions().
@@ -165,12 +170,27 @@ export class GameScene extends Phaser.Scene {
         // Map of remote sessionId -> Phaser.GameObjects.Arc (circle)
         this.remotePlayers = new Map();
 
+        // --- Health tracking (populated via PLAYER_DAMAGED events) ---
+        // Map of sessionId -> current hp (populated lazily as damage events arrive)
+        this._playerHps = new Map();
+
+        // HP HUD – fixed to screen top-left
+        this._hpText = this.add.text(12, 12, `HP: ${PLAYER_HEALTH_MAX}`, {
+            fontSize:   '16px',
+            fontFamily: 'monospace',
+            color:      '#88ff88',
+            stroke:     '#000000',
+            strokeThickness: 3,
+        }).setScrollFactor(0).setDepth(200);
+
         // --- Server reconciliation ---
         // Pending inputs are those sent to the server but not yet acknowledged.
         // Each entry: { seq, up, down, left, right, sprint, dashVx, dashVy, dashTicksLeft }
         this._pendingInputs = [];
         // Local mirror of the server-side dash state so replays match exactly.
         this._localDashState = { dashVx: 0, dashVy: 0, dashTicksLeft: 0 };
+        // Latest server tick seen by this client, used for tick-based interpolation.
+        this._latestServerTick = 0;
 
         this._setupNetworkListeners();
         networkManager.connect();
@@ -238,7 +258,10 @@ export class GameScene extends Phaser.Scene {
         });
 
         // Authoritative state snapshot from the server physics tick
-        eventBus.on('network:stateSnapshot', ({ players }) => {
+        eventBus.on('network:stateSnapshot', ({ players, tick }) => {
+            if (Number.isFinite(tick)) {
+                this._latestServerTick = Math.max(this._latestServerTick, tick);
+            }
             for (const p of players) {
                 if (p.sessionId === networkManager.sessionId) {
                     this._applyServerCorrection(p.x, p.y, p.seq ?? 0);
@@ -247,7 +270,8 @@ export class GameScene extends Phaser.Scene {
                         p.sessionId,
                         p.x,
                         p.y,
-                        p.levelId || 'town-square'
+                        p.levelId || 'town-square',
+                        tick
                     );
                 }
             }
@@ -312,6 +336,31 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
+        // Server confirmed a hit via lag-compensated detection
+        eventBus.on('network:playerDamaged', ({ sessionId, damage, hp, died }) => {
+            this._playerHps.set(sessionId, hp);
+
+            // Find world position of the damaged player
+            let worldX, worldY;
+            if (sessionId === networkManager.sessionId) {
+                // Local player
+                const circle = this.player?.getComponent('circle');
+                worldX = circle?.gameObject?.x ?? 0;
+                worldY = circle?.gameObject?.y ?? 0;
+
+                // Update HP HUD
+                const hpColor = hp > 60 ? '#88ff88' : hp > 25 ? '#ffdd44' : '#ff4444';
+                this._hpText.setText(`HP: ${hp}`).setColor(hpColor);
+                if (died) this._hpText.setText(`HP: ${PLAYER_HEALTH_MAX}`).setColor('#88ff88');
+            } else {
+                const rp = this.remotePlayers.get(sessionId);
+                worldX = rp?.circle?.x ?? 0;
+                worldY = rp?.circle?.y ?? 0;
+            }
+
+            this._spawnDamageFloat(worldX, worldY, damage, died);
+        });
+
         // A remote player disconnected
         eventBus.on('network:playerLeft', ({ sessionId }) => {
             const rp = this.remotePlayers.get(sessionId);
@@ -333,12 +382,12 @@ export class GameScene extends Phaser.Scene {
         this.remotePlayers.set(sessionId, {
             circle,
             stageId,
-            snapshots: [{ timeMs: performance.now(), x, y, stageId }],
+            snapshots: [{ timeMs: performance.now(), tick: null, x, y, stageId }],
         });
         console.log(`[Network] Remote player joined: ${sessionId} in stage ${stageId}`);
     }
 
-    _pushRemoteSnapshot(sessionId, x, y, stageId) {
+    _pushRemoteSnapshot(sessionId, x, y, stageId, tick) {
         let rp = this.remotePlayers.get(sessionId);
         if (!rp) {
             this._addRemotePlayer(sessionId, x, y, stageId);
@@ -347,39 +396,85 @@ export class GameScene extends Phaser.Scene {
         }
 
         const nowMs = performance.now();
+        const hasTick = Number.isFinite(tick);
         rp.stageId = stageId;
         rp.circle.setVisible(stageId === gameState.currentLevelId);
-        rp.snapshots.push({ timeMs: nowMs, x, y, stageId });
+        if (hasTick && rp.snapshots.length > 0 && !Number.isFinite(rp.snapshots[0].tick)) {
+            rp.snapshots = [];
+        }
+        rp.snapshots.push({
+            timeMs: nowMs,
+            tick: hasTick ? tick : null,
+            x,
+            y,
+            stageId,
+        });
 
         if (rp.snapshots.length > REMOTE_SNAPSHOT_BUFFER_SIZE) {
             rp.snapshots.splice(0, rp.snapshots.length - REMOTE_SNAPSHOT_BUFFER_SIZE);
         }
     }
 
-    _sampleRemoteSnapshot(rp, renderTimeMs) {
+    _sampleRemoteSnapshot(rp, renderTick, renderTimeMs) {
         const samples = rp.snapshots;
         if (!samples || samples.length === 0) return null;
         if (samples.length === 1) return samples[0];
-        if (renderTimeMs <= samples[0].timeMs) return samples[0];
 
+        // Prefer tick-domain interpolation when tick data exists.
+        const canUseTicks = Number.isFinite(renderTick) &&
+            samples.every(s => Number.isFinite(s.tick));
+        if (canUseTicks) {
+            if (renderTick <= samples[0].tick) return samples[0];
+
+            const last = samples[samples.length - 1];
+            if (renderTick >= last.tick) {
+                const prev = samples[samples.length - 2];
+                if (!prev || prev.stageId !== last.stageId || last.tick <= prev.tick) return last;
+
+                const dtTicks = last.tick - prev.tick;
+                const vxPerTick = (last.x - prev.x) / dtTicks;
+                const vyPerTick = (last.y - prev.y) / dtTicks;
+                const aheadTicks = Phaser.Math.Clamp(
+                    renderTick - last.tick,
+                    0,
+                    REMOTE_MAX_EXTRAPOLATION_TICKS
+                );
+                return {
+                    x: last.x + vxPerTick * aheadTicks,
+                    y: last.y + vyPerTick * aheadTicks,
+                    stageId: last.stageId,
+                };
+            }
+
+            let i = 0;
+            while (i < samples.length - 1 && samples[i + 1].tick < renderTick) i++;
+            const a = samples[i];
+            const b = samples[i + 1];
+            if (!b || a.stageId !== b.stageId) return b || a;
+
+            const span = Math.max(1, b.tick - a.tick);
+            const t = Phaser.Math.Clamp((renderTick - a.tick) / span, 0, 1);
+            return {
+                x: Phaser.Math.Linear(a.x, b.x, t),
+                y: Phaser.Math.Linear(a.y, b.y, t),
+                stageId: b.stageId,
+            };
+        }
+
+        // Fallback for snapshots without tick numbers: interpolation by local receive time.
+        if (renderTimeMs <= samples[0].timeMs) return samples[0];
         const last = samples[samples.length - 1];
         if (renderTimeMs >= last.timeMs) return last;
 
         let i = 0;
         while (i < samples.length - 1 && samples[i + 1].timeMs < renderTimeMs) i++;
-
         const a = samples[i];
         const b = samples[i + 1];
-
         if (!b || a.stageId !== b.stageId) return b || a;
 
         const span = Math.max(1, b.timeMs - a.timeMs);
         const t = Phaser.Math.Clamp((renderTimeMs - a.timeMs) / span, 0, 1);
-        return {
-            x: Phaser.Math.Linear(a.x, b.x, t),
-            y: Phaser.Math.Linear(a.y, b.y, t),
-            stageId: b.stageId,
-        };
+        return { x: Phaser.Math.Linear(a.x, b.x, t), y: Phaser.Math.Linear(a.y, b.y, t), stageId: b.stageId };
     }
 
     /**
@@ -399,45 +494,55 @@ export class GameScene extends Phaser.Scene {
         if (!circle || !circle.gameObject || !circle.gameObject.body) return;
         const transform = this.player.getComponent('transform');
 
-        // Drop inputs the server has already consumed
+        // Drop inputs the server has already consumed (kept for telemetry/debug).
         this._pendingInputs = this._pendingInputs.filter(i => i.seq > serverSeq);
+        // Use authoritative server position directly as the correction target.
+        // Pending-input replay here is unstable with our current stateful-input model.
+        const x = serverX;
+        const y = serverY;
 
-        // Get the wall grid for replay collision resolution
-        const levelData = gameState.levels?.[gameState.currentLevelId];
-        const grid = levelData?.grid ?? null;
-
-        // Re-simulate pending inputs on top of the authoritative position
-        let x = serverX;
-        let y = serverY;
-        for (const input of this._pendingInputs) {
-            ({ x, y } = simulateServerTick(x, y, input, grid));
-        }
-
-        // Apply the reconciled position to the Phaser body.
-        // Ignore tiny corrections; they show up as visible shimmer with no gameplay benefit.
+        // Reconciliation target minus current local state.
+        // Apply bounded micro-corrections to avoid periodic hard teleports.
         const go   = circle.gameObject;
         const body = go.body;
         const currentX = body.x + body.halfWidth;
         const currentY = body.y + body.halfHeight;
         const errX = x - currentX;
         const errY = y - currentY;
-        if (Math.abs(errX) < LOCAL_RECONCILE_EPSILON_PX && Math.abs(errY) < LOCAL_RECONCILE_EPSILON_PX) {
+        const dist = Math.sqrt(errX * errX + errY * errY);
+        if (dist < LOCAL_RECONCILE_DEADZONE_PX) {
             return;
         }
 
         const vx = body.velocity.x;
         const vy = body.velocity.y;
-        go.x = x;
-        go.y = y;
-        body.x = x - body.halfWidth;
-        body.y = y - body.halfHeight;
+        let targetX = x;
+        let targetY = y;
+
+        // Smooth correction for normal drift.
+        if (dist < LOCAL_RECONCILE_HARD_SNAP_PX) {
+            let stepX = errX * LOCAL_RECONCILE_NUDGE_RATIO;
+            let stepY = errY * LOCAL_RECONCILE_NUDGE_RATIO;
+            const stepDist = Math.sqrt(stepX * stepX + stepY * stepY);
+            if (stepDist > LOCAL_RECONCILE_MAX_NUDGE_PX) {
+                const s = LOCAL_RECONCILE_MAX_NUDGE_PX / stepDist;
+                stepX *= s;
+                stepY *= s;
+            }
+            targetX = currentX + stepX;
+            targetY = currentY + stepY;
+        }
+
+        go.x = targetX;
+        go.y = targetY;
+        body.x = targetX - body.halfWidth;
+        body.y = targetY - body.halfHeight;
         body.prev.x = body.x;
         body.prev.y = body.y;
         body.velocity.set(vx, vy);
-
         if (transform) {
-            transform.position.x = x;
-            transform.position.y = y;
+            transform.position.x = targetX;
+            transform.position.y = targetY;
         }
         circle._skipNextPositionUpdate = true;
     }
@@ -565,10 +670,13 @@ export class GameScene extends Phaser.Scene {
         const zoomT = 1 - Math.pow(0.01, delta / 150);
         cam.setZoom(Phaser.Math.Linear(cam.zoom, this.targetZoom, zoomT));
 
+        const renderTick = this._latestServerTick > 0
+            ? this._latestServerTick - REMOTE_INTERPOLATION_DELAY_TICKS
+            : null;
         const renderTimeMs = performance.now() - REMOTE_INTERPOLATION_DELAY_MS;
         for (const rp of this.remotePlayers.values()) {
             if (!rp.circle.visible) continue;
-            const sample = this._sampleRemoteSnapshot(rp, renderTimeMs);
+            const sample = this._sampleRemoteSnapshot(rp, renderTick, renderTimeMs);
             if (sample) {
                 rp.circle.x = sample.x;
                 rp.circle.y = sample.y;
@@ -576,6 +684,34 @@ export class GameScene extends Phaser.Scene {
         }
 
         this._updateExitLabel(delta);
+    }
+
+    /**
+     * Spawn a floating damage number at the given world position.
+     * @param {number} worldX
+     * @param {number} worldY
+     * @param {number} damage
+     * @param {boolean} [died]
+     */
+    _spawnDamageFloat(worldX, worldY, damage, died = false) {
+        const label = died ? `${damage} 💀` : `-${damage}`;
+        const color = died ? '#ff4444' : '#ffdd44';
+        const text = this.add.text(worldX, worldY - 20, label, {
+            fontSize:        died ? '20px' : '16px',
+            fontFamily:      'monospace',
+            color,
+            stroke:          '#000000',
+            strokeThickness: 3,
+        }).setOrigin(0.5, 1).setDepth(300);
+
+        this.tweens.add({
+            targets:  text,
+            y:        worldY - 70,
+            alpha:    0,
+            duration: 900,
+            ease:     'Quad.easeOut',
+            onComplete: () => text.destroy(),
+        });
     }
 
     _updateExitLabel(delta) {
