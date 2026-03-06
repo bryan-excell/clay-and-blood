@@ -50,6 +50,7 @@ Order is an engine contract, not a convention.
 Current implementation anchor:
 
 - `GameScene.fixedUpdate()` executes explicit phase arrays in canonical order.
+- `InputIntentSystem`, `LocomotionSystem`, and `DashSystem` run explicitly in that order each fixed tick.
 - `EntityManager.updateComponents()` applies ordered phase updates.
 - `EntityManager.updateRemainingComponents()` is a temporary fallback for unmapped components.
 

@@ -3,6 +3,9 @@ import { EntityManager } from '../entities/EntityManager.js';
 import { EntityLevelManager } from '../world/EntityLevelManager.js';
 import { ExitManager } from '../world/ExitManager.js';
 import { LightingRenderer } from '../world/LightingRenderer.js';
+import { InputIntentSystem } from '../world/InputIntentSystem.js';
+import { LocomotionSystem } from '../world/LocomotionSystem.js';
+import { DashSystem } from '../world/DashSystem.js';
 import { gameState } from '../core/GameState.js';
 import { findEmptyTile } from '../utils/helpers.js';
 import { actionManager } from '../core/ActionManager.js';
@@ -29,12 +32,11 @@ const LOCAL_RECONCILE_MAX_NUDGE_PX = 6;
 const LOCAL_RECONCILE_HARD_SNAP_PX = 96;
 
 // Fixed-step ECS order contract (see docs/ecs-architecture.md)
-const PHASE_INPUT_INTENT = ['input', 'keyboard', 'intent'];
-const PHASE_LOCOMOTION_AND_DASH = ['playerStateMachine'];
+const PHASE_INPUT_COMPONENTS = ['input', 'keyboard'];
 const PHASE_PHYSICS = ['bullet', 'physics'];
 const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
-const PHASE_PRESENTATION = ['visibility'];
+const PHASE_PRESENTATION = ['playerStateMachine', 'visibility'];
 
 /**
  * Main game scene, updated for entity-based levels
@@ -539,8 +541,10 @@ export class GameScene extends Phaser.Scene {
 
         // Canonical ECS order (input -> locomotion/dash -> physics -> transform -> visual -> presentation)
         let updated = new Set();
-        updated = this.entityManager.updateComponents(deltaTime, PHASE_INPUT_INTENT, updated);
-        updated = this.entityManager.updateComponents(deltaTime, PHASE_LOCOMOTION_AND_DASH, updated);
+        updated = this.entityManager.updateComponents(deltaTime, PHASE_INPUT_COMPONENTS, updated);
+        InputIntentSystem.update(this.entityManager);
+        LocomotionSystem.update(this.entityManager);
+        DashSystem.update(this.entityManager, deltaTime);
 
         // Local player deterministic movement/collision.
         this._simulateLocalPlayerMovement(deltaTime);

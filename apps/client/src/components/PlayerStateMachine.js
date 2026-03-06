@@ -49,8 +49,6 @@ export class PlayerStateMachine extends Component {
         this.maxDashDuration = 250;  // dash lasts 250ms
         this.desiredVelocity = { x: 0, y: 0 };
         
-        // Set dependencies
-        this.requireComponent('keyboard');
     }
     
     /**
@@ -376,7 +374,9 @@ export class PlayerStateMachine extends Component {
      * @param {object} inputState - Current input state from KeyboardInputComponent
      * @param {number} deltaTime - Time in ms since last update
      */
-    updateMovementState(inputState, deltaTime) {
+    updateDashState(intent, deltaTime) {
+        const inputState = this._intentToInputState(intent);
+
         // If currently dashing, manage dash state
         if (this.currentMovementState === this.movementStates.DASHING) {
             this.dashDuration -= deltaTime;
@@ -392,9 +392,12 @@ export class PlayerStateMachine extends Component {
                 } else {
                     this.currentMovementState = this.movementStates.STANDING;
                 }
+                this.applyMovementFromIntent(intent);
                 
                 console.log(`Dash ended, now ${this.currentMovementState}`);
             }
+            this.desiredVelocity.x = this.dashDirection.x * 800;
+            this.desiredVelocity.y = this.dashDirection.y * 800;
             return;
         }
         
@@ -408,44 +411,45 @@ export class PlayerStateMachine extends Component {
         if (inputState.dash && this.dashCooldown === 0 && 
             this.currentMovementState !== this.movementStates.STANDING) {
             // Start a dash
-            this.startDash();
+            this.startDashFromIntent(intent);
             return;
         }
-        
-        // Handle regular movement states
-        if (inputState.up || inputState.down || inputState.left || inputState.right) {
-            // Moving in some direction
-            const newState = inputState.sprint ? 
-                this.movementStates.RUNNING : this.movementStates.WALKING;
-                
+    }
+
+    /**
+     * Updates walking/running/standing state from resolved intent.
+     * No-op while dashing.
+     * @param {object} intent
+     */
+    updateLocomotionState(intent) {
+        if (this.currentMovementState === this.movementStates.DASHING) return;
+
+        const moving = Math.abs(intent.moveX) > 0.0001 || Math.abs(intent.moveY) > 0.0001;
+        if (moving) {
+            const newState = intent.wantsSprint ? this.movementStates.RUNNING : this.movementStates.WALKING;
             if (this.currentMovementState !== newState) {
                 this.currentMovementState = newState;
                 console.log(`Movement state: ${this.currentMovementState}`);
             }
-        } else {
-            // No movement input
-            if (this.currentMovementState !== this.movementStates.STANDING) {
-                this.currentMovementState = this.movementStates.STANDING;
-                console.log(`Movement state: ${this.currentMovementState}`);
-            }
+            return;
+        }
+
+        if (this.currentMovementState !== this.movementStates.STANDING) {
+            this.currentMovementState = this.movementStates.STANDING;
+            console.log(`Movement state: ${this.currentMovementState}`);
         }
     }
     
     /**
      * Start a dash in the current movement direction
      */
-    startDash() {
+    startDashFromIntent(intent) {
         // Can only dash if moving
         if (this.currentMovementState === this.movementStates.STANDING) {
             return;
         }
-        
-        // Get keyboard component to determine dash direction
-        const keyboard = this.entity.getComponent('keyboard');
-        if (!keyboard) return;
-        
-        // Calculate dash direction from current input
-        this.dashDirection = keyboard.getMovementDirection();
+
+        this.dashDirection = { x: intent.moveX, y: intent.moveY };
 
         // If no direction, use the last known direction or default to down
         if (this.dashDirection.x === 0 && this.dashDirection.y === 0) {
@@ -468,10 +472,12 @@ export class PlayerStateMachine extends Component {
         console.log(`Started dash in direction (${this.dashDirection.x}, ${this.dashDirection.y})`);
 
         // Inform the server immediately so it mirrors the dash (prevents rubber-banding)
-        const dashSeq = networkManager.sendDash(keyboard.inputState);
+        const keyboard = this.entity.getComponent('keyboard');
+        const dashInput = keyboard?.inputState ?? this._intentToInputState(intent);
+        const dashSeq = networkManager.sendDash(dashInput);
 
         // Let GameScene know a dash started so it can update the reconciliation input buffer
-        eventBus.emit('player:dashStarted', { input: keyboard.inputState, seq: dashSeq });
+        eventBus.emit('player:dashStarted', { input: dashInput, seq: dashSeq });
         this.desiredVelocity.x = this.dashDirection.x * 800;
         this.desiredVelocity.y = this.dashDirection.y * 800;
     }
@@ -561,27 +567,18 @@ export class PlayerStateMachine extends Component {
      * @param {number} deltaTime - Time in ms since last update
      */
     update(deltaTime) {
-        const keyboard = this.entity.getComponent('keyboard');
-        if (!keyboard) return;
-
         // Tick bow charge
         if (this.bowCharging) {
             this.bowChargeTime = Math.min(this.bowChargeTime + deltaTime, BOW_FULL_CHARGE_MS);
             this._updateChargeBar();
         }
-
-        // Update movement state based on input
-        this.updateMovementState(keyboard.inputState, deltaTime);
-
-        // Apply appropriate movement based on state
-        this.applyMovement(keyboard.inputState);
     }
     
     /**
      * Apply movement based on current state and input
      * @param {object} inputState - Current input state
      */
-    applyMovement(inputState) {
+    applyMovementFromIntent(intent) {
         // Skip if dashing (handled in startDash)
         if (this.currentMovementState === this.movementStates.DASHING) {
             return;
@@ -589,14 +586,9 @@ export class PlayerStateMachine extends Component {
         
         // Calculate movement direction
         const direction = {
-            x: 0,
-            y: 0
+            x: intent.moveX ?? 0,
+            y: intent.moveY ?? 0
         };
-        
-        if (inputState.left) direction.x -= 1;
-        if (inputState.right) direction.x += 1;
-        if (inputState.up) direction.y -= 1;
-        if (inputState.down) direction.y += 1;
         
         // Check if there's any movement input
         const isMoving = direction.x !== 0 || direction.y !== 0;
@@ -630,5 +622,16 @@ export class PlayerStateMachine extends Component {
             this.desiredVelocity.x = 0;
             this.desiredVelocity.y = 0;
         }
+    }
+
+    _intentToInputState(intent) {
+        return {
+            up: (intent.moveY ?? 0) < -0.0001,
+            down: (intent.moveY ?? 0) > 0.0001,
+            left: (intent.moveX ?? 0) < -0.0001,
+            right: (intent.moveX ?? 0) > 0.0001,
+            sprint: !!intent.wantsSprint,
+            dash: !!intent.wantsDash,
+        };
     }
 }
