@@ -17,6 +17,8 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq }], self?: { sessionId, hp, hpMax }, worldEntities?: [], entityEquips?: [] }
  *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId }] }
  *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId }
+ *   network:forceControl   { controlledEntityKey, reason, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
+ *   network:entityControl  { entityKey, controllerSessionId, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
  *   network:playerJoined   { sessionId }
  *   network:playerLeft     { sessionId }
  *   network:levelChanged   { sessionId, levelId }
@@ -109,6 +111,27 @@ class NetworkManager {
                     y: msg.y,
                     levelId: msg.levelId ?? null,
                     controllerSessionId: msg.controllerSessionId ?? null,
+                });
+                break;
+
+            case MSG.FORCE_CONTROL:
+                eventBus.emit('network:forceControl', {
+                    controlledEntityKey: msg.controlledEntityKey,
+                    reason: msg.reason ?? 'control:force',
+                    previousControllerSessionId: msg.previousControllerSessionId ?? null,
+                    winnerSessionId: msg.winnerSessionId ?? null,
+                    possessionMsRemaining: Number.isFinite(msg.possessionMsRemaining) ? msg.possessionMsRemaining : null,
+                });
+                break;
+
+            case MSG.ENTITY_CONTROL:
+                eventBus.emit('network:entityControl', {
+                    entityKey: msg.entityKey,
+                    controllerSessionId: msg.controllerSessionId ?? null,
+                    previousControllerSessionId: msg.previousControllerSessionId ?? null,
+                    winnerSessionId: msg.winnerSessionId ?? null,
+                    reason: msg.reason ?? 'control:update',
+                    possessionMsRemaining: Number.isFinite(msg.possessionMsRemaining) ? msg.possessionMsRemaining : null,
                 });
                 break;
 
@@ -252,6 +275,35 @@ class NetworkManager {
      */
     sendEntityState(entityKey, x, y, levelId = null) {
         this.send({ type: MSG.ENTITY_STATE, entityKey, x, y, levelId });
+    }
+
+    /**
+     * Request possession control transfer for a world entity.
+     * Server decides whether request succeeds (currently always allows steals).
+     * @param {string} targetEntityKey
+     * @param {number} x
+     * @param {number} y
+     * @param {string|null} levelId
+     */
+    sendPossessRequest(targetEntityKey, x, y, levelId = null) {
+        this.send({
+            type: MSG.POSSESS_REQUEST,
+            targetEntityKey,
+            x,
+            y,
+            levelId,
+        });
+    }
+
+    /**
+     * Request release from the currently possessed world entity.
+     * @param {string} targetEntityKey
+     */
+    sendPossessRelease(targetEntityKey) {
+        this.send({
+            type: MSG.POSSESS_RELEASE,
+            targetEntityKey,
+        });
     }
 
     send(data) {

@@ -109,6 +109,9 @@ export class GameScene extends Phaser.Scene {
         // Local dash state for deterministic client prediction.
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
         this._lastWorldEntitySyncAt = 0;
+        this._possessionEndAtMs = 0;
+        this._possessionDurationMs = 8000;
+        this._possessionBarGfx = this.add.graphics().setDepth(240);
 
         this._setupNetworkListeners();
         networkManager.connect();
@@ -128,6 +131,8 @@ export class GameScene extends Phaser.Scene {
         this.events.once('shutdown', () => {
             this.uiProjectionSystem?.stop();
             this.networkUiAdapter?.stop();
+            this._possessionBarGfx?.destroy();
+            this._possessionBarGfx = null;
         });
     }
 
@@ -199,15 +204,22 @@ export class GameScene extends Phaser.Scene {
         if (!nextControl) return false;
         if (!AuthoritySystem.canSimulateOnClient(nextEntity)) return false;
 
-        const current = this.getLocallyControlledEntity();
-        if (current && current.id === nextEntity.id) return true;
+        const requestedControllerId = networkManager.sessionId ?? 'local';
+        const currentLocal = this.entityManager.getEntitiesWithComponent('control')
+            .find(e => e.getComponent('control')?.controlMode === 'local');
+        const alreadyLocalTarget = currentLocal?.id === nextEntity.id &&
+            nextControl.controlMode === 'local' &&
+            nextControl.controllerId === requestedControllerId;
 
-        const currentControl = current?.getComponent('control');
-        if (currentControl) {
-            currentControl.setControl('remote', currentControl.controllerId, reason);
+        if (!alreadyLocalTarget && currentLocal) {
+            const currentControl = currentLocal.getComponent('control');
+            currentControl?.setControl('remote', currentControl.controllerId, reason);
         }
 
-        nextControl.setControl('local', networkManager.sessionId ?? 'local', reason);
+        if (!alreadyLocalTarget) {
+            nextControl.setControl('local', requestedControllerId, reason);
+        }
+
         this.controlledEntity = nextEntity;
 
         const circle = nextEntity.getComponent('circle');
@@ -217,6 +229,7 @@ export class GameScene extends Phaser.Scene {
 
         this.lightingRenderer?.setPrimaryLightSource(nextEntity.id);
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        this._syncReleasePossessionSpell(nextEntity);
         this.uiProjectionSystem?.publishImmediate();
         return true;
     }
@@ -244,7 +257,30 @@ export class GameScene extends Phaser.Scene {
         }
 
         if (!best) return false;
-        return this.setLocallyControlledEntity(best, 'spell:possess');
+
+        const key = this._getNetworkEntityKey(best);
+        const transform = best.getComponent('transform');
+        const targetX = transform?.position?.x ?? worldX;
+        const targetY = transform?.position?.y ?? worldY;
+        if (!key || !key.startsWith('world:')) return false;
+
+        networkManager.sendPossessRequest(
+            key,
+            targetX,
+            targetY,
+            gameState.currentLevelId ?? null
+        );
+        return true;
+    }
+
+    requestReleasePossession(casterEntity) {
+        const controlled = this.getLocallyControlledEntity();
+        if (!controlled || controlled.id !== casterEntity?.id) return false;
+        if (controlled.id === this.player?.id) return false;
+        const key = this._getNetworkEntityKey(controlled);
+        if (!key || !key.startsWith('world:')) return false;
+        networkManager.sendPossessRelease(key);
+        return true;
     }
 
     _findNearestWalkableTile(grid, startX, startY, maxRadius = 8) {
@@ -313,9 +349,46 @@ export class GameScene extends Phaser.Scene {
             this._applyNetworkWorldState(entities);
         });
 
-        eventBus.on('network:entityState', ({ sessionId, entityKey, x, y, levelId }) => {
+        eventBus.on('network:entityState', ({ sessionId, entityKey, x, y, levelId, possessionMsRemaining }) => {
             if (sessionId === networkManager.sessionId) return;
-            this._applyNetworkWorldEntityState({ entityKey, x, y, levelId });
+            this._applyNetworkWorldEntityState({ entityKey, x, y, levelId, possessionMsRemaining });
+        });
+
+        eventBus.on('network:forceControl', ({ controlledEntityKey, possessionMsRemaining }) => {
+            if (!controlledEntityKey) return;
+            const target = this._resolveEntityByNetworkKey(controlledEntityKey);
+            if (!target) return;
+            if (target.id === this.player?.id) {
+                this._possessionEndAtMs = 0;
+            } else if (Number.isFinite(possessionMsRemaining) && possessionMsRemaining > 0) {
+                this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
+                this._possessionEndAtMs = performance.now() + possessionMsRemaining;
+            }
+            this.setLocallyControlledEntity(target, 'network:forceControl');
+        });
+
+        eventBus.on('network:entityControl', ({ entityKey, controllerSessionId, possessionMsRemaining }) => {
+            if (!entityKey?.startsWith('world:')) return;
+            const entityId = entityKey.slice('world:'.length);
+            const entity = this.entityManager.getEntityById(entityId);
+            const control = entity?.getComponent('control');
+            const loadout = entity?.getComponent('loadout');
+            if (!control) return;
+
+            const isMine = controllerSessionId === (networkManager.sessionId ?? null);
+            control.setControlMode(isMine ? 'local' : 'remote', 'network:entityControl');
+            control.setController(controllerSessionId ?? null, 'network:entityControl');
+            if (controllerSessionId) {
+                loadout?.addTemporarySpell('release_possession');
+            } else {
+                loadout?.removeTemporarySpell('release_possession');
+            }
+            if (isMine && Number.isFinite(possessionMsRemaining) && possessionMsRemaining > 0) {
+                this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
+                this._possessionEndAtMs = performance.now() + possessionMsRemaining;
+            } else if (!isMine && entity.id === this.getLocallyControlledEntity()?.id) {
+                this._possessionEndAtMs = 0;
+            }
         });
 
         eventBus.on('network:entityEquip', ({ entityKey, levelId, equipped }) => {
@@ -429,6 +502,20 @@ export class GameScene extends Phaser.Scene {
         return `world:${entity.id}`;
     }
 
+    _resolveEntityByNetworkKey(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            if (sid !== (networkManager.sessionId ?? '')) return null;
+            return this.player ?? null;
+        }
+        if (entityKey.startsWith('world:')) {
+            const entityId = entityKey.slice('world:'.length);
+            return this.entityManager.getEntityById(entityId) ?? null;
+        }
+        return null;
+    }
+
     _applyNetworkEntityEquips(entityEquips) {
         if (!Array.isArray(entityEquips) || entityEquips.length === 0) return;
         for (const payload of entityEquips) {
@@ -470,14 +557,19 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _applyNetworkWorldEntityState({ entityKey, x, y, levelId }) {
+    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, possessionMsRemaining }) {
         if (!entityKey || !entityKey.startsWith('world:')) return;
         const entityId = entityKey.slice('world:'.length);
         const entity = this.entityManager.getEntityById(entityId);
         if (!entity) return;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         if (levelId && levelId !== gameState.currentLevelId) return;
-        if (entity.id === this.getLocallyControlledEntity()?.id) return;
+        const isLocallyControlled = entity.id === this.getLocallyControlledEntity()?.id;
+        if (isLocallyControlled && Number.isFinite(possessionMsRemaining) && possessionMsRemaining > 0) {
+            this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
+            this._possessionEndAtMs = performance.now() + possessionMsRemaining;
+        }
+        if (isLocallyControlled) return;
 
         const transform = entity.getComponent('transform');
         if (transform) {
@@ -508,6 +600,47 @@ export class GameScene extends Phaser.Scene {
             transform.position.y,
             gameState.currentLevelId ?? null
         );
+    }
+
+    _syncReleasePossessionSpell(controlled = this.getLocallyControlledEntity()) {
+        const allWithLoadout = this.entityManager.getEntitiesWithComponent('loadout');
+        for (const entity of allWithLoadout) {
+            entity.getComponent('loadout')?.removeTemporarySpell('release_possession');
+        }
+
+        if (!controlled) return;
+        if (controlled.id === this.player?.id) return;
+        controlled.getComponent('loadout')?.addTemporarySpell('release_possession');
+    }
+
+    _updatePossessionBar() {
+        const gfx = this._possessionBarGfx;
+        if (!gfx) return;
+        gfx.clear();
+
+        const controlled = this.getLocallyControlledEntity();
+        if (!controlled || controlled.id === this.player?.id) return;
+        if (!Number.isFinite(this._possessionEndAtMs) || this._possessionEndAtMs <= 0) return;
+
+        const now = performance.now();
+        const remaining = Math.max(0, this._possessionEndAtMs - now);
+        const ratio = this._possessionDurationMs > 0
+            ? Phaser.Math.Clamp(remaining / this._possessionDurationMs, 0, 1)
+            : 0;
+        if (ratio <= 0) return;
+
+        const circle = controlled.getComponent('circle');
+        const go = circle?.gameObject;
+        if (!go) return;
+        const width = 44;
+        const height = 6;
+        const x = go.x - width / 2;
+        const y = go.y + (circle?.radius ?? PLAYER_RADIUS) + 8;
+
+        gfx.fillStyle(0x1a1030, 0.8);
+        gfx.fillRect(x - 1, y - 1, width + 2, height + 2);
+        gfx.fillStyle(0x9f59ff, 1);
+        gfx.fillRect(x, y, Math.round(width * ratio), height);
     }
 
     _addRemotePlayer(sessionId, x, y, stageId = 'town-square') {
@@ -852,6 +985,7 @@ export class GameScene extends Phaser.Scene {
         }
 
         this._updateExitLabel(delta);
+        this._updatePossessionBar();
     }
 
     /**

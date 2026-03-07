@@ -24,6 +24,7 @@ import {
 
 const TICK_MS = 50; // 20 Hz server tick
 const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
+const POSSESSION_DURATION_MS = 8000;
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 
@@ -163,6 +164,8 @@ export class GameRoom {
                     stats:     { hp: PLAYER_HEALTH_MAX },
                     net:       { lastSeq: 0 },
                     equipped:  null, // populated on first PLAYER_EQUIP message
+                    controlledEntityKey: `player:${sessionId}`,
+                    returnEntityKey: `player:${sessionId}`,
                 });
 
                 // Ack the join with the caller's session ID
@@ -183,7 +186,12 @@ export class GameRoom {
                 ws.send(JSON.stringify({ type: MSG.GAME_STATE, players: playerList }));
                 ws.send(JSON.stringify({
                     type: MSG.WORLD_STATE,
-                    entities: Array.from(this.worldEntities.values()),
+                    entities: Array.from(this.worldEntities.values()).map((entry) => ({
+                        ...entry,
+                        possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
+                            ? Math.max(0, entry.possessionEndAtMs - Date.now())
+                            : null,
+                    })),
                 }));
 
                 // Notify the others that someone new arrived
@@ -250,23 +258,121 @@ export class GameRoom {
                 break;
             }
 
+            case MSG.POSSESS_REQUEST: {
+                const player = this.players.get(sessionId);
+                if (!player) break;
+
+                const targetEntityKey = sanitizeEntityKey(data.targetEntityKey);
+                if (!targetEntityKey || !targetEntityKey.startsWith('world:')) break;
+
+                const x = Number.isFinite(data.x) ? data.x : 0;
+                const y = Number.isFinite(data.y) ? data.y : 0;
+                const levelId = typeof data.levelId === 'string'
+                    ? data.levelId
+                    : (player.transform?.levelId ?? 'town-square');
+
+                let target = this.worldEntities.get(targetEntityKey);
+                if (!target) {
+                    target = {
+                        entityKey: targetEntityKey,
+                        x,
+                        y,
+                        levelId,
+                        controllerSessionId: null,
+                    };
+                }
+
+                const previousControllerSessionId = target.controllerSessionId;
+                const canSteal = this._canStealPossession({
+                    requesterSessionId: sessionId,
+                    previousControllerSessionId,
+                    targetEntityKey,
+                    levelId,
+                });
+                if (!canSteal) break;
+
+                const requesterPreviousKey = player.controlledEntityKey ?? `player:${sessionId}`;
+                const updatedRequester = {
+                    ...player,
+                    controlledEntityKey: targetEntityKey,
+                    returnEntityKey: requesterPreviousKey,
+                };
+                this.players.set(sessionId, updatedRequester);
+
+                target.x = x;
+                target.y = y;
+                target.levelId = levelId;
+                target.controllerSessionId = sessionId;
+                target.possessionEndAtMs = Date.now() + POSSESSION_DURATION_MS;
+                this.worldEntities.set(targetEntityKey, target);
+
+                // Steal behavior: previous controller is kicked back to their last return key.
+                if (previousControllerSessionId && previousControllerSessionId !== sessionId) {
+                    this._releaseControllerToReturn(previousControllerSessionId, 'possess:stolen', {
+                        winnerSessionId: sessionId,
+                        previousControllerSessionId,
+                    });
+                }
+
+                this.#sendToSession(sessionId, {
+                    type: MSG.FORCE_CONTROL,
+                    controlledEntityKey: targetEntityKey,
+                    winnerSessionId: sessionId,
+                    previousControllerSessionId,
+                    possessionMsRemaining: POSSESSION_DURATION_MS,
+                    reason: previousControllerSessionId && previousControllerSessionId !== sessionId
+                        ? 'possess:stolen'
+                        : 'possess:granted',
+                });
+
+                this.#broadcastAll({
+                    type: MSG.ENTITY_CONTROL,
+                    entityKey: targetEntityKey,
+                    controllerSessionId: sessionId,
+                    previousControllerSessionId: previousControllerSessionId ?? null,
+                    winnerSessionId: sessionId,
+                    possessionMsRemaining: POSSESSION_DURATION_MS,
+                    reason: previousControllerSessionId && previousControllerSessionId !== sessionId
+                        ? 'possess:stolen'
+                        : 'possess:granted',
+                });
+                break;
+            }
+
+            case MSG.POSSESS_RELEASE: {
+                const player = this.players.get(sessionId);
+                if (!player) break;
+                const targetEntityKey = sanitizeEntityKey(data.targetEntityKey);
+                if (!targetEntityKey || !targetEntityKey.startsWith('world:')) break;
+                if (player.controlledEntityKey !== targetEntityKey) break;
+                this._releaseControllerToReturn(sessionId, 'possess:released');
+                break;
+            }
+
             case MSG.ENTITY_STATE: {
+                const player = this.players.get(sessionId);
                 const entityKey = sanitizeEntityKey(data.entityKey);
                 if (!entityKey || !entityKey.startsWith('world:')) break;
+                if (!player || player.controlledEntityKey !== entityKey) break;
                 if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) break;
 
                 const levelId = typeof data.levelId === 'string' ? data.levelId : null;
+                const prev = this.worldEntities.get(entityKey);
                 const next = {
                     entityKey,
                     x: data.x,
                     y: data.y,
                     levelId,
                     controllerSessionId: sessionId,
+                    possessionEndAtMs: prev?.possessionEndAtMs ?? null,
                 };
                 this.worldEntities.set(entityKey, next);
                 this.#broadcast({
                     type: MSG.ENTITY_STATE,
                     sessionId,
+                    possessionMsRemaining: Number.isFinite(next.possessionEndAtMs)
+                        ? Math.max(0, next.possessionEndAtMs - Date.now())
+                        : null,
                     ...next,
                 }, ws);
                 break;
@@ -411,6 +517,7 @@ export class GameRoom {
     // ── Helpers ───────────────────────────────────────────────────────────
 
     _runTick() {
+        this._phaseExpirePossessions();
         const inputPhase = this._phaseInputIntent();
         const locomotionPhase = this._phaseLocomotionDash(inputPhase);
         this._phasePhysicsTransform(locomotionPhase);
@@ -418,6 +525,20 @@ export class GameRoom {
         const snapshotPlayers = this._phaseBuildSnapshotPlayers();
         this._phaseRecordLagCompHistory();
         this._phaseBroadcastSnapshot(snapshotPlayers);
+    }
+
+    _phaseExpirePossessions() {
+        const now = Date.now();
+        for (const [sessionId, player] of this.players.entries()) {
+            const controlledKey = player.controlledEntityKey;
+            if (!controlledKey || !controlledKey.startsWith('world:')) continue;
+            const target = this.worldEntities.get(controlledKey);
+            if (!target) continue;
+            if (target.controllerSessionId !== sessionId) continue;
+            if (!Number.isFinite(target.possessionEndAtMs)) continue;
+            if (target.possessionEndAtMs > now) continue;
+            this._releaseControllerToReturn(sessionId, 'possess:expired');
+        }
     }
 
     /**
@@ -467,6 +588,7 @@ export class GameRoom {
      */
     _phaseBroadcastSnapshot(players) {
         const tick = this.tickCount++;
+        const now = Date.now();
         for (const ws of this.state.getWebSockets()) {
             const [sessionId] = this.state.getTags(ws);
             const selfPlayer = this.players.get(sessionId);
@@ -479,7 +601,12 @@ export class GameRoom {
                     hp: selfPlayer.stats.hp,
                     hpMax: PLAYER_HEALTH_MAX,
                 } : null,
-                worldEntities: Array.from(this.worldEntities.values()),
+                worldEntities: Array.from(this.worldEntities.values()).map((entry) => ({
+                    ...entry,
+                    possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
+                        ? Math.max(0, entry.possessionEndAtMs - now)
+                        : null,
+                })),
                 entityEquips: Array.from(this.entityEquips.values()).map(({ entityKey, levelId, equipped, ownerSessionId }) => ({
                     entityKey,
                     levelId,
@@ -489,6 +616,55 @@ export class GameRoom {
             };
             try { ws.send(JSON.stringify(payload)); } catch { /* session closing */ }
         }
+    }
+
+    _canStealPossession({ requesterSessionId, previousControllerSessionId }) {
+        if (!previousControllerSessionId) return true;
+        if (previousControllerSessionId === requesterSessionId) return true;
+        // Groundwork hook for future spell-power contest rules.
+        // Example future condition:
+        // return requesterSpellPower >= Math.ceil(previousSpellPower * 1.5);
+        return true;
+    }
+
+    _releaseControllerToReturn(sessionId, reason = 'possess:released', context = {}) {
+        const player = this.players.get(sessionId);
+        if (!player) return;
+
+        const controlledKey = player.controlledEntityKey;
+        const fallbackKey = player.returnEntityKey ?? `player:${sessionId}`;
+
+        if (controlledKey && controlledKey.startsWith('world:')) {
+            const target = this.worldEntities.get(controlledKey);
+            if (target && target.controllerSessionId === sessionId) {
+                target.controllerSessionId = null;
+                target.possessionEndAtMs = null;
+                this.worldEntities.set(controlledKey, target);
+                this.#broadcastAll({
+                    type: MSG.ENTITY_CONTROL,
+                    entityKey: controlledKey,
+                    controllerSessionId: null,
+                    previousControllerSessionId: sessionId,
+                    winnerSessionId: context.winnerSessionId ?? null,
+                    possessionMsRemaining: 0,
+                    reason,
+                });
+            }
+        }
+
+        this.players.set(sessionId, {
+            ...player,
+            controlledEntityKey: fallbackKey,
+            returnEntityKey: fallbackKey,
+        });
+        this.#sendToSession(sessionId, {
+            type: MSG.FORCE_CONTROL,
+            controlledEntityKey: fallbackKey,
+            winnerSessionId: context.winnerSessionId ?? null,
+            previousControllerSessionId: context.previousControllerSessionId ?? null,
+            possessionMsRemaining: 0,
+            reason,
+        });
     }
 
     /**
@@ -540,6 +716,16 @@ export class GameRoom {
         const message = JSON.stringify(data);
         for (const ws of this.state.getWebSockets()) {
             try { ws.send(message); } catch { /* session closing */ }
+        }
+    }
+
+    #sendToSession(sessionId, data) {
+        const message = JSON.stringify(data);
+        for (const ws of this.state.getWebSockets()) {
+            const [sid] = this.state.getTags(ws);
+            if (sid !== sessionId) continue;
+            try { ws.send(message); } catch { /* session closing */ }
+            return;
         }
     }
 }

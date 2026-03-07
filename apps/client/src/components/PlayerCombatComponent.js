@@ -201,6 +201,9 @@ export class PlayerCombatComponent extends Component {
             case 'possess':
                 this.castPossess(targetX, targetY);
                 break;
+            case 'release_possession':
+                this.entity.scene?.requestReleasePossession?.(this.entity);
+                break;
 
             case 'nothing':
             default:

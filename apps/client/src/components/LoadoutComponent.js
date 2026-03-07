@@ -150,6 +150,23 @@ export class LoadoutComponent extends Component {
         this._emitChanged();
     }
 
+    addTemporarySpell(id) {
+        if (!id || this._spells.includes(id)) return;
+        this._spells.push(id);
+        this._emitChanged();
+    }
+
+    removeTemporarySpell(id) {
+        if (!id) return;
+        const idx = this._spells.indexOf(id);
+        if (idx === -1) return;
+        this._spells.splice(idx, 1);
+        if (this._equipped.spellId === id) {
+            this._equipped.spellId = 'nothing';
+        }
+        this._emitChanged();
+    }
+
     /**
      * Apply equipped ids received from the network for this entity.
      * This updates local state without re-emitting loadout:changed.

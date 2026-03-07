@@ -18,8 +18,9 @@ export const WEAPONS = Object.freeze({
 });
 
 export const SPELLS = Object.freeze({
-    nothing: Object.freeze({ id: 'nothing', name: 'Nothing', mouseUsage: 'right', implicit: true }),
-    possess: Object.freeze({ id: 'possess', name: 'Possess', mouseUsage: 'right' }),
+    nothing:            Object.freeze({ id: 'nothing', name: 'Nothing', mouseUsage: 'right', implicit: true }),
+    possess:            Object.freeze({ id: 'possess', name: 'Possess', mouseUsage: 'right' }),
+    release_possession: Object.freeze({ id: 'release_possession', name: 'Release Possession', mouseUsage: 'right' }),
 });
 
 export const ACCESSORIES = Object.freeze({
