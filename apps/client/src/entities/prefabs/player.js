@@ -9,6 +9,7 @@ import { AuthorityComponent } from '../../components/AuthorityComponent.js';
 import { IntentComponent } from '../../components/IntentComponent.js';
 import { StatsComponent } from '../../components/StatsComponent.js';
 import { LoadoutComponent } from '../../components/LoadoutComponent.js';
+import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
 import { PLAYER_RADIUS, COLOR_PLAYER } from '../../config.js';
 import { PLAYER_HEALTH_MAX } from '@clay-and-blood/shared';
 
@@ -47,6 +48,7 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new AuthorityComponent({ authority, ownerId }));
     player.addComponent(new IntentComponent());
     player.addComponent(new StatsComponent({ hp: PLAYER_HEALTH_MAX, hpMax: PLAYER_HEALTH_MAX }));
+    player.addComponent(new ExitTraversalComponent({ canUseExits: true }));
     player.addComponent(new LoadoutComponent({
         weapons:     ['unarmed', 'bow'],
         spells:      ['nothing', 'possess'],

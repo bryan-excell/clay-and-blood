@@ -354,6 +354,14 @@ export const MSG = {
     PLAYER_DAMAGED:  'player_damaged',
 };
 
+const CARDINAL_DIRECTIONS = ['north', 'east', 'south', 'west'];
+const DIRECTION_VECTORS = {
+    north: { dx: 0, dy: -1 },
+    east:  { dx: 1, dy: 0 },
+    south: { dx: 0, dy: 1 },
+    west:  { dx: -1, dy: 0 },
+};
+
 /**
  * Seeded PRNG (mulberry32). Accepts a string seed.
  * This is the canonical implementation – the server and every client must use
@@ -607,6 +615,84 @@ export const STATIC_STAGE_LAYOUTS = (() => {
     return layouts;
 })();
 
+// Canonical fixed links between hand-authored stages.
+// entryDirection indicates where in the destination stage the traveler should
+// be placed relative to the destination exit tile.
+export const STATIC_EXIT_CONNECTIONS = {
+    'town-square': {
+        2: { levelId: 'west-gate', exitIndex: 1, entryDirection: 'west'  },
+        4: { levelId: 'inn',       exitIndex: 0, entryDirection: 'north' },
+    },
+    'west-gate': {
+        1: { levelId: 'town-square', exitIndex: 2, entryDirection: 'east' },
+    },
+    'inn': {
+        0: { levelId: 'town-square', exitIndex: 4, entryDirection: 'south' },
+    },
+};
+
+/**
+ * Resolve a transition from a source exit.
+ * Static links take precedence; all other exits use deterministic wild links.
+ * @param {string} fromLevelId
+ * @param {number} fromExitIndex
+ * @returns {{ toLevelId: string, toExitIndex: number, entryDirection: ('north'|'east'|'south'|'west'|null) }}
+ */
+export function resolveExitTransition(fromLevelId, fromExitIndex) {
+    const staticConn = STATIC_EXIT_CONNECTIONS[fromLevelId]?.[fromExitIndex];
+    if (staticConn) {
+        return {
+            toLevelId: staticConn.levelId,
+            toExitIndex: staticConn.exitIndex,
+            entryDirection: CARDINAL_DIRECTIONS.includes(staticConn.entryDirection)
+                ? staticConn.entryDirection
+                : null,
+        };
+    }
+
+    const dynamic = getExitDestination(fromLevelId, fromExitIndex);
+    return {
+        toLevelId: dynamic.toLevelId,
+        toExitIndex: dynamic.toExitIndex,
+        entryDirection: null,
+    };
+}
+
+/**
+ * Resolve a deterministic spawn position for arriving through an exit.
+ * @param {{
+ *   toLevelId: string,
+ *   toExitIndex: number,
+ *   entryDirection?: 'north'|'east'|'south'|'west'|null
+ * }} params
+ * @returns {{ x:number, y:number, tileX:number, tileY:number, entryDirection:'north'|'east'|'south'|'west'|null }}
+ */
+export function resolveExitSpawnPosition({ toLevelId, toExitIndex, entryDirection = null }) {
+    const { grid, exits } = getStageData(toLevelId);
+    if (!grid || !Array.isArray(exits) || exits.length === 0) {
+        return null;
+    }
+
+    const targetExit = exits.find((e) => e.exitIndex === toExitIndex) ?? exits[0];
+    if (!targetExit) return null;
+
+    const resolvedDir = CARDINAL_DIRECTIONS.includes(entryDirection)
+        ? entryDirection
+        : _defaultEntryDirectionFromExit(targetExit);
+
+    const tile = _findArrivalTileNearExit(grid, targetExit, resolvedDir);
+    const tileX = tile.x;
+    const tileY = tile.y;
+
+    return {
+        x: tileX * TILE_SIZE + TILE_SIZE / 2,
+        y: tileY * TILE_SIZE + TILE_SIZE / 2,
+        tileX,
+        tileY,
+        entryDirection: resolvedDir,
+    };
+}
+
 /**
  * Return the authoritative grid for any level ID.
  * Static stages use their hand-authored tile layout; all others are procedural.
@@ -644,6 +730,63 @@ function _exitSide(x, y, w, h) {
     if (min === distSouth) return 'south';
     if (min === distWest)  return 'west';
     return 'east';
+}
+
+function _defaultEntryDirectionFromExit(exit) {
+    if (CARDINAL_DIRECTIONS.includes(exit?.side)) {
+        return _oppositeDirection(exit.side);
+    }
+    return 'south';
+}
+
+function _oppositeDirection(direction) {
+    switch (direction) {
+        case 'north': return 'south';
+        case 'east': return 'west';
+        case 'south': return 'north';
+        case 'west': return 'east';
+        default: return 'south';
+    }
+}
+
+function _isWalkableTile(tile) {
+    return tile === TILE_FLOOR || tile === TILE_EXIT;
+}
+
+function _findArrivalTileNearExit(grid, exit, preferredDirection) {
+    const h = grid.length;
+    const w = grid[0]?.length ?? 0;
+    const inBounds = (x, y) => x >= 0 && x < w && y >= 0 && y < h;
+
+    const startIndex = Math.max(0, CARDINAL_DIRECTIONS.indexOf(preferredDirection));
+    const directionOrder = [
+        CARDINAL_DIRECTIONS[startIndex],
+        CARDINAL_DIRECTIONS[(startIndex + 1) % 4],
+        CARDINAL_DIRECTIONS[(startIndex + 3) % 4],
+        CARDINAL_DIRECTIONS[(startIndex + 2) % 4],
+    ];
+
+    for (const dir of directionOrder) {
+        const vector = DIRECTION_VECTORS[dir];
+        if (!vector) continue;
+        const nx = exit.x + vector.dx;
+        const ny = exit.y + vector.dy;
+        if (!inBounds(nx, ny)) continue;
+        if (_isWalkableTile(grid[ny][nx])) return { x: nx, y: ny };
+    }
+
+    // Deterministic fallback search around the exit.
+    for (let radius = 1; radius <= 3; radius++) {
+        for (let y = exit.y - radius; y <= exit.y + radius; y++) {
+            for (let x = exit.x - radius; x <= exit.x + radius; x++) {
+                if (!inBounds(x, y)) continue;
+                if ((x === exit.x && y === exit.y) || !_isWalkableTile(grid[y][x])) continue;
+                return { x, y };
+            }
+        }
+    }
+
+    return { x: exit.x, y: exit.y };
 }
 
 /**

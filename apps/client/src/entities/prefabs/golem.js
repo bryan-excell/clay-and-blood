@@ -9,6 +9,7 @@ import { AuthorityComponent } from '../../components/AuthorityComponent.js';
 import { IntentComponent } from '../../components/IntentComponent.js';
 import { StatsComponent } from '../../components/StatsComponent.js';
 import { LoadoutComponent } from '../../components/LoadoutComponent.js';
+import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
 
 /**
  * Practice possession target in town square.
@@ -34,6 +35,7 @@ export function createGolem(scene, config = {}) {
     golem.addComponent(new AuthorityComponent({ authority, ownerId }));
     golem.addComponent(new IntentComponent());
     golem.addComponent(new StatsComponent({ hp: 160, hpMax: 160, stamina: 80, staminaMax: 80 }));
+    golem.addComponent(new ExitTraversalComponent({ canUseExits: true }));
     golem.addComponent(new LoadoutComponent({
         weapons:     ['unarmed'],
         spells:      [],

@@ -1,6 +1,9 @@
 import {
     MSG,
+    STATIC_EXIT_CONNECTIONS,
     getStageData,
+    resolveExitTransition,
+    resolveExitSpawnPosition,
     TILE_SIZE,
     STAGE_WIDTH,
     STAGE_HEIGHT,
@@ -25,6 +28,11 @@ import {
 const TICK_MS = 50; // 20 Hz server tick
 const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
 const POSSESSION_DURATION_MS = 8000;
+const DEBUG_WORLD_SYNC = false;
+const PRACTICE_GOLEM_KEY = 'world:golem';
+const PRACTICE_GOLEM_STAGE = 'town-square';
+const PRACTICE_GOLEM_TILE_X = 24;
+const PRACTICE_GOLEM_TILE_Y = 20;
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 
@@ -50,6 +58,15 @@ function sanitizeEntityKey(value) {
     const trimmed = value.trim();
     if (!ENTITY_KEY_PATTERN.test(trimmed)) return null;
     return trimmed;
+}
+
+function sanitizeDirection(value) {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'north' || normalized === 'east' || normalized === 'south' || normalized === 'west') {
+        return normalized;
+    }
+    return null;
 }
 
 /**
@@ -151,6 +168,7 @@ export class GameRoom {
         switch (data.type) {
 
             case MSG.PLAYER_JOIN: {
+                this._ensurePracticeGolem();
                 const startGrid = this._getGrid('town-square');
                 const startW = startGrid ? startGrid[0].length : STAGE_WIDTH;
                 const startH = startGrid ? startGrid.length   : STAGE_HEIGHT;
@@ -186,6 +204,7 @@ export class GameRoom {
                 ws.send(JSON.stringify({ type: MSG.GAME_STATE, players: playerList }));
                 ws.send(JSON.stringify({
                     type: MSG.WORLD_STATE,
+                    scope: 'all',
                     entities: Array.from(this.worldEntities.values()).map((entry) => ({
                         ...entry,
                         possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
@@ -280,6 +299,26 @@ export class GameRoom {
                         levelId,
                         controllerSessionId: null,
                     };
+                    if (DEBUG_WORLD_SYNC && targetEntityKey === PRACTICE_GOLEM_KEY) {
+                        console.log('[WorldSync][Server] possess_request created missing golem from request', {
+                            x,
+                            y,
+                            levelId,
+                        });
+                    }
+                } else if (DEBUG_WORLD_SYNC && targetEntityKey === PRACTICE_GOLEM_KEY) {
+                    console.log('[WorldSync][Server] possess_request existing golem keeps authoritative pose', {
+                        requested: { x, y, levelId },
+                        authoritative: { x: target.x, y: target.y, levelId: target.levelId },
+                    });
+                }
+                if (DEBUG_WORLD_SYNC && targetEntityKey === 'world:golem') {
+                    console.log('[WorldSync][Server] possess_request golem', {
+                        sessionId,
+                        targetEntityKey,
+                        requested: { x, y, levelId },
+                        existing: this.worldEntities.get(targetEntityKey) ?? null,
+                    });
                 }
 
                 const previousControllerSessionId = target.controllerSessionId;
@@ -299,9 +338,14 @@ export class GameRoom {
                 };
                 this.players.set(sessionId, updatedRequester);
 
-                target.x = x;
-                target.y = y;
-                target.levelId = levelId;
+                // Do not snap an existing authoritative entity to requester-provided
+                // coordinates. Request payload coordinates are only a hint for first
+                // creation if the entity does not exist yet.
+                if (!this.worldEntities.has(targetEntityKey)) {
+                    target.x = x;
+                    target.y = y;
+                    target.levelId = levelId;
+                }
                 target.controllerSessionId = sessionId;
                 target.possessionEndAtMs = Date.now() + POSSESSION_DURATION_MS;
                 this.worldEntities.set(targetEntityKey, target);
@@ -367,6 +411,16 @@ export class GameRoom {
                     possessionEndAtMs: prev?.possessionEndAtMs ?? null,
                 };
                 this.worldEntities.set(entityKey, next);
+                if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+                    console.log('[WorldSync][Server] entity_state golem', {
+                        sessionId,
+                        entityKey,
+                        x: next.x,
+                        y: next.y,
+                        levelId: next.levelId,
+                    });
+                }
+
                 this.#broadcast({
                     type: MSG.ENTITY_STATE,
                     sessionId,
@@ -450,25 +504,123 @@ export class GameRoom {
                 const player = this.players.get(sessionId);
                 if (!player) break;
 
-                const levelId = data.levelId;
-                const grid    = this._getGrid(levelId);
+                const requestedEntityKey = sanitizeEntityKey(data.entityKey);
+                const controlledKey = player.controlledEntityKey ?? `player:${sessionId}`;
+                const movingEntityKey = requestedEntityKey || controlledKey || `player:${sessionId}`;
 
-                // Accept the client's requested spawn position (they ran the same
-                // deterministic generator), then resolve against walls just in case.
+                const movingWorldEntity = movingEntityKey.startsWith('world:')
+                    ? this.worldEntities.get(movingEntityKey)
+                    : null;
+                const movingPlayer = movingEntityKey === `player:${sessionId}`;
+
+                // Only allow level changes for the currently controlled entity.
+                if (!movingPlayer && movingEntityKey !== controlledKey) break;
+                if (movingWorldEntity && movingWorldEntity.controllerSessionId !== sessionId) break;
+
+                const fromExitIndex = Number.isInteger(data.fromExitIndex) ? data.fromExitIndex : null;
+                const fromLevelId = typeof data.fromLevelId === 'string'
+                    ? data.fromLevelId
+                    : (movingWorldEntity?.levelId ?? player.transform.levelId ?? null);
+
+                let levelId = typeof data.levelId === 'string'
+                    ? data.levelId
+                    : (movingWorldEntity?.levelId ?? player.transform.levelId ?? 'town-square');
+                let toExitIndex = Number.isInteger(data.toExitIndex) ? data.toExitIndex : null;
+                let entryDirection = sanitizeDirection(data.entryDirection);
+
+                const hasCanonicalStaticLink = !!(
+                    fromLevelId &&
+                    Number.isInteger(fromExitIndex) &&
+                    STATIC_EXIT_CONNECTIONS[fromLevelId]?.[fromExitIndex]
+                );
+
+                // Only canonicalize deterministic/static links on the server.
+                // For dynamic wild links, the client may have created a runtime
+                // bidirectional connection that the server does not store.
+                if (hasCanonicalStaticLink) {
+                    const resolved = resolveExitTransition(fromLevelId, fromExitIndex);
+                    levelId = resolved.toLevelId;
+                    toExitIndex = resolved.toExitIndex;
+                    if (!entryDirection) entryDirection = resolved.entryDirection;
+                }
+
+                const grid = this._getGrid(levelId);
                 const fallbackW = grid ? grid[0].length : STAGE_WIDTH;
-                const fallbackH = grid ? grid.length    : STAGE_HEIGHT;
+                const fallbackH = grid ? grid.length : STAGE_HEIGHT;
                 let x = typeof data.x === 'number' ? data.x : (Math.floor(fallbackW / 2) * TILE_SIZE + TILE_SIZE / 2);
                 let y = typeof data.y === 'number' ? data.y : (Math.floor(fallbackH / 2) * TILE_SIZE + TILE_SIZE / 2);
+
+                if (Number.isInteger(toExitIndex)) {
+                    const spawn = resolveExitSpawnPosition({
+                        toLevelId: levelId,
+                        toExitIndex,
+                        entryDirection,
+                    });
+                    if (spawn) {
+                        x = spawn.x;
+                        y = spawn.y;
+                    }
+                }
+
                 if (grid) ({ x, y } = resolveCollisions(x, y, grid));
 
-                this.players.set(sessionId, {
-                    ...player,
-                    transform: { ...player.transform, levelId, x, y },
-                    intent: { up: false, down: false, left: false, right: false, sprint: false },
-                    motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-                });
+                if (movingPlayer) {
+                    this.players.set(sessionId, {
+                        ...player,
+                        transform: { ...player.transform, levelId, x, y },
+                        intent: { up: false, down: false, left: false, right: false, sprint: false },
+                        motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                    });
+                    this.#broadcast({ type: MSG.LEVEL_CHANGE, sessionId, levelId }, ws);
+                } else if (movingWorldEntity) {
+                    this.worldEntities.set(movingEntityKey, {
+                        ...movingWorldEntity,
+                        levelId,
+                        x,
+                        y,
+                    });
 
-                this.#broadcast({ type: MSG.LEVEL_CHANGE, sessionId, levelId }, ws);
+                    this.#broadcast({
+                        type: MSG.ENTITY_STATE,
+                        sessionId,
+                        entityKey: movingEntityKey,
+                        x,
+                        y,
+                        levelId,
+                        controllerSessionId: sessionId,
+                        possessionMsRemaining: Number.isFinite(movingWorldEntity.possessionEndAtMs)
+                            ? Math.max(0, movingWorldEntity.possessionEndAtMs - Date.now())
+                            : null,
+                    }, ws);
+                }
+
+                // Send the destination level's current authoritative world entities
+                // immediately so entrants do not render stale/default local positions.
+                const destinationEntities = Array.from(this.worldEntities.values())
+                    .filter((entry) => (entry.levelId ?? null) === levelId)
+                    .map((entry) => ({
+                        ...entry,
+                        possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
+                            ? Math.max(0, entry.possessionEndAtMs - Date.now())
+                            : null,
+                    }));
+                if (DEBUG_WORLD_SYNC) {
+                    const golem = this.worldEntities.get('world:golem') ?? null;
+                    console.log('[WorldSync][Server] level_change world_state push', {
+                        sessionId,
+                        movingEntityKey,
+                        fromLevelId,
+                        toLevelId: levelId,
+                        destinationCount: destinationEntities.length,
+                        golem,
+                    });
+                }
+                this.#sendToSession(sessionId, {
+                    type: MSG.WORLD_STATE,
+                    scope: 'level',
+                    levelId,
+                    entities: destinationEntities,
+                });
                 break;
             }
 
@@ -528,6 +680,7 @@ export class GameRoom {
     }
 
     _phaseExpirePossessions() {
+        this._ensurePracticeGolem();
         const now = Date.now();
         for (const [sessionId, player] of this.players.entries()) {
             const controlledKey = player.controlledEntityKey;
@@ -652,19 +805,50 @@ export class GameRoom {
             }
         }
 
+        // Player body remains where it was while possessing.
+        const returnX = player.transform.x;
+        const returnY = player.transform.y;
+        const returnLevelId = player.transform.levelId;
+
         this.players.set(sessionId, {
             ...player,
+            transform: {
+                ...player.transform,
+                x: returnX,
+                y: returnY,
+                levelId: returnLevelId,
+            },
             controlledEntityKey: fallbackKey,
             returnEntityKey: fallbackKey,
         });
         this.#sendToSession(sessionId, {
             type: MSG.FORCE_CONTROL,
             controlledEntityKey: fallbackKey,
+            levelId: returnLevelId ?? null,
+            x: returnX ?? null,
+            y: returnY ?? null,
             winnerSessionId: context.winnerSessionId ?? null,
             previousControllerSessionId: context.previousControllerSessionId ?? null,
             possessionMsRemaining: 0,
             reason,
         });
+    }
+
+    _ensurePracticeGolem() {
+        if (this.worldEntities.has(PRACTICE_GOLEM_KEY)) return;
+        const x = PRACTICE_GOLEM_TILE_X * TILE_SIZE + TILE_SIZE / 2;
+        const y = PRACTICE_GOLEM_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
+        this.worldEntities.set(PRACTICE_GOLEM_KEY, {
+            entityKey: PRACTICE_GOLEM_KEY,
+            x,
+            y,
+            levelId: PRACTICE_GOLEM_STAGE,
+            controllerSessionId: null,
+            possessionEndAtMs: null,
+        });
+        if (DEBUG_WORLD_SYNC) {
+            console.log('[WorldSync][Server] ensurePracticeGolem created', { x, y, levelId: PRACTICE_GOLEM_STAGE });
+        }
     }
 
     /**

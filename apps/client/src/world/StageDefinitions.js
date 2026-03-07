@@ -12,7 +12,7 @@
  *   width/height – for random stages, controls generator dimensions
  *   generator   – for random stages, controls biome type (default: 'cave')
  */
-import { STATIC_STAGE_LAYOUTS } from '@clay-and-blood/shared';
+import { STATIC_STAGE_LAYOUTS, STATIC_EXIT_CONNECTIONS } from '@clay-and-blood/shared';
 
 // ─── Static stage helpers ──────────────────────────────────────────────────
 
@@ -55,10 +55,7 @@ const _staticStages = {
         floorTile: 'floor_grass',
         spawnPoint: { x: 20, y: 20 },
         ...STATIC_STAGE_LAYOUTS['town-square'],
-        connections: {
-            2: { levelId: 'west-gate', exitIndex: 1 },
-            4: { levelId: 'inn',        exitIndex: 0 },
-        },
+        connections: STATIC_EXIT_CONNECTIONS['town-square'],
     },
 
     /** West Gate – layout from shared. */
@@ -67,9 +64,7 @@ const _staticStages = {
         floorTile: 'floor_dirt',
         spawnPoint: { x: 10, y: 4 },
         ...STATIC_STAGE_LAYOUTS['west-gate'],
-        connections: {
-            1: { levelId: 'town-square', exitIndex: 2 },
-        },
+        connections: STATIC_EXIT_CONNECTIONS['west-gate'],
     },
 
     /** Inn – L-shaped interior, layout from shared. */
@@ -78,9 +73,7 @@ const _staticStages = {
         floorTile: 'floor_dirt',
         spawnPoint: { x: 3, y: 9 },
         ...STATIC_STAGE_LAYOUTS['inn'],
-        connections: {
-            0: { levelId: 'town-square', exitIndex: 4 },
-        },
+        connections: STATIC_EXIT_CONNECTIONS['inn'],
     },
 };
 

@@ -39,6 +39,7 @@ const PHASE_PHYSICS = ['bullet', 'physics'];
 const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
 const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility'];
+const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
 
 /**
  * Main game scene, updated for entity-based levels
@@ -54,6 +55,7 @@ export class GameScene extends Phaser.Scene {
         this.levelManager = new EntityLevelManager(this);
         this.levelManager.initialize();
         this.exitManager = new ExitManager(this);
+        this._worldEntityStateCache = new Map(); // entityKey -> { x, y, levelId, controllerSessionId, possessionMsRemaining }
 
         // Track time for fixed updates
         this.lastUpdateTime = Date.now();
@@ -80,7 +82,6 @@ export class GameScene extends Phaser.Scene {
         // Create player at a safe spot
         this.createPlayerInLevel(initialLevel);
         this.controlledEntity = this.player;
-        this._spawnPracticeEntitiesForLevel(initialLevelId);
         this.scene.launch('UIScene');
         this.networkUiAdapter = new NetworkUiAdapter();
         this.networkUiAdapter.start();
@@ -176,15 +177,42 @@ export class GameScene extends Phaser.Scene {
         const level = this.levelManager.currentLevel || this.levelManager.getLevel(levelId);
         if (!level?.grid) return;
 
-        const tile = this._findNearestWalkableTile(level.grid, 24, 20, 10);
-        const x = tile.x * TILE_SIZE + TILE_SIZE / 2;
-        const y = tile.y * TILE_SIZE + TILE_SIZE / 2;
+        const cached = this._worldEntityStateCache?.get('world:golem');
+        if (DEBUG_WORLD_SYNC) {
+            console.log('[WorldSync] spawnPractice: cache lookup world:golem', {
+                levelId,
+                cached: cached ?? null,
+            });
+        }
+        let x;
+        let y;
+        if (
+            cached &&
+            cached.levelId === levelId &&
+            Number.isFinite(cached.x) &&
+            Number.isFinite(cached.y)
+        ) {
+            x = cached.x;
+            y = cached.y;
+        } else {
+            const tile = this._findNearestWalkableTile(level.grid, 24, 20, 10);
+            x = tile.x * TILE_SIZE + TILE_SIZE / 2;
+            y = tile.y * TILE_SIZE + TILE_SIZE / 2;
+        }
 
         const golem = this.entityFactory.createFromPrefab('golem', {
             x,
             y,
             controlMode: 'remote',
         });
+        if (DEBUG_WORLD_SYNC) {
+            console.log('[WorldSync] spawnPractice: created golem entity', {
+                levelId,
+                entityId: golem?.id ?? null,
+                x,
+                y,
+            });
+        }
 
         const circle = golem?.getComponent('circle');
         if (circle?.gameObject) {
@@ -214,11 +242,19 @@ export class GameScene extends Phaser.Scene {
         if (!alreadyLocalTarget && currentLocal) {
             const currentControl = currentLocal.getComponent('control');
             currentControl?.setControl('remote', currentControl.controllerId, reason);
+            // Keep non-controlled entities visible only when they are in the
+            // currently rendered level. Do not hide the player just because
+            // control switched away from it.
+            if (currentLocal.id !== nextEntity.id) {
+                const currentLevelId = currentLocal.getComponent('transform')?.levelId ?? gameState.currentLevelId;
+                this._setEntityVisibility(currentLocal, currentLevelId === gameState.currentLevelId);
+            }
         }
 
         if (!alreadyLocalTarget) {
             nextControl.setControl('local', requestedControllerId, reason);
         }
+        this._setEntityVisibility(nextEntity, true);
 
         this.controlledEntity = nextEntity;
 
@@ -232,6 +268,13 @@ export class GameScene extends Phaser.Scene {
         this._syncReleasePossessionSpell(nextEntity);
         this.uiProjectionSystem?.publishImmediate();
         return true;
+    }
+
+    _setEntityVisibility(entity, isVisible) {
+        const circle = entity?.getComponent('circle');
+        if (circle?.gameObject) {
+            circle.gameObject.setVisible(!!isVisible);
+        }
     }
 
     tryPossessAtWorldPoint(casterEntity, worldX, worldY) {
@@ -330,7 +373,14 @@ export class GameScene extends Phaser.Scene {
             }
             for (const p of players) {
                 if (p.sessionId === networkManager.sessionId) {
-                    this._applyServerCorrection(p.x, p.y);
+                    // During possession the server co-locates the player body with
+                    // the controlled entity (Phase 1A/B) for level-tracking, but the
+                    // player entity is dormant and must not be visually dragged along.
+                    // Only reconcile when the player is actually locally controlled.
+                    const isControllingPlayer = this.getLocallyControlledEntity()?.id === this.player?.id;
+                    if (isControllingPlayer) {
+                        this._applyServerCorrection(p.x, p.y);
+                    }
                 } else {
                     this._pushRemoteSnapshot(
                         p.sessionId,
@@ -345,25 +395,64 @@ export class GameScene extends Phaser.Scene {
             this._applyNetworkEntityEquips(entityEquips);
         });
 
-        eventBus.on('network:worldState', ({ entities }) => {
-            this._applyNetworkWorldState(entities);
+        eventBus.on('network:worldState', ({ entities, scope, levelId }) => {
+            if (DEBUG_WORLD_SYNC) {
+                const golem = Array.isArray(entities)
+                    ? entities.find((e) => e?.entityKey === 'world:golem')
+                    : null;
+                console.log('[WorldSync] network:worldState', {
+                    scope,
+                    levelId,
+                    count: Array.isArray(entities) ? entities.length : 0,
+                    golem: golem ?? null,
+                    currentLevel: gameState.currentLevelId,
+                });
+            }
+            this._applyNetworkWorldState(entities, scope, levelId);
         });
 
-        eventBus.on('network:entityState', ({ sessionId, entityKey, x, y, levelId, possessionMsRemaining }) => {
+        eventBus.on('network:entityState', ({ sessionId, entityKey, x, y, levelId, controllerSessionId, possessionMsRemaining }) => {
             if (sessionId === networkManager.sessionId) return;
-            this._applyNetworkWorldEntityState({ entityKey, x, y, levelId, possessionMsRemaining });
+            this._applyNetworkWorldEntityState({ entityKey, x, y, levelId, controllerSessionId, possessionMsRemaining });
         });
 
-        eventBus.on('network:forceControl', ({ controlledEntityKey, possessionMsRemaining }) => {
+        eventBus.on('network:forceControl', ({ controlledEntityKey, possessionMsRemaining, levelId, x, y }) => {
             if (!controlledEntityKey) return;
             const target = this._resolveEntityByNetworkKey(controlledEntityKey);
             if (!target) return;
+
             if (target.id === this.player?.id) {
+                // Possession ended — returning control to the player body.
                 this._possessionEndAtMs = 0;
+
+                // Reposition the player entity at the server-authoritative location.
+                // The server co-locates the player body with the possessed entity
+                // (Phase 1A/B), so these coordinates are wherever the entity was
+                // standing when possession expired or was released.
+                if (Number.isFinite(x) && Number.isFinite(y)) {
+                    const transform = target.getComponent('transform');
+                    if (transform) {
+                        transform.position.x = x;
+                        transform.position.y = y;
+                    }
+                    const circle = target.getComponent('circle');
+                    if (circle?.gameObject) circle.gameObject.setPosition(x, y);
+                }
+
+                // If the entity finished possession in a different level than the one
+                // we are currently rendering, transition there now.
+                // setupLevel is safe here: the golem is no longer locally controlled
+                // (possession ended before this message arrived) so Phase 2 will NOT
+                // preserve it, and it will be cleanly destroyed and re-spawned as a
+                // remote entity the next time it appears in the current level.
+                if (levelId && levelId !== gameState.currentLevelId) {
+                    this.levelManager.setupLevel(levelId);
+                }
             } else if (Number.isFinite(possessionMsRemaining) && possessionMsRemaining > 0) {
                 this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
                 this._possessionEndAtMs = performance.now() + possessionMsRemaining;
             }
+
             this.setLocallyControlledEntity(target, 'network:forceControl');
         });
 
@@ -411,7 +500,6 @@ export class GameScene extends Phaser.Scene {
                 rp.circle.setVisible(rp.stageId === levelId);
             }
             this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
-            this._spawnPracticeEntitiesForLevel(levelId);
         });
 
         eventBus.on('player:dashStarted', ({ input }) => {
@@ -492,6 +580,24 @@ export class GameScene extends Phaser.Scene {
                 console.log(`[Network] Remote player left: ${sessionId}`);
             }
         });
+
+        eventBus.on('network:disconnected', () => {
+            if (DEBUG_WORLD_SYNC) {
+                console.log('[WorldSync] network:disconnected -> clearing cache', {
+                    cacheKeys: Array.from(this._worldEntityStateCache.keys()),
+                });
+            }
+            this._worldEntityStateCache.clear();
+        });
+
+        eventBus.on('network:connected', () => {
+            if (DEBUG_WORLD_SYNC) {
+                console.log('[WorldSync] network:connected -> clearing cache', {
+                    cacheKeys: Array.from(this._worldEntityStateCache.keys()),
+                });
+            }
+            this._worldEntityStateCache.clear();
+        });
     }
 
     _getNetworkEntityKey(entity) {
@@ -550,20 +656,130 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _applyNetworkWorldState(entities) {
+    _applyNetworkWorldState(entities, scope = 'all', levelId = null) {
+        if (DEBUG_WORLD_SYNC) {
+            console.log('[WorldSync] applyWorldState:start', {
+                scope,
+                levelId,
+                incomingCount: Array.isArray(entities) ? entities.length : 0,
+                cacheKeysBefore: Array.from(this._worldEntityStateCache.keys()),
+            });
+        }
+        if (scope === 'all') {
+            this._worldEntityStateCache.clear();
+        } else if (scope === 'level' && levelId) {
+            for (const [key, cached] of this._worldEntityStateCache.entries()) {
+                if ((cached?.levelId ?? null) === levelId) {
+                    this._worldEntityStateCache.delete(key);
+                }
+            }
+        }
+
         if (!Array.isArray(entities) || entities.length === 0) return;
         for (const entityState of entities) {
             this._applyNetworkWorldEntityState(entityState);
         }
+        if (DEBUG_WORLD_SYNC) {
+            console.log('[WorldSync] applyWorldState:end', {
+                scope,
+                levelId,
+                cacheKeysAfter: Array.from(this._worldEntityStateCache.keys()),
+                golemCache: this._worldEntityStateCache.get('world:golem') ?? null,
+            });
+        }
     }
 
-    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, possessionMsRemaining }) {
+    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, controllerSessionId, possessionMsRemaining }) {
         if (!entityKey || !entityKey.startsWith('world:')) return;
-        const entityId = entityKey.slice('world:'.length);
-        const entity = this.entityManager.getEntityById(entityId);
-        if (!entity) return;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        if (levelId && levelId !== gameState.currentLevelId) return;
+        if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+            console.log('[WorldSync] applyWorldEntityState:incoming golem', {
+                entityKey,
+                x,
+                y,
+                levelId,
+                currentLevel: gameState.currentLevelId,
+                controllerSessionId: controllerSessionId ?? null,
+            });
+        }
+
+        this._worldEntityStateCache.set(entityKey, {
+            entityKey,
+            x,
+            y,
+            levelId: levelId ?? null,
+            controllerSessionId: controllerSessionId ?? null,
+            possessionMsRemaining: Number.isFinite(possessionMsRemaining) ? possessionMsRemaining : null,
+        });
+
+        const entityId = entityKey.slice('world:'.length);
+        let entity = this.entityManager.getEntityById(entityId);
+        if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+            const hasEntity = !!entity;
+            const existingPos = entity?.getComponent('transform')?.position ?? null;
+            console.log('[WorldSync] applyWorldEntityState:entity lookup golem', {
+                entityId,
+                hasEntity,
+                existingPos,
+            });
+        }
+
+        // Spawn if the entity is missing but is now in our current level.
+        // Phase 4B: use the correct control mode based on who the server says
+        // is controlling it — not always 'remote'.
+        if (!entity && levelId && levelId === gameState.currentLevelId && entityKey === 'world:golem') {
+            const isMe = controllerSessionId === (networkManager.sessionId ?? null);
+            entity = this.entityFactory.createFromPrefab('golem', {
+                x,
+                y,
+                controlMode: isMe ? 'local' : 'remote',
+            });
+            if (DEBUG_WORLD_SYNC) {
+                console.log('[WorldSync] applyWorldEntityState:spawned missing golem from network', {
+                    entityId: entity?.id ?? null,
+                    x,
+                    y,
+                    levelId,
+                    isMe,
+                });
+            }
+            const circle = entity?.getComponent('circle');
+            if (circle?.gameObject) {
+                this.lightingRenderer?.maskGameObject(circle.gameObject);
+            }
+            // If we are the controller, restore local control state on the
+            // freshly spawned entity (e.g. after a level transition destroyed it).
+            if (isMe && entity) {
+                this.setLocallyControlledEntity(entity, 'network:respawn');
+                if (Number.isFinite(possessionMsRemaining) && possessionMsRemaining > 0) {
+                    this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
+                    this._possessionEndAtMs = performance.now() + possessionMsRemaining;
+                }
+            }
+        }
+
+        if (!entity) return;
+
+        // Phase 4A: explicitly show/hide based on whether the entity is in the
+        // level we are currently rendering. Previously the function silently
+        // returned on a level mismatch, leaving the visual frozen at its last
+        // position — creating "ghost" entities visible in the wrong level.
+        const inThisLevel = !levelId || levelId === gameState.currentLevelId;
+        const circle = entity.getComponent('circle');
+        if (circle?.gameObject) {
+            circle.gameObject.setVisible(inThisLevel);
+        }
+
+        if (!inThisLevel) {
+            if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+                console.log('[WorldSync] applyWorldEntityState:hidden golem (level mismatch)', {
+                    entityLevel: levelId,
+                    currentLevel: gameState.currentLevelId,
+                });
+            }
+            return;
+        }
+
         const isLocallyControlled = entity.id === this.getLocallyControlledEntity()?.id;
         if (isLocallyControlled && Number.isFinite(possessionMsRemaining) && possessionMsRemaining > 0) {
             this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
@@ -577,9 +793,15 @@ export class GameScene extends Phaser.Scene {
             transform.position.y = y;
         }
 
-        const circle = entity.getComponent('circle');
         if (circle?.gameObject) {
             circle.gameObject.setPosition(x, y);
+        }
+        if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+            console.log('[WorldSync] applyWorldEntityState:applied golem', {
+                x,
+                y,
+                levelId,
+            });
         }
     }
 
@@ -869,15 +1091,14 @@ export class GameScene extends Phaser.Scene {
         transform.position.y = newY;
         circle.gameObject.setPosition(newX, newY);
 
-        if (controlled.id === this.player?.id) {
-            this._checkManualExitOverlap(newX, newY);
-        }
+        this._checkManualExitOverlap(controlled, newX, newY);
     }
 
-    _checkManualExitOverlap(playerX, playerY) {
-        const playerEntity = this.player;
-        if (!playerEntity) return;
+    _checkManualExitOverlap(controlledEntity, entityX, entityY) {
+        if (!controlledEntity) return;
+        if (!this.exitManager?.canEntityUseExits(controlledEntity)) return;
         const exits = this.entityManager.getEntitiesByType('exit');
+        let overlappingExitIndex = null;
 
         for (const exitEntity of exits) {
             const rect = exitEntity.getComponent('rectangle');
@@ -889,14 +1110,24 @@ export class GameScene extends Phaser.Scene {
 
             const halfW = rect.width / 2;
             const halfH = rect.height / 2;
-            const nearX = Math.max(ex - halfW, Math.min(playerX, ex + halfW));
-            const nearY = Math.max(ey - halfH, Math.min(playerY, ey + halfH));
-            const dx = playerX - nearX;
-            const dy = playerY - nearY;
+            const nearX = Math.max(ex - halfW, Math.min(entityX, ex + halfW));
+            const nearY = Math.max(ey - halfH, Math.min(entityY, ey + halfH));
+            const dx = entityX - nearX;
+            const dy = entityY - nearY;
             if (dx * dx + dy * dy <= PLAYER_RADIUS * PLAYER_RADIUS) {
-                this.exitManager.handleExit(playerEntity, exitComp.exitIndex);
-                return;
+                overlappingExitIndex = exitComp.exitIndex;
+                break;
             }
+        }
+
+        this.exitManager.updateDebounceState(
+            controlledEntity,
+            overlappingExitIndex,
+            gameState.currentLevelId
+        );
+
+        if (overlappingExitIndex != null) {
+            this.exitManager.handleExit(controlledEntity, overlappingExitIndex);
         }
     }
 

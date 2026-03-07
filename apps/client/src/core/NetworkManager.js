@@ -79,7 +79,11 @@ class NetworkManager {
                 break;
 
             case MSG.WORLD_STATE:
-                eventBus.emit('network:worldState', { entities: msg.entities ?? [] });
+                eventBus.emit('network:worldState', {
+                    entities: msg.entities ?? [],
+                    scope: msg.scope ?? 'all',
+                    levelId: msg.levelId ?? null,
+                });
                 break;
 
             case MSG.STATE_SNAPSHOT:
@@ -121,6 +125,12 @@ class NetworkManager {
                     previousControllerSessionId: msg.previousControllerSessionId ?? null,
                     winnerSessionId: msg.winnerSessionId ?? null,
                     possessionMsRemaining: Number.isFinite(msg.possessionMsRemaining) ? msg.possessionMsRemaining : null,
+                    // Level/position context set by the server at moment of release,
+                    // enabling the client to restore the player entity to the correct
+                    // level and coordinates when possession ends.
+                    levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
+                    x: Number.isFinite(msg.x) ? msg.x : null,
+                    y: Number.isFinite(msg.y) ? msg.y : null,
                 });
                 break;
 
@@ -229,9 +239,20 @@ class NetworkManager {
      * @param {string} levelId
      * @param {number} x  - spawn X in the new level
      * @param {number} y  - spawn Y in the new level
+     * @param {object} [opts]
      */
-    sendLevelChange(levelId, x, y) {
-        this.send({ type: MSG.LEVEL_CHANGE, levelId, x, y });
+    sendLevelChange(levelId, x, y, opts = {}) {
+        this.send({
+            type: MSG.LEVEL_CHANGE,
+            levelId,
+            x,
+            y,
+            entityKey: opts.entityKey ?? null,
+            fromLevelId: opts.fromLevelId ?? null,
+            fromExitIndex: Number.isFinite(opts.fromExitIndex) ? opts.fromExitIndex : null,
+            toExitIndex: Number.isFinite(opts.toExitIndex) ? opts.toExitIndex : null,
+            entryDirection: opts.entryDirection ?? null,
+        });
     }
 
     /**

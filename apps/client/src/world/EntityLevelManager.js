@@ -57,10 +57,13 @@ export class EntityLevelManager {
         // Clear existing level entities
         this.clearCurrentLevel();
 
-        // Destroy all non-player entities
+        // Destroy all non-player entities, but spare the currently controlled entity
+        // so that a possessed world entity (e.g. golem) survives the level teardown
+        // it just triggered by walking through an exit.
         const playerEntity = this.scene.player;
+        const controlledEntity = this.scene.controlledEntity;
         Object.values(this.scene.entityManager.entities)
-            .filter(e => e !== playerEntity)
+            .filter(e => e !== playerEntity && e !== controlledEntity)
             .forEach(e => e.destroy());
 
         const level = this.getLevel(levelId);
