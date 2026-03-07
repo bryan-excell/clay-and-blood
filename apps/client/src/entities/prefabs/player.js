@@ -7,7 +7,9 @@ import { VisibilityComponent } from '../../components/VisibilityComponent.js';
 import { ControlComponent } from '../../components/ControlComponent.js';
 import { AuthorityComponent } from '../../components/AuthorityComponent.js';
 import { IntentComponent } from '../../components/IntentComponent.js';
+import { StatsComponent } from '../../components/StatsComponent.js';
 import { PLAYER_RADIUS, COLOR_PLAYER } from '../../config.js';
+import { PLAYER_HEALTH_MAX } from '@clay-and-blood/shared';
 
 /**
  * Creates a player entity with the updated component architecture
@@ -43,6 +45,7 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new ControlComponent({ controlMode, controllerId }));
     player.addComponent(new AuthorityComponent({ authority, ownerId }));
     player.addComponent(new IntentComponent());
+    player.addComponent(new StatsComponent({ hp: PLAYER_HEALTH_MAX, hpMax: PLAYER_HEALTH_MAX }));
 
     // 4. Add input handling
     player.addComponent(new KeyboardInputComponent());

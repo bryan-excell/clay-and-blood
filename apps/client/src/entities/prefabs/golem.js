@@ -7,6 +7,7 @@ import { VisibilityComponent } from '../../components/VisibilityComponent.js';
 import { ControlComponent } from '../../components/ControlComponent.js';
 import { AuthorityComponent } from '../../components/AuthorityComponent.js';
 import { IntentComponent } from '../../components/IntentComponent.js';
+import { StatsComponent } from '../../components/StatsComponent.js';
 
 /**
  * Practice possession target in town square.
@@ -31,6 +32,7 @@ export function createGolem(scene, config = {}) {
     golem.addComponent(new ControlComponent({ controlMode, controllerId }));
     golem.addComponent(new AuthorityComponent({ authority, ownerId }));
     golem.addComponent(new IntentComponent());
+    golem.addComponent(new StatsComponent({ hp: 160, hpMax: 160, stamina: 80, staminaMax: 80 }));
 
     // Attached now so future control-switching can drive this entity immediately.
     golem.addComponent(new KeyboardInputComponent());

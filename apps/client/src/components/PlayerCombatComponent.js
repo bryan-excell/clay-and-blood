@@ -19,7 +19,6 @@ export class PlayerCombatComponent extends Component {
 
         this.currentWeapon = 1; // 1=bow, 2=melee, 3=spear, 4=possess
         this.spearActive = false;
-        this.weaponUI = null;
 
         this.bowCharging = false;
         this.bowChargeTime = 0;
@@ -41,7 +40,6 @@ export class PlayerCombatComponent extends Component {
         scene.input.keyboard.on('keydown-THREE', () => this._onWeaponKey(3), this);
         scene.input.keyboard.on('keydown-FOUR',  () => this._onWeaponKey(4), this);
 
-        this.createWeaponUI();
         this._unsubscribeControlChanged = eventBus.on('control:changed', ({ entityId, controlMode }) => {
             if (entityId !== this.entity.id) return;
             if (controlMode !== 'local' && this.bowCharging) {
@@ -53,9 +51,7 @@ export class PlayerCombatComponent extends Component {
                 const intent = this.entity.getComponent('intent');
                 intent?.clearTransient();
             }
-            this._setWeaponUIVisible(controlMode === 'local');
         });
-        this._setWeaponUIVisible(this.isLocallyControlled());
 
         return true;
     }
@@ -75,10 +71,6 @@ export class PlayerCombatComponent extends Component {
         if (this._unsubscribeControlChanged) {
             this._unsubscribeControlChanged();
             this._unsubscribeControlChanged = null;
-        }
-        if (this.weaponUI) {
-            this.weaponUI.forEach(({ bg, text }) => { bg.destroy(); text.destroy(); });
-            this.weaponUI = null;
         }
     }
 
@@ -225,53 +217,11 @@ export class PlayerCombatComponent extends Component {
     }
 
     setWeapon(num) {
+        if (this.currentWeapon === num) return;
         this.currentWeapon = num;
-        this.updateWeaponUI();
-    }
-
-    createWeaponUI() {
-        const scene = this.entity.scene;
-        const labels = ['1 Bow', '2 Melee', '3 Spear', '4 Possess'];
-        const slotW = 72;
-        const slotH = 28;
-        const padding = 6;
-        const startX = 10;
-        const startY = scene.scale.height - slotH - 10;
-
-        this.weaponUI = labels.map((label, i) => {
-            const x = startX + i * (slotW + padding);
-            const bg = scene.add.rectangle(x, startY, slotW, slotH, 0x222222, 0.85)
-                .setOrigin(0, 0)
-                .setScrollFactor(0)
-                .setDepth(100);
-            const text = scene.add.text(x + slotW / 2, startY + slotH / 2, label, {
-                fontSize: '13px',
-                color: '#ffffff',
-                fontFamily: 'monospace',
-            })
-                .setOrigin(0.5, 0.5)
-                .setScrollFactor(0)
-                .setDepth(101);
-            return { bg, text };
-        });
-
-        this.updateWeaponUI();
-    }
-
-    updateWeaponUI() {
-        if (!this.weaponUI) return;
-        this.weaponUI.forEach(({ bg }, i) => {
-            const active = i + 1 === this.currentWeapon;
-            bg.setFillStyle(active ? 0x885500 : 0x222222, active ? 1 : 0.85);
-            bg.setStrokeStyle(active ? 2 : 0, 0xFFAA00);
-        });
-    }
-
-    _setWeaponUIVisible(visible) {
-        if (!this.weaponUI) return;
-        this.weaponUI.forEach(({ bg, text }) => {
-            bg.setVisible(visible);
-            text.setVisible(visible);
+        eventBus.emit('combat:weaponChanged', {
+            entityId: this.entity?.id,
+            currentWeapon: num,
         });
     }
 

@@ -18,6 +18,7 @@ export { KeyboardInputComponent } from './KeyboardInputComponent.js';
 export { IntentComponent } from './IntentComponent.js';
 export { ControlComponent } from './ControlComponent.js';
 export { AuthorityComponent } from './AuthorityComponent.js';
+export { StatsComponent } from './StatsComponent.js';
 
 // Player-specific Components
 export { PlayerStateMachine } from './PlayerStateMachine.js';
