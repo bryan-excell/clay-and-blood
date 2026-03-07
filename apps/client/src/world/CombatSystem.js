@@ -29,7 +29,7 @@ export class CombatSystem {
                 combat.handlePrimaryAttack(target.x, target.y);
             }
             if (intent.wantsAttackSecondary) {
-                combat.handleSecondaryAttack();
+                combat.handleSecondaryAttack(target.x, target.y);
             }
 
             intent.clearTransient();

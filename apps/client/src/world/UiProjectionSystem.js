@@ -2,41 +2,21 @@ import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { createDefaultControlledEntityState } from '../core/uiStateSchema.js';
+import { WEAPONS, SPELLS, ACCESSORIES, ARMOR_SETS } from '../data/ItemRegistry.js';
 
 const EMPTY_BUFFS = Object.freeze([]);
-const WEAPON_LABELS = Object.freeze(['1 Bow', '2 Melee', '3 Spear', '4 Possess']);
-const WEAPON_STATES_BY_ACTIVE_SLOT = Object.freeze({
-    1: Object.freeze([
-        Object.freeze({ slot: 1, name: '1 Bow', active: true }),
-        Object.freeze({ slot: 2, name: '2 Melee', active: false }),
-        Object.freeze({ slot: 3, name: '3 Spear', active: false }),
-        Object.freeze({ slot: 4, name: '4 Possess', active: false }),
-    ]),
-    2: Object.freeze([
-        Object.freeze({ slot: 1, name: '1 Bow', active: false }),
-        Object.freeze({ slot: 2, name: '2 Melee', active: true }),
-        Object.freeze({ slot: 3, name: '3 Spear', active: false }),
-        Object.freeze({ slot: 4, name: '4 Possess', active: false }),
-    ]),
-    3: Object.freeze([
-        Object.freeze({ slot: 1, name: '1 Bow', active: false }),
-        Object.freeze({ slot: 2, name: '2 Melee', active: false }),
-        Object.freeze({ slot: 3, name: '3 Spear', active: true }),
-        Object.freeze({ slot: 4, name: '4 Possess', active: false }),
-    ]),
-    4: Object.freeze([
-        Object.freeze({ slot: 1, name: '1 Bow', active: false }),
-        Object.freeze({ slot: 2, name: '2 Melee', active: false }),
-        Object.freeze({ slot: 3, name: '3 Spear', active: false }),
-        Object.freeze({ slot: 4, name: '4 Possess', active: true }),
-    ]),
-});
+
+// Resolve an array of item ids to full item definition objects.
+// Falls back to a minimal stub for any id not found in the registry.
+function resolveItems(ids, registry) {
+    return ids.map(id => registry[id] ?? { id, name: id.charAt(0).toUpperCase() + id.slice(1) });
+}
 
 export class UiProjectionSystem {
     constructor(scene) {
         this.scene = scene;
         this._unsubscribeControlChanged = null;
-        this._unsubscribeWeaponChanged = null;
+        this._unsubscribeLoadoutChanged = null;
         this._started = false;
     }
 
@@ -48,7 +28,9 @@ export class UiProjectionSystem {
             this.publishImmediate();
         });
 
-        this._unsubscribeWeaponChanged = eventBus.on('combat:weaponChanged', ({ entityId }) => {
+        // Republish whenever the controlled entity's loadout changes (equip selection,
+        // or possession swap which triggers control:changed → loadout:changed).
+        this._unsubscribeLoadoutChanged = eventBus.on('loadout:changed', ({ entityId }) => {
             const controlled = this.scene.getLocallyControlledEntity?.();
             if (controlled?.id !== entityId) return;
             this.publishImmediate();
@@ -58,13 +40,14 @@ export class UiProjectionSystem {
     stop() {
         if (!this._started) return;
         this._started = false;
+
         if (this._unsubscribeControlChanged) {
             this._unsubscribeControlChanged();
             this._unsubscribeControlChanged = null;
         }
-        if (this._unsubscribeWeaponChanged) {
-            this._unsubscribeWeaponChanged();
-            this._unsubscribeWeaponChanged = null;
+        if (this._unsubscribeLoadoutChanged) {
+            this._unsubscribeLoadoutChanged();
+            this._unsubscribeLoadoutChanged = null;
         }
     }
 
@@ -85,36 +68,38 @@ export class UiProjectionSystem {
         const controlled = this.scene.getLocallyControlledEntity?.();
         if (!controlled) return createDefaultControlledEntityState();
 
-        const stats = controlled.getComponent('stats');
-        const combat = controlled.getComponent('playerCombat');
+        const stats   = controlled.getComponent('stats');
+        const loadout = controlled.getComponent('loadout');
+
         const networkSelf = uiStateStore.get('networkSelf');
-        const currentWeapon = Number.isFinite(combat?.currentWeapon)
-            ? Math.max(1, Math.min(4, combat.currentWeapon))
-            : 1;
         const isPrimaryLocalPlayer = controlled.id === this.scene.player?.id;
-        const canApplyNetworkSelf = !!networkSelf &&
+        const canApplyNetworkSelf  = !!networkSelf &&
             isPrimaryLocalPlayer &&
             networkSelf.sessionId === (networkManager.sessionId ?? null);
-        const hp = canApplyNetworkSelf ? networkSelf.hp : (stats?.hp ?? 0);
+
+        const hp    = canApplyNetworkSelf ? networkSelf.hp    : (stats?.hp    ?? 0);
         const hpMax = canApplyNetworkSelf ? networkSelf.hpMax : (stats?.hpMax ?? 0);
 
         return {
-            entityId: controlled.id,
+            entityId:   controlled.id,
             entityType: controlled.type,
-            sessionId: networkManager.sessionId ?? null,
+            sessionId:  networkManager.sessionId ?? null,
             hp,
             hpMax,
-            mana: stats?.mana ?? 0,
-            manaMax: stats?.manaMax ?? 0,
-            stamina: stats?.stamina ?? 0,
+            mana:       stats?.mana       ?? 0,
+            manaMax:    stats?.manaMax    ?? 0,
+            stamina:    stats?.stamina    ?? 0,
             staminaMax: stats?.staminaMax ?? 0,
-            currentWeapon,
-            weapons: WEAPON_STATES_BY_ACTIVE_SLOT[currentWeapon] ?? WEAPON_LABELS.map((name, idx) => ({
-                slot: idx + 1,
-                name,
-                active: idx + 1 === currentWeapon,
-            })),
             buffs: EMPTY_BUFFS,
+            // Full item defs are resolved here so the UI layer doesn't need
+            // to import ItemRegistry directly.
+            loadout: loadout ? {
+                weapons:     resolveItems(loadout.weapons,     WEAPONS),
+                spells:      resolveItems(loadout.spells,      SPELLS),
+                armorSets:   resolveItems(loadout.armorSets,   ARMOR_SETS),
+                accessories: resolveItems(loadout.accessories, ACCESSORIES),
+                equipped:    loadout.equipped,
+            } : null,
         };
     }
 }

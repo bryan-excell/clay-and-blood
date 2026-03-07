@@ -108,6 +108,7 @@ export class GameScene extends Phaser.Scene {
         this._latestServerTick = 0;
         // Local dash state for deterministic client prediction.
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        this._lastWorldEntitySyncAt = 0;
 
         this._setupNetworkListeners();
         networkManager.connect();
@@ -287,7 +288,7 @@ export class GameScene extends Phaser.Scene {
         });
 
         // Authoritative state snapshot from the server physics tick
-        eventBus.on('network:stateSnapshot', ({ players, tick }) => {
+        eventBus.on('network:stateSnapshot', ({ players, tick, worldEntities, entityEquips }) => {
             if (Number.isFinite(tick)) {
                 this._latestServerTick = Math.max(this._latestServerTick, tick);
             }
@@ -304,6 +305,21 @@ export class GameScene extends Phaser.Scene {
                     );
                 }
             }
+            this._applyNetworkWorldState(worldEntities);
+            this._applyNetworkEntityEquips(entityEquips);
+        });
+
+        eventBus.on('network:worldState', ({ entities }) => {
+            this._applyNetworkWorldState(entities);
+        });
+
+        eventBus.on('network:entityState', ({ sessionId, entityKey, x, y, levelId }) => {
+            if (sessionId === networkManager.sessionId) return;
+            this._applyNetworkWorldEntityState({ entityKey, x, y, levelId });
+        });
+
+        eventBus.on('network:entityEquip', ({ entityKey, levelId, equipped }) => {
+            this._applyNetworkEntityEquip({ entityKey, levelId, equipped });
         });
 
         // A remote player changed stage – update visibility
@@ -365,6 +381,35 @@ export class GameScene extends Phaser.Scene {
             this._spawnDamageFloat(worldX, worldY, damage, died);
         });
 
+        // Inventory drawer equip actions — UIScene emits these, we route them to the
+        // controlled entity's LoadoutComponent so the ECS stays as the source of truth.
+        eventBus.on('ui:equipWeapon', ({ id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.equipWeapon(id);
+        });
+        eventBus.on('ui:equipSpell', ({ id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.equipSpell(id);
+        });
+        eventBus.on('ui:equipArmor', ({ id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.equipArmor(id);
+        });
+        eventBus.on('ui:equipAccessory', ({ id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.equipAccessory(id);
+        });
+
+        // Replicate any equip change for the controlled entity to the server.
+        // For now we replicate only the primary local player's loadout to the server.
+        // Possessed entities (e.g. golem) keep local entity-specific loadout state.
+        eventBus.on('loadout:changed', ({ entityId, equipped }) => {
+            const entity = this.entityManager.getEntityById(entityId);
+            if (!entity) return;
+
+            const transform = entity.getComponent('transform');
+            const levelId = transform?.levelId ?? gameState.currentLevelId ?? null;
+            const entityKey = this._getNetworkEntityKey(entity);
+            if (!entityKey) return;
+            networkManager.sendEquip(entityKey, equipped, levelId);
+        });
+
         // A remote player disconnected
         eventBus.on('network:playerLeft', ({ sessionId }) => {
             const rp = this.remotePlayers.get(sessionId);
@@ -374,6 +419,95 @@ export class GameScene extends Phaser.Scene {
                 console.log(`[Network] Remote player left: ${sessionId}`);
             }
         });
+    }
+
+    _getNetworkEntityKey(entity) {
+        if (!entity?.id) return null;
+        if (entity.id === this.player?.id) {
+            return `player:${networkManager.sessionId ?? 'local'}`;
+        }
+        return `world:${entity.id}`;
+    }
+
+    _applyNetworkEntityEquips(entityEquips) {
+        if (!Array.isArray(entityEquips) || entityEquips.length === 0) return;
+        for (const payload of entityEquips) {
+            this._applyNetworkEntityEquip(payload);
+        }
+    }
+
+    _applyNetworkEntityEquip({ entityKey, levelId, equipped }) {
+        if (!entityKey || !equipped) return;
+        if (levelId && levelId !== gameState.currentLevelId) return;
+
+        if (typeof entityKey !== 'string') return;
+        if (entityKey.startsWith('world:')) {
+            const entityId = entityKey.slice('world:'.length);
+            const entity = this.entityManager.getEntityById(entityId);
+            const loadout = entity?.getComponent('loadout');
+            if (loadout) {
+                loadout.applyNetworkEquipped(equipped);
+                this.uiProjectionSystem?.publishImmediate();
+            }
+            return;
+        }
+
+        if (entityKey.startsWith('player:')) {
+            const sessionId = entityKey.slice('player:'.length);
+            if (sessionId !== (networkManager.sessionId ?? '')) return;
+            const loadout = this.player?.getComponent('loadout');
+            if (loadout) {
+                loadout.applyNetworkEquipped(equipped);
+                this.uiProjectionSystem?.publishImmediate();
+            }
+        }
+    }
+
+    _applyNetworkWorldState(entities) {
+        if (!Array.isArray(entities) || entities.length === 0) return;
+        for (const entityState of entities) {
+            this._applyNetworkWorldEntityState(entityState);
+        }
+    }
+
+    _applyNetworkWorldEntityState({ entityKey, x, y, levelId }) {
+        if (!entityKey || !entityKey.startsWith('world:')) return;
+        const entityId = entityKey.slice('world:'.length);
+        const entity = this.entityManager.getEntityById(entityId);
+        if (!entity) return;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (levelId && levelId !== gameState.currentLevelId) return;
+        if (entity.id === this.getLocallyControlledEntity()?.id) return;
+
+        const transform = entity.getComponent('transform');
+        if (transform) {
+            transform.position.x = x;
+            transform.position.y = y;
+        }
+
+        const circle = entity.getComponent('circle');
+        if (circle?.gameObject) {
+            circle.gameObject.setPosition(x, y);
+        }
+    }
+
+    _syncControlledWorldEntityState(nowMs) {
+        const controlled = this.getLocallyControlledEntity();
+        if (!controlled || controlled.id === this.player?.id) return;
+        if (nowMs - this._lastWorldEntitySyncAt < 50) return;
+        this._lastWorldEntitySyncAt = nowMs;
+
+        const transform = controlled.getComponent('transform');
+        if (!transform) return;
+        const entityKey = this._getNetworkEntityKey(controlled);
+        if (!entityKey || !entityKey.startsWith('world:')) return;
+
+        networkManager.sendEntityState(
+            entityKey,
+            transform.position.x,
+            transform.position.y,
+            gameState.currentLevelId ?? null
+        );
     }
 
     _addRemotePlayer(sessionId, x, y, stageId = 'town-square') {
@@ -656,6 +790,7 @@ export class GameScene extends Phaser.Scene {
      * @param {number} deltaTime - Fixed time step in ms
      */
     fixedUpdate(deltaTime) {
+        const nowMs = performance.now();
         // Process all actions
         actionManager.processActions();
 
@@ -675,6 +810,7 @@ export class GameScene extends Phaser.Scene {
         updated = this.entityManager.updateComponents(deltaTime, PHASE_VISUAL_SYNC, updated);
         updated = this.entityManager.updateComponents(deltaTime, PHASE_PRESENTATION, updated);
         this.uiProjectionSystem?.update();
+        this._syncControlledWorldEntityState(nowMs);
 
         // Send current input state to the authoritative server.
         // If the message was actually sent (not throttled), buffer it for reconciliation.

@@ -14,10 +14,13 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  *   network:connected      { sessionId }
  *   network:disconnected   {}
  *   network:gameState      { players: [{ sessionId, x, y, stageId }] }
- *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq }], self?: { sessionId, hp, hpMax } }
+ *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq }], self?: { sessionId, hp, hpMax }, worldEntities?: [], entityEquips?: [] }
+ *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId }] }
+ *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId }
  *   network:playerJoined   { sessionId }
  *   network:playerLeft     { sessionId }
  *   network:levelChanged   { sessionId, levelId }
+ *   network:entityEquip    { sessionId, entityKey, levelId, equipped }
  */
 class NetworkManager {
     constructor() {
@@ -73,6 +76,10 @@ class NetworkManager {
                 eventBus.emit('network:gameState', { players: msg.players });
                 break;
 
+            case MSG.WORLD_STATE:
+                eventBus.emit('network:worldState', { entities: msg.entities ?? [] });
+                break;
+
             case MSG.STATE_SNAPSHOT:
                 // Periodic authoritative state from the server physics tick
                 this._lastServerTick = msg.tick;
@@ -80,6 +87,28 @@ class NetworkManager {
                     tick: msg.tick,
                     players: msg.players,
                     self: msg.self ?? null,
+                    worldEntities: msg.worldEntities ?? [],
+                    entityEquips: msg.entityEquips ?? [],
+                });
+                break;
+
+            case MSG.PLAYER_EQUIP:
+                eventBus.emit('network:entityEquip', {
+                    sessionId: msg.sessionId,
+                    entityKey: msg.entityKey,
+                    levelId: msg.levelId ?? null,
+                    equipped: msg.equipped ?? null,
+                });
+                break;
+
+            case MSG.ENTITY_STATE:
+                eventBus.emit('network:entityState', {
+                    sessionId: msg.sessionId,
+                    entityKey: msg.entityKey,
+                    x: msg.x,
+                    y: msg.y,
+                    levelId: msg.levelId ?? null,
+                    controllerSessionId: msg.controllerSessionId ?? null,
                 });
                 break;
 
@@ -201,6 +230,28 @@ class NetworkManager {
             chargeRatio:    opts.chargeRatio    ?? 1,
             lastKnownTick:  this._lastServerTick,
         });
+    }
+
+    /**
+     * Notify the server of a loadout equip change.
+     * Fire-and-forget: the server stores it for future display to other clients.
+     * @param {string} entityKey
+     * @param {object} equipped - { weaponId, spellId, armorSetId, accessoryId }
+     * @param {string|null} levelId
+     */
+    sendEquip(entityKey, equipped, levelId = null) {
+        this.send({ type: MSG.PLAYER_EQUIP, entityKey, equipped, levelId });
+    }
+
+    /**
+     * Replicate a world entity's state (e.g. possessed golem) to the server.
+     * @param {string} entityKey
+     * @param {number} x
+     * @param {number} y
+     * @param {string|null} levelId
+     */
+    sendEntityState(entityKey, x, y, levelId = null) {
+        this.send({ type: MSG.ENTITY_STATE, entityKey, x, y, levelId });
     }
 
     send(data) {

@@ -14,13 +14,29 @@ function makeEntity(id, type, components = {}) {
     };
 }
 
+// Minimal mock that matches the shape LoadoutComponent exposes.
+function makeLoadout(weapons, spells, accessories, equipped) {
+    return {
+        weapons,
+        spells,
+        armorSets: [],
+        accessories,
+        equipped,
+    };
+}
+
 export function runUiProjectionBasicProjectionTest() {
     uiStateStore.reset();
     networkManager.sessionId = 's-1';
 
     const player = makeEntity('player-1', 'player', {
         stats: { hp: 75, hpMax: 100, mana: 10, manaMax: 30, stamina: 20, staminaMax: 40 },
-        playerCombat: { currentWeapon: 3 },
+        loadout: makeLoadout(
+            ['unarmed', 'bow'],
+            ['nothing', 'possess'],
+            ['cape'],
+            { weaponId: 'bow', spellId: 'possess', armorSetId: null, accessoryId: 'cape' }
+        ),
     });
     const scene = {
         player,
@@ -34,9 +50,13 @@ export function runUiProjectionBasicProjectionTest() {
     assert.equal(state.entityId, 'player-1');
     assert.equal(state.hp, 75);
     assert.equal(state.hpMax, 100);
-    assert.equal(state.currentWeapon, 3);
-    assert.equal(state.weapons[2].active, true);
-    assert.equal(state.weapons[0].active, false);
+    // Loadout is resolved to full item defs
+    assert.ok(state.loadout, 'loadout should be present');
+    assert.equal(state.loadout.equipped.weaponId, 'bow');
+    assert.equal(state.loadout.equipped.spellId, 'possess');
+    assert.equal(state.loadout.weapons.length, 2);
+    assert.equal(state.loadout.weapons[1].id, 'bow');
+    assert.equal(state.loadout.spells[1].id, 'possess');
 }
 
 export function runUiProjectionNetworkOverrideTest() {
@@ -45,7 +65,6 @@ export function runUiProjectionNetworkOverrideTest() {
 
     const player = makeEntity('player-2', 'player', {
         stats: { hp: 12, hpMax: 50, mana: 0, manaMax: 0, stamina: 0, staminaMax: 0 },
-        playerCombat: { currentWeapon: 1 },
     });
     uiStateStore.set('networkSelf', { sessionId: 's-2', hp: 88, hpMax: 120 });
 
@@ -60,6 +79,7 @@ export function runUiProjectionNetworkOverrideTest() {
     const state = uiStateStore.get('controlledEntity');
     assert.equal(state.hp, 88);
     assert.equal(state.hpMax, 120);
+    assert.equal(state.loadout, null, 'no LoadoutComponent → loadout should be null');
 }
 
 export function runUiProjectionPossessionGuardTest() {
@@ -68,11 +88,15 @@ export function runUiProjectionPossessionGuardTest() {
 
     const player = makeEntity('player-3', 'player', {
         stats: { hp: 65, hpMax: 100, mana: 0, manaMax: 0, stamina: 0, staminaMax: 0 },
-        playerCombat: { currentWeapon: 1 },
     });
     const golem = makeEntity('golem-1', 'golem', {
         stats: { hp: 160, hpMax: 160, mana: 0, manaMax: 0, stamina: 80, staminaMax: 80 },
-        playerCombat: { currentWeapon: 4 },
+        loadout: makeLoadout(
+            ['unarmed'],
+            ['nothing'],
+            [],
+            { weaponId: 'unarmed', spellId: 'nothing', armorSetId: null, accessoryId: null }
+        ),
     });
     uiStateStore.set('networkSelf', { sessionId: 's-3', hp: 20, hpMax: 100 });
 
@@ -86,8 +110,13 @@ export function runUiProjectionPossessionGuardTest() {
 
     const state = uiStateStore.get('controlledEntity');
     assert.equal(state.entityId, 'golem-1');
+    // Golem stats, not networkSelf (networkSelf only applies to the primary player)
     assert.equal(state.hp, 160);
     assert.equal(state.hpMax, 160);
+    // Golem's loadout is projected
+    assert.ok(state.loadout, 'golem should have a loadout');
+    assert.equal(state.loadout.equipped.weaponId, 'unarmed');
+    assert.equal(state.loadout.weapons.length, 1);
 }
 
 export function runUiProjectionImmediateControlChangedTest() {
@@ -96,11 +125,9 @@ export function runUiProjectionImmediateControlChangedTest() {
 
     const player = makeEntity('player-4', 'player', {
         stats: { hp: 90, hpMax: 100, mana: 0, manaMax: 0, stamina: 0, staminaMax: 0 },
-        playerCombat: { currentWeapon: 1 },
     });
     const golem = makeEntity('golem-4', 'golem', {
         stats: { hp: 150, hpMax: 160, mana: 0, manaMax: 0, stamina: 50, staminaMax: 80 },
-        playerCombat: { currentWeapon: 4 },
     });
     let controlled = player;
     const scene = {

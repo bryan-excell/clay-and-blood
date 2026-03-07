@@ -24,6 +24,32 @@ import {
 
 const TICK_MS = 50; // 20 Hz server tick
 const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
+const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
+const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
+
+function sanitizeEquipId(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!EQUIP_ID_PATTERN.test(trimmed)) return null;
+    return trimmed;
+}
+
+function sanitizeEquippedPayload(equipped) {
+    if (!equipped || typeof equipped !== 'object') return null;
+    return {
+        weaponId: sanitizeEquipId(equipped.weaponId),
+        spellId: sanitizeEquipId(equipped.spellId),
+        armorSetId: sanitizeEquipId(equipped.armorSetId),
+        accessoryId: sanitizeEquipId(equipped.accessoryId),
+    };
+}
+
+function sanitizeEntityKey(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!ENTITY_KEY_PATTERN.test(trimmed)) return null;
+    return trimmed;
+}
 
 /**
  * Returns the distance along the ray to the first intersection with a circle,
@@ -89,6 +115,8 @@ export class GameRoom {
         //   net:       { lastSeq }
         // }
         this.players = new Map();
+        this.entityEquips = new Map(); // entityKey -> { entityKey, levelId, equipped, ownerSessionId }
+        this.worldEntities = new Map(); // entityKey -> { entityKey, x, y, levelId, controllerSessionId }
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
         this.tickCount = 0;
@@ -134,6 +162,7 @@ export class GameRoom {
                     motion:    { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
                     stats:     { hp: PLAYER_HEALTH_MAX },
                     net:       { lastSeq: 0 },
+                    equipped:  null, // populated on first PLAYER_EQUIP message
                 });
 
                 // Ack the join with the caller's session ID
@@ -152,6 +181,10 @@ export class GameRoom {
                     }
                 }
                 ws.send(JSON.stringify({ type: MSG.GAME_STATE, players: playerList }));
+                ws.send(JSON.stringify({
+                    type: MSG.WORLD_STATE,
+                    entities: Array.from(this.worldEntities.values()),
+                }));
 
                 // Notify the others that someone new arrived
                 this.#broadcast({ type: MSG.PLAYER_JOIN, sessionId }, ws);
@@ -195,6 +228,47 @@ export class GameRoom {
                     },
                     net: { ...player.net, lastSeq: data.seq ?? player.net.lastSeq },
                 });
+                break;
+            }
+
+            case MSG.PLAYER_EQUIP: {
+                const player = this.players.get(sessionId);
+                const entityKey = sanitizeEntityKey(data.entityKey);
+                const sanitized = sanitizeEquippedPayload(data.equipped);
+                const levelId = typeof data.levelId === 'string' ? data.levelId : null;
+                if (!player || !entityKey || !sanitized) break;
+                const equipState = { entityKey, levelId, equipped: sanitized, ownerSessionId: sessionId };
+                this.entityEquips.set(entityKey, equipState);
+                this.players.set(sessionId, { ...player, equipped: sanitized });
+                this.#broadcast({
+                    type: MSG.PLAYER_EQUIP,
+                    sessionId,
+                    entityKey,
+                    levelId,
+                    equipped: sanitized,
+                }, ws);
+                break;
+            }
+
+            case MSG.ENTITY_STATE: {
+                const entityKey = sanitizeEntityKey(data.entityKey);
+                if (!entityKey || !entityKey.startsWith('world:')) break;
+                if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) break;
+
+                const levelId = typeof data.levelId === 'string' ? data.levelId : null;
+                const next = {
+                    entityKey,
+                    x: data.x,
+                    y: data.y,
+                    levelId,
+                    controllerSessionId: sessionId,
+                };
+                this.worldEntities.set(entityKey, next);
+                this.#broadcast({
+                    type: MSG.ENTITY_STATE,
+                    sessionId,
+                    ...next,
+                }, ws);
                 break;
             }
 
@@ -300,6 +374,12 @@ export class GameRoom {
     async webSocketClose(ws, code, reason) {
         const [sessionId] = this.state.getTags(ws);
         this.players.delete(sessionId);
+        this.entityEquips.delete(`player:${sessionId}`);
+        for (const entry of this.worldEntities.values()) {
+            if (entry.controllerSessionId !== sessionId) continue;
+            entry.controllerSessionId = null;
+            this.worldEntities.set(entry.entityKey, entry);
+        }
         this.#broadcast({ type: MSG.PLAYER_LEAVE, sessionId }, ws);
         ws.close(code, reason);
     }
@@ -307,6 +387,12 @@ export class GameRoom {
     async webSocketError(ws) {
         const [sessionId] = this.state.getTags(ws);
         this.players.delete(sessionId);
+        this.entityEquips.delete(`player:${sessionId}`);
+        for (const entry of this.worldEntities.values()) {
+            if (entry.controllerSessionId !== sessionId) continue;
+            entry.controllerSessionId = null;
+            this.worldEntities.set(entry.entityKey, entry);
+        }
         this.#broadcast({ type: MSG.PLAYER_LEAVE, sessionId }, ws);
         ws.close(1011, 'WebSocket error');
     }
@@ -393,6 +479,13 @@ export class GameRoom {
                     hp: selfPlayer.stats.hp,
                     hpMax: PLAYER_HEALTH_MAX,
                 } : null,
+                worldEntities: Array.from(this.worldEntities.values()),
+                entityEquips: Array.from(this.entityEquips.values()).map(({ entityKey, levelId, equipped, ownerSessionId }) => ({
+                    entityKey,
+                    levelId,
+                    equipped,
+                    ownerSessionId,
+                })),
             };
             try { ws.send(JSON.stringify(payload)); } catch { /* session closing */ }
         }

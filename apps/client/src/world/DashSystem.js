@@ -16,6 +16,13 @@ export class DashSystem {
             const stateMachine = entity.getComponent('playerStateMachine');
             if (!intent || !stateMachine) continue;
 
+            // If the entity has a loadout, it must have a 'dash' accessory to dash.
+            // Entities without a loadout component are not gated (legacy/non-loadout entities).
+            const loadout = entity.getComponent('loadout');
+            if (loadout && !loadout.hasSpacebarAction('dash')) {
+                intent.wantsDash = false;
+            }
+
             stateMachine.updateDashState(intent, deltaTime);
         }
     }
