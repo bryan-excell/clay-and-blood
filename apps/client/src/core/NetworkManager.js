@@ -1,7 +1,7 @@
 import { MSG } from '@clay-and-blood/shared';
 import { eventBus } from './EventBus.js';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8787/room/default';
+const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/default';
 
 /**
  * NetworkManager – singleton WebSocket client.
@@ -14,7 +14,7 @@ const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8787/room/default'
  *   network:connected      { sessionId }
  *   network:disconnected   {}
  *   network:gameState      { players: [{ sessionId, x, y, stageId }] }
- *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq }] }
+ *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq }], self?: { sessionId, hp, hpMax } }
  *   network:playerJoined   { sessionId }
  *   network:playerLeft     { sessionId }
  *   network:levelChanged   { sessionId, levelId }
@@ -76,7 +76,11 @@ class NetworkManager {
             case MSG.STATE_SNAPSHOT:
                 // Periodic authoritative state from the server physics tick
                 this._lastServerTick = msg.tick;
-                eventBus.emit('network:stateSnapshot', { tick: msg.tick, players: msg.players });
+                eventBus.emit('network:stateSnapshot', {
+                    tick: msg.tick,
+                    players: msg.players,
+                    self: msg.self ?? null,
+                });
                 break;
 
             case MSG.PLAYER_LEAVE:

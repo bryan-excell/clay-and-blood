@@ -8,12 +8,12 @@ import { LocomotionSystem } from '../world/LocomotionSystem.js';
 import { DashSystem } from '../world/DashSystem.js';
 import { CombatSystem } from '../world/CombatSystem.js';
 import { AuthoritySystem } from '../world/AuthoritySystem.js';
+import { UiProjectionSystem } from '../world/UiProjectionSystem.js';
 import { gameState } from '../core/GameState.js';
 import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
-import { uiStateStore } from '../core/UiStateStore.js';
-import { createDefaultControlledEntityState } from '../core/uiStateSchema.js';
+import { NetworkUiAdapter } from '../core/NetworkUiAdapter.js';
 import { PLAYER_RADIUS, TILE_SIZE } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
 import {
@@ -82,6 +82,10 @@ export class GameScene extends Phaser.Scene {
         this.controlledEntity = this.player;
         this._spawnPracticeEntitiesForLevel(initialLevelId);
         this.scene.launch('UIScene');
+        this.networkUiAdapter = new NetworkUiAdapter();
+        this.networkUiAdapter.start();
+        this.uiProjectionSystem = new UiProjectionSystem(this);
+        this.uiProjectionSystem.start();
 
         // Increase overlap bias to prevent corner-seam slipping between wall tiles
         this.physics.world.OVERLAP_BIAS = 16;
@@ -98,10 +102,6 @@ export class GameScene extends Phaser.Scene {
         // --- Multiplayer ---
         // Map of remote sessionId -> Phaser.GameObjects.Arc (circle)
         this.remotePlayers = new Map();
-
-        // --- Health tracking (populated via PLAYER_DAMAGED events) ---
-        // Map of sessionId -> current hp (populated lazily as damage events arrive)
-        this._playerHps = new Map();
 
         // --- Networking state ---
         // Latest server tick seen by this client, used for tick-based interpolation.
@@ -122,7 +122,12 @@ export class GameScene extends Phaser.Scene {
             alpha: 0,
         }).setOrigin(0.5, 1).setDepth(100);
         this._exitLabelAlpha = 0; // current rendered alpha
-        this._syncUiStateFromControl(true);
+        this.uiProjectionSystem.publishImmediate();
+
+        this.events.once('shutdown', () => {
+            this.uiProjectionSystem?.stop();
+            this.networkUiAdapter?.stop();
+        });
     }
 
     /**
@@ -211,7 +216,7 @@ export class GameScene extends Phaser.Scene {
 
         this.lightingRenderer?.setPrimaryLightSource(nextEntity.id);
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
-        this._syncUiStateFromControl(true);
+        this.uiProjectionSystem?.publishImmediate();
         return true;
     }
 
@@ -330,12 +335,6 @@ export class GameScene extends Phaser.Scene {
                 };
             }
         });
-        eventBus.on('combat:weaponChanged', ({ entityId }) => {
-            const controlled = this.getLocallyControlledEntity();
-            if (controlled?.id !== entityId) return;
-            this._syncUiStateFromControl(true);
-        });
-
         // A remote player fired a bullet – spawn it locally if in the same level
         eventBus.on('network:bulletFired', ({ x, y, velocityX, velocityY, levelId }) => {
             if (levelId === gameState.currentLevelId) {
@@ -347,8 +346,6 @@ export class GameScene extends Phaser.Scene {
 
         // Server confirmed a hit via lag-compensated detection
         eventBus.on('network:playerDamaged', ({ sessionId, damage, hp, died }) => {
-            this._playerHps.set(sessionId, hp);
-
             // Find world position of the damaged player
             let worldX, worldY;
             if (sessionId === networkManager.sessionId) {
@@ -364,7 +361,7 @@ export class GameScene extends Phaser.Scene {
                 worldY = rp?.circle?.y ?? 0;
             }
 
-            this._syncUiStateFromControl();
+            this.uiProjectionSystem?.publishImmediate();
             this._spawnDamageFloat(worldX, worldY, damage, died);
         });
 
@@ -636,47 +633,6 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _buildControlledEntityUiState() {
-        const controlled = this.getLocallyControlledEntity();
-        if (!controlled) return createDefaultControlledEntityState();
-
-        const stats = controlled.getComponent('stats');
-        const combat = controlled.getComponent('playerCombat');
-        const currentWeapon = combat?.currentWeapon ?? 1;
-        const baseWeapons = ['1 Bow', '2 Melee', '3 Spear', '4 Possess'];
-        const weapons = baseWeapons.map((name, idx) => ({
-            slot: idx + 1,
-            name,
-            active: idx + 1 === currentWeapon,
-        }));
-
-        return {
-            entityId: controlled.id,
-            entityType: controlled.type,
-            sessionId: networkManager.sessionId ?? null,
-            hp: stats?.hp ?? 0,
-            hpMax: stats?.hpMax ?? 0,
-            mana: stats?.mana ?? 0,
-            manaMax: stats?.manaMax ?? 0,
-            stamina: stats?.stamina ?? 0,
-            staminaMax: stats?.staminaMax ?? 0,
-            currentWeapon,
-            weapons,
-            buffs: [],
-        };
-    }
-
-    _syncUiStateFromControl(force = false) {
-        const next = this._buildControlledEntityUiState();
-        // The store performs change detection; force currently preserves API shape
-        // for future projection hooks.
-        if (force) {
-            uiStateStore.set('controlledEntity', next);
-            return;
-        }
-        uiStateStore.set('controlledEntity', next);
-    }
-
     /**
      * Main update loop - processes variable-time updates
      * @param {number} time - Current time
@@ -718,7 +674,7 @@ export class GameScene extends Phaser.Scene {
         updated = this.entityManager.updateComponents(deltaTime, PHASE_TRANSFORM_SYNC, updated);
         updated = this.entityManager.updateComponents(deltaTime, PHASE_VISUAL_SYNC, updated);
         updated = this.entityManager.updateComponents(deltaTime, PHASE_PRESENTATION, updated);
-        this._syncUiStateFromControl();
+        this.uiProjectionSystem?.update();
 
         // Send current input state to the authoritative server.
         // If the message was actually sent (not throttled), buffer it for reconciliation.

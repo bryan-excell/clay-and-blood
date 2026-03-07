@@ -380,11 +380,22 @@ export class GameRoom {
      * Phase 7: broadcast authoritative snapshot for this tick.
      */
     _phaseBroadcastSnapshot(players) {
-        this.#broadcastAll({
-            type: MSG.STATE_SNAPSHOT,
-            tick: this.tickCount++,
-            players,
-        });
+        const tick = this.tickCount++;
+        for (const ws of this.state.getWebSockets()) {
+            const [sessionId] = this.state.getTags(ws);
+            const selfPlayer = this.players.get(sessionId);
+            const payload = {
+                type: MSG.STATE_SNAPSHOT,
+                tick,
+                players,
+                self: selfPlayer ? {
+                    sessionId,
+                    hp: selfPlayer.stats.hp,
+                    hpMax: PLAYER_HEALTH_MAX,
+                } : null,
+            };
+            try { ws.send(JSON.stringify(payload)); } catch { /* session closing */ }
+        }
     }
 
     /**

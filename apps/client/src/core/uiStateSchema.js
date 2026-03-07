@@ -21,5 +21,6 @@ export function createDefaultUiState() {
     return {
         schemaVersion: UI_STATE_SCHEMA_VERSION,
         controlledEntity: createDefaultControlledEntityState(),
+        networkSelf: null,
     };
 }
