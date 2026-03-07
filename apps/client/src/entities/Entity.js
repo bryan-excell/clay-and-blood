@@ -1,6 +1,16 @@
 import { eventBus } from "../core/EventBus.js";
 import { PhaserObjectComponent } from "../components/PhaserObjectComponent.js";
 
+let _entityIdCounter = 0;
+
+function createEntityId() {
+    if (globalThis?.crypto?.randomUUID) {
+        return `entity_${globalThis.crypto.randomUUID()}`;
+    }
+    _entityIdCounter += 1;
+    return `entity_${Date.now()}_${_entityIdCounter}_${Math.floor(Math.random() * 1_000_000)}`;
+}
+
 /**
  * Entity class
  * A container for components with improved dependency handling
@@ -8,7 +18,7 @@ import { PhaserObjectComponent } from "../components/PhaserObjectComponent.js";
 export class Entity {
     constructor(scene, id) {
         // Generate a unique ID (critical for network identification)
-        this.id = id || `entity_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+        this.id = id || createEntityId();
         this.scene = scene;
         this.components = new Map();
         this.type = 'entity'; // Base type, can be overridden by prefabs

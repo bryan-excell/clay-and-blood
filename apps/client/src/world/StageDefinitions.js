@@ -52,7 +52,7 @@ const _staticStages = {
     /** Starting town – 40×40, layout from shared. */
     'town-square': {
         type: 'static',
-        floorTile: 'floor_grass',
+        floorTile: 'floor_dirt',
         spawnPoint: { x: 20, y: 20 },
         ...STATIC_STAGE_LAYOUTS['town-square'],
         connections: STATIC_EXIT_CONNECTIONS['town-square'],

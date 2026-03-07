@@ -111,6 +111,7 @@ class NetworkManager {
                 eventBus.emit('network:entityState', {
                     sessionId: msg.sessionId,
                     entityKey: msg.entityKey,
+                    kind: msg.kind ?? null,
                     x: msg.x,
                     y: msg.y,
                     levelId: msg.levelId ?? null,

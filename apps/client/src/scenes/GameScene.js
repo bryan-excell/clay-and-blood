@@ -411,9 +411,9 @@ export class GameScene extends Phaser.Scene {
             this._applyNetworkWorldState(entities, scope, levelId);
         });
 
-        eventBus.on('network:entityState', ({ sessionId, entityKey, x, y, levelId, controllerSessionId, possessionMsRemaining }) => {
+        eventBus.on('network:entityState', ({ sessionId, entityKey, kind, x, y, levelId, controllerSessionId, possessionMsRemaining }) => {
             if (sessionId === networkManager.sessionId) return;
-            this._applyNetworkWorldEntityState({ entityKey, x, y, levelId, controllerSessionId, possessionMsRemaining });
+            this._applyNetworkWorldEntityState({ entityKey, kind, x, y, levelId, controllerSessionId, possessionMsRemaining });
         });
 
         eventBus.on('network:forceControl', ({ controlledEntityKey, possessionMsRemaining, levelId, x, y }) => {
@@ -622,6 +622,18 @@ export class GameScene extends Phaser.Scene {
         return null;
     }
 
+    _resolveWorldPrefabName(entityKey, kind = null) {
+        if (kind === 'golem') return 'golem';
+        if (kind === 'bandit') return 'bandit';
+        if (entityKey === 'world:golem') return 'golem';
+        return null;
+    }
+
+    _isReplicatedWorldActor(entity) {
+        if (!entity) return false;
+        return entity.type === 'golem' || entity.type === 'bandit';
+    }
+
     _applyNetworkEntityEquips(entityEquips) {
         if (!Array.isArray(entityEquips) || entityEquips.length === 0) return;
         for (const payload of entityEquips) {
@@ -657,6 +669,38 @@ export class GameScene extends Phaser.Scene {
     }
 
     _applyNetworkWorldState(entities, scope = 'all', levelId = null) {
+        const incomingKeys = new Set(
+            Array.isArray(entities)
+                ? entities
+                    .map((entry) => (typeof entry?.entityKey === 'string' ? entry.entityKey : null))
+                    .filter((key) => !!key)
+                : []
+        );
+
+        if (scope === 'all') {
+            const existingWorldEntities = Object.values(this.entityManager.entities)
+                .filter((entity) => entity && entity.id !== this.player?.id)
+                .filter((entity) => this._isReplicatedWorldActor(entity));
+            for (const entity of existingWorldEntities) {
+                const entityKey = this._getNetworkEntityKey(entity);
+                if (!entityKey || incomingKeys.has(entityKey)) continue;
+                if (entity.id === this.getLocallyControlledEntity()?.id) continue;
+                entity.destroy();
+            }
+        } else if (scope === 'level' && levelId) {
+            const existingWorldEntities = Object.values(this.entityManager.entities)
+                .filter((entity) => entity && entity.id !== this.player?.id)
+                .filter((entity) => this._isReplicatedWorldActor(entity));
+            for (const entity of existingWorldEntities) {
+                const transformLevelId = entity.getComponent('transform')?.levelId ?? gameState.currentLevelId;
+                if (transformLevelId !== levelId) continue;
+                const entityKey = this._getNetworkEntityKey(entity);
+                if (!entityKey || incomingKeys.has(entityKey)) continue;
+                if (entity.id === this.getLocallyControlledEntity()?.id) continue;
+                entity.destroy();
+            }
+        }
+
         if (DEBUG_WORLD_SYNC) {
             console.log('[WorldSync] applyWorldState:start', {
                 scope,
@@ -689,7 +733,7 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, controllerSessionId, possessionMsRemaining }) {
+    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, kind, controllerSessionId, possessionMsRemaining }) {
         if (!entityKey || !entityKey.startsWith('world:')) return;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
@@ -705,6 +749,7 @@ export class GameScene extends Phaser.Scene {
 
         this._worldEntityStateCache.set(entityKey, {
             entityKey,
+            kind: kind ?? null,
             x,
             y,
             levelId: levelId ?? null,
@@ -727,29 +772,18 @@ export class GameScene extends Phaser.Scene {
         // Spawn if the entity is missing but is now in our current level.
         // Phase 4B: use the correct control mode based on who the server says
         // is controlling it — not always 'remote'.
-        if (!entity && levelId && levelId === gameState.currentLevelId && entityKey === 'world:golem') {
+        const worldPrefab = this._resolveWorldPrefabName(entityKey, kind);
+        if (!entity && levelId && levelId === gameState.currentLevelId && worldPrefab) {
             const isMe = controllerSessionId === (networkManager.sessionId ?? null);
-            entity = this.entityFactory.createFromPrefab('golem', {
-                x,
-                y,
-                controlMode: isMe ? 'local' : 'remote',
-            });
-            if (DEBUG_WORLD_SYNC) {
-                console.log('[WorldSync] applyWorldEntityState:spawned missing golem from network', {
-                    entityId: entity?.id ?? null,
-                    x,
-                    y,
-                    levelId,
-                    isMe,
-                });
-            }
+            const spawnConfig = worldPrefab === 'golem'
+                ? { id: entityId, x, y, controlMode: isMe ? 'local' : 'remote' }
+                : { id: entityId, x, y };
+            entity = this.entityFactory.createFromPrefab(worldPrefab, spawnConfig);
             const circle = entity?.getComponent('circle');
             if (circle?.gameObject) {
                 this.lightingRenderer?.maskGameObject(circle.gameObject);
             }
-            // If we are the controller, restore local control state on the
-            // freshly spawned entity (e.g. after a level transition destroyed it).
-            if (isMe && entity) {
+            if (worldPrefab === 'golem' && isMe && entity) {
                 this.setLocallyControlledEntity(entity, 'network:respawn');
                 if (Number.isFinite(possessionMsRemaining) && possessionMsRemaining > 0) {
                     this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
@@ -791,6 +825,7 @@ export class GameScene extends Phaser.Scene {
         if (transform) {
             transform.position.x = x;
             transform.position.y = y;
+            transform.levelId = levelId ?? null;
         }
 
         if (circle?.gameObject) {

@@ -76,11 +76,7 @@ export class EntityLevelManager {
 
         // Replace (not accumulate) the dark background rectangle.
         if (this._background) this._background.destroy();
-        this._background = this.scene.add.rectangle(
-            levelW / 2, levelH / 2,
-            levelW, levelH,
-            0x222222
-        ).setDepth(-20);
+        this._background = null;
 
         this.generateLevelContent(level);
 

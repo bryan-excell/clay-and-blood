@@ -8,6 +8,7 @@ import {
     STAGE_WIDTH,
     STAGE_HEIGHT,
     PLAYER_RADIUS,
+    stepPlayerKinematics,
     dashStateFromInput,
     resolvePlayerCollisions,
     PLAYER_HEALTH_MAX,
@@ -33,6 +34,17 @@ const PRACTICE_GOLEM_KEY = 'world:golem';
 const PRACTICE_GOLEM_STAGE = 'town-square';
 const PRACTICE_GOLEM_TILE_X = 24;
 const PRACTICE_GOLEM_TILE_Y = 20;
+const PRACTICE_BANDIT_KEY = 'world:bandit_1';
+const PRACTICE_BANDIT_STAGE = 'west-gate';
+const PRACTICE_BANDIT_TILE_X = 6;
+const PRACTICE_BANDIT_TILE_Y = 4;
+const BANDIT_AGGRO_RANGE = 420;
+const BANDIT_LEASH_RANGE = 560;
+const BANDIT_ATTACK_RANGE = 62;
+const BANDIT_ATTACK_DAMAGE = 7;
+const BANDIT_ATTACK_COOLDOWN_MS = 850;
+const BANDIT_HIT_RADIUS = 18;
+const BANDIT_HP_MAX = 75;
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 
@@ -109,6 +121,22 @@ function resolveCollisions(x, y, grid) {
     return resolvePlayerCollisions(x, y, grid);
 }
 
+function clampUnit(value) {
+    return Math.max(-1, Math.min(1, value));
+}
+
+function intentFromVector(dx, dy, sprint = false) {
+    const normalizedX = clampUnit(dx);
+    const normalizedY = clampUnit(dy);
+    return {
+        up: normalizedY < -0.1,
+        down: normalizedY > 0.1,
+        left: normalizedX < -0.1,
+        right: normalizedX > 0.1,
+        sprint: !!sprint,
+    };
+}
+
 /**
  * GameRoom – Cloudflare Durable Object
  *
@@ -169,6 +197,7 @@ export class GameRoom {
 
             case MSG.PLAYER_JOIN: {
                 this._ensurePracticeGolem();
+                this._ensurePracticeBandit();
                 const startGrid = this._getGrid('town-square');
                 const startW = startGrid ? startGrid[0].length : STAGE_WIDTH;
                 const startH = startGrid ? startGrid.length   : STAGE_HEIGHT;
@@ -205,12 +234,7 @@ export class GameRoom {
                 ws.send(JSON.stringify({
                     type: MSG.WORLD_STATE,
                     scope: 'all',
-                    entities: Array.from(this.worldEntities.values()).map((entry) => ({
-                        ...entry,
-                        possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
-                            ? Math.max(0, entry.possessionEndAtMs - Date.now())
-                            : null,
-                    })),
+                    entities: Array.from(this.worldEntities.values()).map((entry) => this._serializeWorldEntity(entry, Date.now())),
                 }));
 
                 // Notify the others that someone new arrived
@@ -403,6 +427,7 @@ export class GameRoom {
                 const levelId = typeof data.levelId === 'string' ? data.levelId : null;
                 const prev = this.worldEntities.get(entityKey);
                 const next = {
+                    ...(prev ?? {}),
                     entityKey,
                     x: data.x,
                     y: data.y,
@@ -424,10 +449,7 @@ export class GameRoom {
                 this.#broadcast({
                     type: MSG.ENTITY_STATE,
                     sessionId,
-                    possessionMsRemaining: Number.isFinite(next.possessionEndAtMs)
-                        ? Math.max(0, next.possessionEndAtMs - Date.now())
-                        : null,
-                    ...next,
+                    ...this._serializeWorldEntity(next, Date.now()),
                 }, ws);
                 break;
             }
@@ -458,6 +480,7 @@ export class GameRoom {
                     })]));
 
                 let hitSessionId = null;
+                let hitEntityKey = null;
                 let hitT = Infinity;
 
                 for (const [sid, pos] of posMap.entries()) {
@@ -468,6 +491,27 @@ export class GameRoom {
                     if (t !== null && t < hitT) {
                         hitT = t;
                         hitSessionId = sid;
+                    }
+                }
+
+                // World-entity hit detection (hostile NPCs).
+                for (const [entityKey, entity] of this.worldEntities.entries()) {
+                    if (entity?.kind !== 'bandit') continue;
+                    if (entity.levelId !== levelId) continue;
+                    const t = rayHitDistance(
+                        x,
+                        y,
+                        velocityX,
+                        velocityY,
+                        entity.x,
+                        entity.y,
+                        BANDIT_HIT_RADIUS,
+                        maxRange
+                    );
+                    if (t !== null && t < hitT) {
+                        hitT = t;
+                        hitSessionId = null;
+                        hitEntityKey = entityKey;
                     }
                 }
 
@@ -489,6 +533,9 @@ export class GameRoom {
                             died,
                         });
                     }
+                }
+                if (hitEntityKey) {
+                    this._applyDamageToWorldEntity(hitEntityKey, damage);
                 }
 
     // ── Relay bullet visually to all other clients ───────────────
@@ -598,12 +645,7 @@ export class GameRoom {
                 // immediately so entrants do not render stale/default local positions.
                 const destinationEntities = Array.from(this.worldEntities.values())
                     .filter((entry) => (entry.levelId ?? null) === levelId)
-                    .map((entry) => ({
-                        ...entry,
-                        possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
-                            ? Math.max(0, entry.possessionEndAtMs - Date.now())
-                            : null,
-                    }));
+                    .map((entry) => this._serializeWorldEntity(entry, Date.now()));
                 if (DEBUG_WORLD_SYNC) {
                     const golem = this.worldEntities.get('world:golem') ?? null;
                     console.log('[WorldSync][Server] level_change world_state push', {
@@ -673,6 +715,8 @@ export class GameRoom {
         const inputPhase = this._phaseInputIntent();
         const locomotionPhase = this._phaseLocomotionDash(inputPhase);
         this._phasePhysicsTransform(locomotionPhase);
+        this._phaseBanditAi();
+        this._phaseBanditMovement();
 
         const snapshotPlayers = this._phaseBuildSnapshotPlayers();
         this._phaseRecordLagCompHistory();
@@ -681,6 +725,7 @@ export class GameRoom {
 
     _phaseExpirePossessions() {
         this._ensurePracticeGolem();
+        this._ensurePracticeBandit();
         const now = Date.now();
         for (const [sessionId, player] of this.players.entries()) {
             const controlledKey = player.controlledEntityKey;
@@ -724,6 +769,117 @@ export class GameRoom {
         return phaseBuildSnapshotPlayers(this.players);
     }
 
+    _phaseBanditAi() {
+        const now = Date.now();
+        for (const [entityKey, entity] of this.worldEntities.entries()) {
+            if (entity?.kind !== 'bandit') continue;
+            if (!entity.ai) {
+                entity.ai = {
+                    state: 'idle',
+                    targetSessionId: null,
+                    attackCooldownMs: 0,
+                };
+            }
+            if (!entity.home) {
+                entity.home = {
+                    x: entity.x,
+                    y: entity.y,
+                    levelId: entity.levelId ?? PRACTICE_BANDIT_STAGE,
+                };
+            }
+
+            entity.ai.attackCooldownMs = Math.max(0, (entity.ai.attackCooldownMs ?? 0) - TICK_MS);
+
+            if (entity.controllerSessionId) {
+                entity.ai.state = 'idle';
+                entity.ai.targetSessionId = null;
+                this.worldEntities.set(entityKey, entity);
+                continue;
+            }
+
+            const target = this._findNearestPlayerInRange(entity, BANDIT_AGGRO_RANGE);
+            const targetPlayer = target ? this.players.get(target.sessionId) : null;
+            const targetDist = target ? Math.sqrt(target.distSq) : Infinity;
+            const sameLevelAsHome = (entity.levelId ?? null) === (entity.home?.levelId ?? null);
+            const homeDx = (entity.home?.x ?? entity.x) - entity.x;
+            const homeDy = (entity.home?.y ?? entity.y) - entity.y;
+            const homeDist = Math.sqrt(homeDx * homeDx + homeDy * homeDy);
+            const beyondLeash = !sameLevelAsHome || homeDist > BANDIT_LEASH_RANGE;
+
+            let nextState = entity.ai.state ?? 'idle';
+            if (!targetPlayer && nextState !== 'return_home') {
+                nextState = homeDist > 20 ? 'return_home' : 'idle';
+            }
+            if (targetPlayer) {
+                if (beyondLeash) {
+                    nextState = 'return_home';
+                } else if (targetDist <= BANDIT_ATTACK_RANGE) {
+                    nextState = 'attack';
+                } else {
+                    nextState = 'chase';
+                }
+            } else if (homeDist <= 20) {
+                nextState = 'idle';
+            }
+
+            entity.ai.state = nextState;
+            entity.ai.targetSessionId = targetPlayer ? target.sessionId : null;
+            entity.intent = {
+                up: false,
+                down: false,
+                left: false,
+                right: false,
+                sprint: false,
+            };
+
+            if (nextState === 'chase' && targetPlayer) {
+                const dx = targetPlayer.transform.x - entity.x;
+                const dy = targetPlayer.transform.y - entity.y;
+                const len = Math.hypot(dx, dy) || 1;
+                entity.intent = intentFromVector(dx / len, dy / len, targetDist > 200);
+            } else if (nextState === 'return_home') {
+                const dx = (entity.home?.x ?? entity.x) - entity.x;
+                const dy = (entity.home?.y ?? entity.y) - entity.y;
+                const len = Math.hypot(dx, dy) || 1;
+                entity.intent = intentFromVector(dx / len, dy / len, homeDist > 160);
+            } else if (nextState === 'attack' && targetPlayer && entity.ai.attackCooldownMs <= 0) {
+                this._applyBanditMeleeHit(entityKey, target.sessionId, now);
+                entity.ai.attackCooldownMs = BANDIT_ATTACK_COOLDOWN_MS;
+            }
+
+            this.worldEntities.set(entityKey, entity);
+        }
+    }
+
+    _phaseBanditMovement() {
+        for (const [entityKey, entity] of this.worldEntities.entries()) {
+            if (entity?.kind !== 'bandit') continue;
+            if (entity.controllerSessionId) continue;
+            const grid = this._getGrid(entity.levelId ?? PRACTICE_BANDIT_STAGE);
+            const stepped = stepPlayerKinematics(
+                {
+                    x: entity.x,
+                    y: entity.y,
+                    dashVx: entity.motion?.dashVx ?? 0,
+                    dashVy: entity.motion?.dashVy ?? 0,
+                    dashTimeLeftMs: entity.motion?.dashTimeLeftMs ?? 0,
+                },
+                entity.intent ?? { up: false, down: false, left: false, right: false, sprint: false },
+                TICK_MS,
+                grid
+            );
+
+            entity.x = stepped.x;
+            entity.y = stepped.y;
+            entity.motion = {
+                dashVx: stepped.dashVx,
+                dashVy: stepped.dashVy,
+                dashTimeLeftMs: stepped.dashTimeLeftMs,
+            };
+            this.worldEntities.set(entityKey, entity);
+        }
+    }
+
     /**
      * Phase 6: record per-tick lag-compensation history.
      */
@@ -755,10 +911,7 @@ export class GameRoom {
                     hpMax: PLAYER_HEALTH_MAX,
                 } : null,
                 worldEntities: Array.from(this.worldEntities.values()).map((entry) => ({
-                    ...entry,
-                    possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
-                        ? Math.max(0, entry.possessionEndAtMs - now)
-                        : null,
+                    ...this._serializeWorldEntity(entry, now),
                 })),
                 entityEquips: Array.from(this.entityEquips.values()).map(({ entityKey, levelId, equipped, ownerSessionId }) => ({
                     entityKey,
@@ -840,6 +993,7 @@ export class GameRoom {
         const y = PRACTICE_GOLEM_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
         this.worldEntities.set(PRACTICE_GOLEM_KEY, {
             entityKey: PRACTICE_GOLEM_KEY,
+            kind: 'golem',
             x,
             y,
             levelId: PRACTICE_GOLEM_STAGE,
@@ -849,6 +1003,82 @@ export class GameRoom {
         if (DEBUG_WORLD_SYNC) {
             console.log('[WorldSync][Server] ensurePracticeGolem created', { x, y, levelId: PRACTICE_GOLEM_STAGE });
         }
+    }
+
+    _ensurePracticeBandit() {
+        if (this.worldEntities.has(PRACTICE_BANDIT_KEY)) return;
+        const x = PRACTICE_BANDIT_TILE_X * TILE_SIZE + TILE_SIZE / 2;
+        const y = PRACTICE_BANDIT_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
+        this.worldEntities.set(PRACTICE_BANDIT_KEY, {
+            entityKey: PRACTICE_BANDIT_KEY,
+            kind: 'bandit',
+            x,
+            y,
+            levelId: PRACTICE_BANDIT_STAGE,
+            controllerSessionId: null,
+            possessionEndAtMs: null,
+            intent: { up: false, down: false, left: false, right: false, sprint: false },
+            motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+            stats: { hp: BANDIT_HP_MAX, hpMax: BANDIT_HP_MAX },
+            home: { x, y, levelId: PRACTICE_BANDIT_STAGE },
+            ai: {
+                state: 'idle',
+                targetSessionId: null,
+                attackCooldownMs: 0,
+            },
+        });
+    }
+
+    _findNearestPlayerInRange(entity, range) {
+        const rangeSq = range * range;
+        let best = null;
+        for (const [sessionId, player] of this.players.entries()) {
+            if ((player.transform?.levelId ?? null) !== (entity.levelId ?? null)) continue;
+            const dx = player.transform.x - entity.x;
+            const dy = player.transform.y - entity.y;
+            const distSq = dx * dx + dy * dy;
+            if (distSq > rangeSq) continue;
+            if (!best || distSq < best.distSq) {
+                best = { sessionId, distSq };
+            }
+        }
+        return best;
+    }
+
+    _applyBanditMeleeHit(attackerEntityKey, victimSessionId, nowMs) {
+        const victim = this.players.get(victimSessionId);
+        if (!victim) return;
+        const newHp = Math.max(0, victim.stats.hp - BANDIT_ATTACK_DAMAGE);
+        const died = newHp === 0;
+        this.players.set(victimSessionId, {
+            ...victim,
+            stats: { ...victim.stats, hp: died ? PLAYER_HEALTH_MAX : newHp },
+        });
+        this.#broadcastAll({
+            type: MSG.PLAYER_DAMAGED,
+            sessionId: victimSessionId,
+            attackerId: attackerEntityKey,
+            damage: BANDIT_ATTACK_DAMAGE,
+            hp: died ? PLAYER_HEALTH_MAX : newHp,
+            died,
+            timestamp: nowMs,
+        });
+    }
+
+    _applyDamageToWorldEntity(entityKey, damage) {
+        const entity = this.worldEntities.get(entityKey);
+        if (!entity) return;
+        const hpMax = Number.isFinite(entity.stats?.hpMax) ? entity.stats.hpMax : BANDIT_HP_MAX;
+        const hp = Number.isFinite(entity.stats?.hp) ? entity.stats.hp : hpMax;
+        const nextHp = Math.max(0, hp - damage);
+        if (nextHp <= 0) {
+            this.worldEntities.delete(entityKey);
+            return;
+        }
+        this.worldEntities.set(entityKey, {
+            ...entity,
+            stats: { hp: nextHp, hpMax },
+        });
     }
 
     /**
@@ -883,6 +1113,21 @@ export class GameRoom {
             this.grids.set(levelId, grid);
         }
         return this.grids.get(levelId);
+    }
+
+    _serializeWorldEntity(entry, nowMs = Date.now()) {
+        if (!entry) return null;
+        return {
+            entityKey: entry.entityKey,
+            kind: entry.kind ?? null,
+            x: entry.x,
+            y: entry.y,
+            levelId: entry.levelId ?? null,
+            controllerSessionId: entry.controllerSessionId ?? null,
+            possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
+                ? Math.max(0, entry.possessionEndAtMs - nowMs)
+                : null,
+        };
     }
 
     /** Broadcast to all sessions except one optional exclusion. */

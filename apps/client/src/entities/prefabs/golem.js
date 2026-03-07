@@ -16,6 +16,7 @@ import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.
  */
 export function createGolem(scene, config = {}) {
     const {
+        id = 'golem',
         x = 0,
         y = 0,
         radius = 20,
@@ -26,7 +27,7 @@ export function createGolem(scene, config = {}) {
         ownerId = null
     } = config;
 
-    const golem = scene.entityFactory.createEntity('golem');
+    const golem = scene.entityFactory.createEntity(id);
     golem.type = 'golem';
 
     golem.addComponent(new TransformComponent(x, y));
