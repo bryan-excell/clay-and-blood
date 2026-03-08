@@ -28,6 +28,7 @@ const REMOTE_INTERPOLATION_DELAY_MS = 100;
 const REMOTE_INTERPOLATION_DELAY_TICKS = 2; // 2 * 50 ms = 100 ms
 const REMOTE_MAX_EXTRAPOLATION_TICKS = 2;   // cap extrapolation to 100 ms
 const REMOTE_SNAPSHOT_BUFFER_SIZE = 40;
+const SERVER_TICK_MS = 50;
 const LOCAL_RECONCILE_DEADZONE_PX = 1.5;
 const LOCAL_RECONCILE_NUDGE_RATIO = 0.35;
 const LOCAL_RECONCILE_MAX_NUDGE_PX = 6;
@@ -56,6 +57,7 @@ export class GameScene extends Phaser.Scene {
         this.levelManager.initialize();
         this.exitManager = new ExitManager(this);
         this._worldEntityStateCache = new Map(); // entityKey -> { x, y, levelId, controllerSessionId, possessionMsRemaining }
+        this._replicationTracks = new Map(); // trackKey -> { stageId, snapshots: [{timeMs,tick,x,y,stageId}] }
 
         // Track time for fixed updates
         this.lastUpdateTime = Date.now();
@@ -107,6 +109,7 @@ export class GameScene extends Phaser.Scene {
         // --- Networking state ---
         // Latest server tick seen by this client, used for tick-based interpolation.
         this._latestServerTick = 0;
+        this._latestServerTickAtMs = 0;
         // Local dash state for deterministic client prediction.
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
         this._lastWorldEntitySyncAt = 0;
@@ -369,7 +372,12 @@ export class GameScene extends Phaser.Scene {
         // Authoritative state snapshot from the server physics tick
         eventBus.on('network:stateSnapshot', ({ players, tick, worldEntities, entityEquips }) => {
             if (Number.isFinite(tick)) {
-                this._latestServerTick = Math.max(this._latestServerTick, tick);
+                if (tick > this._latestServerTick) {
+                    this._latestServerTick = tick;
+                    this._latestServerTickAtMs = performance.now();
+                } else if (tick === this._latestServerTick && this._latestServerTickAtMs <= 0) {
+                    this._latestServerTickAtMs = performance.now();
+                }
             }
             for (const p of players) {
                 if (p.sessionId === networkManager.sessionId) {
@@ -391,7 +399,9 @@ export class GameScene extends Phaser.Scene {
                     );
                 }
             }
-            this._applyNetworkWorldState(worldEntities);
+            // Tick snapshots are continuous replication updates, not a hard resync.
+            // Preserve interpolation buffers across ticks.
+            this._applyNetworkWorldState(worldEntities, 'all', null, tick, 'stream');
             this._applyNetworkEntityEquips(entityEquips);
         });
 
@@ -408,12 +418,13 @@ export class GameScene extends Phaser.Scene {
                     currentLevel: gameState.currentLevelId,
                 });
             }
-            this._applyNetworkWorldState(entities, scope, levelId);
+            // WORLD_STATE is a scoped authoritative refresh and can invalidate stale buffers.
+            this._applyNetworkWorldState(entities, scope, levelId, null, 'resync');
         });
 
         eventBus.on('network:entityState', ({ sessionId, entityKey, kind, x, y, levelId, controllerSessionId, possessionMsRemaining }) => {
             if (sessionId === networkManager.sessionId) return;
-            this._applyNetworkWorldEntityState({ entityKey, kind, x, y, levelId, controllerSessionId, possessionMsRemaining });
+            this._applyNetworkWorldEntityState({ entityKey, kind, x, y, levelId, controllerSessionId, possessionMsRemaining, tick: null });
         });
 
         eventBus.on('network:forceControl', ({ controlledEntityKey, possessionMsRemaining, levelId, x, y }) => {
@@ -465,8 +476,24 @@ export class GameScene extends Phaser.Scene {
             if (!control) return;
 
             const isMine = controllerSessionId === (networkManager.sessionId ?? null);
+            const wasLocal = control.controlMode === 'local';
             control.setControlMode(isMine ? 'local' : 'remote', 'network:entityControl');
             control.setController(controllerSessionId ?? null, 'network:entityControl');
+            if (!wasLocal && isMine) {
+                // Possession started: local prediction now owns this visual.
+                this._clearReplicationTrack(entityKey);
+            } else if (wasLocal && !isMine) {
+                // Possession ended: reset buffer so stale local samples cannot leak.
+                const transform = entity.getComponent('transform');
+                const seedX = transform?.position?.x;
+                const seedY = transform?.position?.y;
+                const seedLevelId = transform?.levelId ?? gameState.currentLevelId ?? null;
+                if (Number.isFinite(seedX) && Number.isFinite(seedY)) {
+                    this._seedReplicationTrack(entityKey, seedX, seedY, seedLevelId, this._latestServerTick);
+                } else {
+                    this._clearReplicationTrack(entityKey);
+                }
+            }
             if (controllerSessionId) {
                 loadout?.addTemporarySpell('release_possession');
             } else {
@@ -577,6 +604,7 @@ export class GameScene extends Phaser.Scene {
             if (rp) {
                 rp.circle.destroy();
                 this.remotePlayers.delete(sessionId);
+                this._clearReplicationTrack(this._remotePlayerTrackKey(sessionId));
                 console.log(`[Network] Remote player left: ${sessionId}`);
             }
         });
@@ -588,6 +616,7 @@ export class GameScene extends Phaser.Scene {
                 });
             }
             this._worldEntityStateCache.clear();
+            this._replicationTracks.clear();
         });
 
         eventBus.on('network:connected', () => {
@@ -597,6 +626,7 @@ export class GameScene extends Phaser.Scene {
                 });
             }
             this._worldEntityStateCache.clear();
+            this._replicationTracks.clear();
         });
     }
 
@@ -668,7 +698,7 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _applyNetworkWorldState(entities, scope = 'all', levelId = null) {
+    _applyNetworkWorldState(entities, scope = 'all', levelId = null, tick = null, updateMode = 'resync') {
         const incomingKeys = new Set(
             Array.isArray(entities)
                 ? entities
@@ -685,6 +715,7 @@ export class GameScene extends Phaser.Scene {
                 const entityKey = this._getNetworkEntityKey(entity);
                 if (!entityKey || incomingKeys.has(entityKey)) continue;
                 if (entity.id === this.getLocallyControlledEntity()?.id) continue;
+                this._clearReplicationTrack(entityKey);
                 entity.destroy();
             }
         } else if (scope === 'level' && levelId) {
@@ -697,6 +728,7 @@ export class GameScene extends Phaser.Scene {
                 const entityKey = this._getNetworkEntityKey(entity);
                 if (!entityKey || incomingKeys.has(entityKey)) continue;
                 if (entity.id === this.getLocallyControlledEntity()?.id) continue;
+                this._clearReplicationTrack(entityKey);
                 entity.destroy();
             }
         }
@@ -711,17 +743,23 @@ export class GameScene extends Phaser.Scene {
         }
         if (scope === 'all') {
             this._worldEntityStateCache.clear();
+            if (updateMode === 'resync') {
+                this._clearReplicationTracksByPrefix('world:');
+            }
         } else if (scope === 'level' && levelId) {
             for (const [key, cached] of this._worldEntityStateCache.entries()) {
                 if ((cached?.levelId ?? null) === levelId) {
                     this._worldEntityStateCache.delete(key);
                 }
             }
+            if (updateMode === 'resync') {
+                this._clearReplicationTracksByPrefix('world:', levelId);
+            }
         }
 
         if (!Array.isArray(entities) || entities.length === 0) return;
         for (const entityState of entities) {
-            this._applyNetworkWorldEntityState(entityState);
+            this._applyNetworkWorldEntityState({ ...entityState, tick });
         }
         if (DEBUG_WORLD_SYNC) {
             console.log('[WorldSync] applyWorldState:end', {
@@ -733,7 +771,7 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, kind, controllerSessionId, possessionMsRemaining }) {
+    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, kind, controllerSessionId, possessionMsRemaining, tick = null }) {
         if (!entityKey || !entityKey.startsWith('world:')) return;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
@@ -819,18 +857,13 @@ export class GameScene extends Phaser.Scene {
             this._possessionDurationMs = Math.max(this._possessionDurationMs, possessionMsRemaining);
             this._possessionEndAtMs = performance.now() + possessionMsRemaining;
         }
-        if (isLocallyControlled) return;
-
-        const transform = entity.getComponent('transform');
-        if (transform) {
-            transform.position.x = x;
-            transform.position.y = y;
-            transform.levelId = levelId ?? null;
+        if (isLocallyControlled) {
+            // Local prediction now drives this entity; drop remote interpolation state.
+            this._clearReplicationTrack(entityKey);
+            return;
         }
 
-        if (circle?.gameObject) {
-            circle.gameObject.setPosition(x, y);
-        }
+        this._pushReplicationTrack(entityKey, x, y, levelId ?? null, tick);
         if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
             console.log('[WorldSync] applyWorldEntityState:applied golem', {
                 x,
@@ -910,8 +943,8 @@ export class GameScene extends Phaser.Scene {
         this.remotePlayers.set(sessionId, {
             circle,
             stageId,
-            snapshots: [{ timeMs: performance.now(), tick: null, x, y, stageId }],
         });
+        this._seedReplicationTrack(this._remotePlayerTrackKey(sessionId), x, y, stageId, null);
         console.log(`[Network] Remote player joined: ${sessionId} in stage ${stageId}`);
     }
 
@@ -924,27 +957,13 @@ export class GameScene extends Phaser.Scene {
         }
 
         const nowMs = performance.now();
-        const hasTick = Number.isFinite(tick);
         rp.stageId = stageId;
         rp.circle.setVisible(stageId === gameState.currentLevelId);
-        if (hasTick && rp.snapshots.length > 0 && !Number.isFinite(rp.snapshots[0].tick)) {
-            rp.snapshots = [];
-        }
-        rp.snapshots.push({
-            timeMs: nowMs,
-            tick: hasTick ? tick : null,
-            x,
-            y,
-            stageId,
-        });
-
-        if (rp.snapshots.length > REMOTE_SNAPSHOT_BUFFER_SIZE) {
-            rp.snapshots.splice(0, rp.snapshots.length - REMOTE_SNAPSHOT_BUFFER_SIZE);
-        }
+        this._pushReplicationTrack(this._remotePlayerTrackKey(sessionId), x, y, stageId, tick, nowMs);
     }
 
-    _sampleRemoteSnapshot(rp, renderTick, renderTimeMs) {
-        const samples = rp.snapshots;
+    _sampleSnapshotBuffer(buffer, renderTick, renderTimeMs) {
+        const samples = buffer?.snapshots;
         if (!samples || samples.length === 0) return null;
         if (samples.length === 1) return samples[0];
 
@@ -1003,6 +1022,84 @@ export class GameScene extends Phaser.Scene {
         const span = Math.max(1, b.timeMs - a.timeMs);
         const t = Phaser.Math.Clamp((renderTimeMs - a.timeMs) / span, 0, 1);
         return { x: Phaser.Math.Linear(a.x, b.x, t), y: Phaser.Math.Linear(a.y, b.y, t), stageId: b.stageId };
+    }
+
+    _remotePlayerTrackKey(sessionId) {
+        return `player:${sessionId}`;
+    }
+
+    _seedReplicationTrack(trackKey, x, y, levelId, tick = null, nowMs = performance.now()) {
+        if (!trackKey || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        const stageId = levelId ?? null;
+        this._replicationTracks.set(trackKey, {
+            stageId,
+            snapshots: [{
+                timeMs: nowMs,
+                tick: Number.isFinite(tick) ? tick : null,
+                x,
+                y,
+                stageId,
+            }],
+        });
+    }
+
+    _pushReplicationTrack(trackKey, x, y, levelId, tick = null, nowMs = performance.now()) {
+        if (!trackKey || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        const stageId = levelId ?? null;
+        let buffer = this._replicationTracks.get(trackKey);
+        if (!buffer) {
+            this._seedReplicationTrack(trackKey, x, y, stageId, tick, nowMs);
+            return;
+        }
+
+        const hasTick = Number.isFinite(tick);
+        if (hasTick && buffer.snapshots.length > 0 && !Number.isFinite(buffer.snapshots[0].tick)) {
+            buffer.snapshots = [];
+        }
+
+        const last = buffer.snapshots[buffer.snapshots.length - 1] ?? null;
+        if (last &&
+            last.x === x &&
+            last.y === y &&
+            last.stageId === stageId &&
+            ((hasTick && last.tick === tick) || (!hasTick && !Number.isFinite(last.tick)))
+        ) {
+            buffer.stageId = stageId;
+            return;
+        }
+
+        buffer.stageId = stageId;
+        buffer.snapshots.push({
+            timeMs: nowMs,
+            tick: hasTick ? tick : null,
+            x,
+            y,
+            stageId,
+        });
+
+        if (buffer.snapshots.length > REMOTE_SNAPSHOT_BUFFER_SIZE) {
+            buffer.snapshots.splice(0, buffer.snapshots.length - REMOTE_SNAPSHOT_BUFFER_SIZE);
+        }
+    }
+
+    _sampleReplicationTrack(trackKey, renderTick, renderTimeMs) {
+        const buffer = this._replicationTracks.get(trackKey);
+        if (!buffer) return null;
+        return this._sampleSnapshotBuffer(buffer, renderTick, renderTimeMs);
+    }
+
+    _clearReplicationTrack(trackKey) {
+        if (!trackKey) return;
+        this._replicationTracks.delete(trackKey);
+    }
+
+    _clearReplicationTracksByPrefix(prefix, stageId = null) {
+        if (!prefix) return;
+        for (const [key, buffer] of this._replicationTracks.entries()) {
+            if (!key.startsWith(prefix)) continue;
+            if (stageId != null && (buffer?.stageId ?? null) !== stageId) continue;
+            this._replicationTracks.delete(key);
+        }
     }
 
     /**
@@ -1238,15 +1335,48 @@ export class GameScene extends Phaser.Scene {
         cam.setZoom(Phaser.Math.Linear(cam.zoom, this.targetZoom, zoomT));
 
         const renderTick = this._latestServerTick > 0
-            ? this._latestServerTick - REMOTE_INTERPOLATION_DELAY_TICKS
+            ? (this._latestServerTick + ((performance.now() - this._latestServerTickAtMs) / SERVER_TICK_MS)) - REMOTE_INTERPOLATION_DELAY_TICKS
             : null;
         const renderTimeMs = performance.now() - REMOTE_INTERPOLATION_DELAY_MS;
-        for (const rp of this.remotePlayers.values()) {
+        for (const [sessionId, rp] of this.remotePlayers.entries()) {
             if (!rp.circle.visible) continue;
-            const sample = this._sampleRemoteSnapshot(rp, renderTick, renderTimeMs);
+            const sample = this._sampleReplicationTrack(this._remotePlayerTrackKey(sessionId), renderTick, renderTimeMs);
             if (sample) {
                 rp.circle.x = sample.x;
                 rp.circle.y = sample.y;
+            }
+        }
+
+        for (const [entityKey] of this._replicationTracks.entries()) {
+            if (!entityKey.startsWith('world:')) continue;
+            const entityId = entityKey.slice('world:'.length);
+            const entity = this.entityManager.getEntityById(entityId);
+            if (!entity) {
+                this._clearReplicationTrack(entityKey);
+                continue;
+            }
+
+            const isLocallyControlled = entity.id === this.getLocallyControlledEntity()?.id;
+            if (isLocallyControlled) {
+                this._clearReplicationTrack(entityKey);
+                continue;
+            }
+
+            const circle = entity.getComponent('circle');
+            const go = circle?.gameObject;
+            if (!go || !go.visible) continue;
+
+            const sample = this._sampleReplicationTrack(entityKey, renderTick, renderTimeMs);
+            if (!sample) continue;
+
+            go.x = sample.x;
+            go.y = sample.y;
+
+            const transform = entity.getComponent('transform');
+            if (transform) {
+                transform.position.x = sample.x;
+                transform.position.y = sample.y;
+                transform.levelId = sample.stageId ?? transform.levelId ?? null;
             }
         }
 
