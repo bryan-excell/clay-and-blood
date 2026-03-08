@@ -17,6 +17,7 @@ import {
     ARROW_MIN_DAMAGE,
     ARROW_MAX_DAMAGE,
     ARROW_MAX_RANGE,
+    ARROW_BASE_PENETRATION,
 } from '@clay-and-blood/shared';
 import {
     phaseInputIntent,
@@ -47,6 +48,8 @@ const BANDIT_HIT_RADIUS = 18;
 const BANDIT_HP_MAX = 75;
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
+const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
+const PROJECTILE_MIN_SPEED = 0.001;
 
 function sanitizeEquipId(value) {
     if (typeof value !== 'string') return null;
@@ -114,6 +117,77 @@ function rayHitDistance(ox, oy, vx, vy, cx, cy, r, maxRange) {
 }
 
 /**
+ * Cast a segment through the tile grid and return distance to first solid tile.
+ * @returns {number|null}
+ */
+function rayHitSolidTileDistance(grid, x1, y1, x2, y2) {
+    if (!Array.isArray(grid) || grid.length === 0 || !Array.isArray(grid[0])) return null;
+    const rows = grid.length;
+    const cols = grid[0].length;
+
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const rayLen = Math.sqrt(dx * dx + dy * dy);
+    if (rayLen < PROJECTILE_MIN_SPEED) return null;
+
+    const rdx = dx / rayLen;
+    const rdy = dy / rayLen;
+
+    let mapX = Math.floor(x1 / TILE_SIZE);
+    let mapY = Math.floor(y1 / TILE_SIZE);
+    const stepX = rdx >= 0 ? 1 : -1;
+    const stepY = rdy >= 0 ? 1 : -1;
+
+    const deltaDX = rdx !== 0 ? Math.abs(TILE_SIZE / rdx) : Infinity;
+    const deltaDY = rdy !== 0 ? Math.abs(TILE_SIZE / rdy) : Infinity;
+
+    let sideDistX;
+    if (rdx > 0) {
+        sideDistX = ((mapX + 1) * TILE_SIZE - x1) / rdx;
+    } else if (rdx < 0) {
+        sideDistX = (x1 - mapX * TILE_SIZE) / (-rdx);
+    } else {
+        sideDistX = Infinity;
+    }
+
+    let sideDistY;
+    if (rdy > 0) {
+        sideDistY = ((mapY + 1) * TILE_SIZE - y1) / rdy;
+    } else if (rdy < 0) {
+        sideDistY = (y1 - mapY * TILE_SIZE) / (-rdy);
+    } else {
+        sideDistY = Infinity;
+    }
+
+    let side = -1;
+    let isFirstTile = true;
+
+    while (true) {
+        if (!(mapX >= 0) || mapX >= cols || !(mapY >= 0) || mapY >= rows) return null;
+
+        if (!isFirstTile && SOLID_PROJECTILE_TILES.has(grid[mapY][mapX])) {
+            const entryT = side === 0 ? sideDistX - deltaDX : sideDistY - deltaDY;
+            if (entryT > rayLen) return null;
+            return entryT;
+        }
+
+        isFirstTile = false;
+
+        if (sideDistX < sideDistY) {
+            if (sideDistX > rayLen) return null;
+            side = 0;
+            mapX += stepX;
+            sideDistX += deltaDX;
+        } else {
+            if (sideDistY > rayLen) return null;
+            side = 1;
+            mapY += stepY;
+            sideDistY += deltaDY;
+        }
+    }
+}
+
+/**
  * Resolve a player circle against the wall grid.
  * Pushes the player out of any wall cell it overlaps.
  */
@@ -163,6 +237,7 @@ export class GameRoom {
         this.players = new Map();
         this.entityEquips = new Map(); // entityKey -> { entityKey, levelId, equipped, ownerSessionId }
         this.worldEntities = new Map(); // entityKey -> { entityKey, x, y, levelId, controllerSessionId }
+        this.projectiles = new Map(); // projectileId -> { id, shooterSessionId, projectileType, x, y, velocityX, velocityY, levelId, damage, remainingRange }
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
         this.tickCount = 0;
@@ -468,97 +543,82 @@ export class GameRoom {
 
             case MSG.BULLET_FIRED: {
                 const { x, y, velocityX, velocityY, levelId,
-                        projectileType, chargeRatio, lastKnownTick } = data;
+                        projectileType, chargeRatio, penetration } = data;
 
-                // ── Damage amount ────────────────────────────────────────────
-                let damage;
-                if (projectileType === 'arrow') {
-                    const ratio = Math.max(0, Math.min(1, chargeRatio ?? 0));
-                    damage = Math.round(ARROW_MIN_DAMAGE + (ARROW_MAX_DAMAGE - ARROW_MIN_DAMAGE) * ratio);
-                } else {
-                    damage = BULLET_DAMAGE;
-                }
-                const maxRange = projectileType === 'arrow' ? ARROW_MAX_RANGE : BULLET_MAX_RANGE;
+                const normalizedType = projectileType === 'arrow' ? 'arrow' : 'bullet';
+                const ratio = Math.max(0, Math.min(1, chargeRatio ?? 0));
+                const damage = normalizedType === 'arrow'
+                    ? Math.round(ARROW_MIN_DAMAGE + (ARROW_MAX_DAMAGE - ARROW_MIN_DAMAGE) * ratio)
+                    : BULLET_DAMAGE;
+                const maxRange = normalizedType === 'arrow' ? ARROW_MAX_RANGE : BULLET_MAX_RANGE;
 
-                // ── Lag-compensated hit detection ────────────────────────────
-                // Find the snapshot the shooter saw when they fired.
-                const snapshot = this._findTickSnapshot(lastKnownTick);
-                const posMap = snapshot
-                    ? snapshot.positions
-                    : new Map(Array.from(this.players.entries()).map(([sid, p]) => [sid, ({
-                        x: p.transform.x,
-                        y: p.transform.y,
-                        levelId: p.transform.levelId,
-                    })]));
-
-                let hitSessionId = null;
-                let hitEntityKey = null;
-                let hitT = Infinity;
-
-                for (const [sid, pos] of posMap.entries()) {
-                    if (sid === sessionId) continue;      // don't self-hit
-                    if (pos.levelId !== levelId) continue; // different level
-
-                    const t = rayHitDistance(x, y, velocityX, velocityY, pos.x, pos.y, PLAYER_RADIUS, maxRange);
-                    if (t !== null && t < hitT) {
-                        hitT = t;
-                        hitSessionId = sid;
-                    }
-                }
-
-                // World-entity hit detection (hostile NPCs).
-                for (const [entityKey, entity] of this.worldEntities.entries()) {
-                    if (entity?.kind !== 'bandit') continue;
-                    if (entity.levelId !== levelId) continue;
-                    const t = rayHitDistance(
+                if (normalizedType === 'arrow') {
+                    const projectileId = this._spawnProjectile({
+                        shooterSessionId: sessionId,
+                        projectileType: normalizedType,
                         x,
                         y,
                         velocityX,
                         velocityY,
-                        entity.x,
-                        entity.y,
-                        BANDIT_HIT_RADIUS,
-                        maxRange
-                    );
-                    if (t !== null && t < hitT) {
-                        hitT = t;
-                        hitSessionId = null;
-                        hitEntityKey = entityKey;
-                    }
-                }
+                        levelId,
+                        damage,
+                        maxRange,
+                        penetration: Number.isFinite(penetration)
+                            ? Math.max(0, Math.floor(penetration))
+                            : ARROW_BASE_PENETRATION,
+                    });
+                    this.#broadcast({
+                        type:      MSG.BULLET_FIRED,
+                        sessionId,
+                        x, y, velocityX, velocityY, levelId,
+                        projectileId,
+                        projectileType: normalizedType,
+                        chargeRatio: ratio,
+                        penetration: Number.isFinite(penetration)
+                            ? Math.max(0, Math.floor(penetration))
+                            : ARROW_BASE_PENETRATION,
+                    }, ws);
+                } else {
+                    // Keep legacy bullet behavior hitscan against hostile world entities only.
+                    // Players are allies and are never valid projectile targets.
+                    let hitEntityKey = null;
+                    let hitT = Infinity;
 
-                if (hitSessionId) {
-                    const victim = this.players.get(hitSessionId);
-                    if (victim) {
-                        const newHp  = Math.max(0, victim.stats.hp - damage);
-                        const died   = newHp === 0;
-                        this.players.set(hitSessionId, {
-                            ...victim,
-                            stats: { ...victim.stats, hp: died ? PLAYER_HEALTH_MAX : newHp },
-                        });
-                        this.#broadcastAll({
-                            type:       MSG.PLAYER_DAMAGED,
-                            sessionId:  hitSessionId,
-                            attackerId: sessionId,
-                            damage,
-                            hp:         died ? PLAYER_HEALTH_MAX : newHp,
-                            died,
-                        });
+                    for (const [entityKey, entity] of this.worldEntities.entries()) {
+                        if (entity?.kind !== 'bandit') continue;
+                        if (entity.levelId !== levelId) continue;
+                        const t = rayHitDistance(
+                            x,
+                            y,
+                            velocityX,
+                            velocityY,
+                            entity.x,
+                            entity.y,
+                            BANDIT_HIT_RADIUS,
+                            maxRange
+                        );
+                        if (t !== null && t < hitT) {
+                            hitT = t;
+                            hitEntityKey = entityKey;
+                        }
                     }
-                }
-                if (hitEntityKey) {
-                    this._applyDamageToWorldEntity(hitEntityKey, damage);
-                }
 
-    // ── Relay bullet visually to all other clients ───────────────
-                this.#broadcast({
-                    type:      MSG.BULLET_FIRED,
-                    sessionId,
-                    x, y, velocityX, velocityY, levelId,
-                }, ws);
+                    if (hitEntityKey) {
+                        this._applyDamageToWorldEntity(hitEntityKey, damage);
+                    }
+                    // Relay bullet visuals to other clients.
+                    this.#broadcast({
+                        type:      MSG.BULLET_FIRED,
+                        sessionId,
+                        x, y, velocityX, velocityY, levelId,
+                        projectileId: null,
+                        projectileType: normalizedType,
+                        chargeRatio: ratio,
+                        penetration: 0,
+                    }, ws);
+                }
                 break;
             }
-
             case MSG.LEVEL_CHANGE: {
                 const player = this.players.get(sessionId);
                 if (!player) break;
@@ -729,6 +789,7 @@ export class GameRoom {
         this._phasePhysicsTransform(locomotionPhase);
         this._phaseBanditAi();
         this._phaseBanditMovement();
+        this._phaseProjectiles();
 
         const snapshotPlayers = this._phaseBuildSnapshotPlayers();
         this._phaseRecordLagCompHistory();
@@ -890,6 +951,164 @@ export class GameRoom {
             };
             this.worldEntities.set(entityKey, entity);
         }
+    }
+
+    _spawnProjectile({
+        shooterSessionId,
+        projectileType,
+        x,
+        y,
+        velocityX,
+        velocityY,
+        levelId,
+        damage,
+        maxRange,
+        penetration = ARROW_BASE_PENETRATION,
+    }) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        if (!Number.isFinite(velocityX) || !Number.isFinite(velocityY)) return null;
+        if (!Number.isFinite(maxRange) || maxRange <= 0) return null;
+        if (!Number.isFinite(damage) || damage <= 0) return null;
+
+        const projectileId = crypto.randomUUID();
+        this.projectiles.set(projectileId, {
+            id: projectileId,
+            shooterSessionId,
+            projectileType: projectileType === 'arrow' ? 'arrow' : 'bullet',
+            x,
+            y,
+            velocityX,
+            velocityY,
+            levelId: typeof levelId === 'string' ? levelId : null,
+            damage,
+            remainingRange: maxRange,
+            penetrationRemaining: Math.max(0, Math.floor(penetration)),
+            hitEntities: new Set(),
+        });
+        return projectileId;
+    }
+
+    _phaseProjectiles() {
+        if (this.projectiles.size === 0) return;
+
+        const dtSeconds = TICK_MS / 1000;
+        const epsilon = 0.01;
+
+        for (const [projectileId, projectile] of this.projectiles.entries()) {
+            const speed = Math.sqrt(
+                projectile.velocityX * projectile.velocityX +
+                projectile.velocityY * projectile.velocityY
+            );
+            if (speed < PROJECTILE_MIN_SPEED) {
+                this._despawnProjectile(projectileId, 'stopped');
+                continue;
+            }
+
+            const dirX = projectile.velocityX / speed;
+            const dirY = projectile.velocityY / speed;
+            let stepRemaining = Math.min(projectile.remainingRange, speed * dtSeconds);
+
+            let currX = projectile.x;
+            let currY = projectile.y;
+            let despawned = false;
+
+            while (!despawned && stepRemaining > epsilon) {
+                const endX = currX + dirX * stepRemaining;
+                const endY = currY + dirY * stepRemaining;
+
+                let nearestHitDistance = Infinity;
+                let hitType = null;
+                let hitEntityKey = null;
+
+                const grid = projectile.levelId ? this._getGrid(projectile.levelId) : null;
+                const wallHitDistance = rayHitSolidTileDistance(grid, currX, currY, endX, endY);
+                if (wallHitDistance !== null && wallHitDistance < nearestHitDistance) {
+                    nearestHitDistance = wallHitDistance;
+                    hitType = 'wall';
+                }
+
+                for (const [entityKey, entity] of this.worldEntities.entries()) {
+                    if (entity?.kind !== 'bandit') continue;
+                    if (projectile.hitEntities.has(entityKey)) continue;
+                    if ((entity.levelId ?? null) !== projectile.levelId) continue;
+                    const t = rayHitDistance(
+                        currX,
+                        currY,
+                        projectile.velocityX,
+                        projectile.velocityY,
+                        entity.x,
+                        entity.y,
+                        BANDIT_HIT_RADIUS,
+                        stepRemaining
+                    );
+                    if (t !== null && t < nearestHitDistance) {
+                        nearestHitDistance = t;
+                        hitType = 'entity';
+                        hitEntityKey = entityKey;
+                    }
+                }
+
+                if (!hitType) {
+                    currX = endX;
+                    currY = endY;
+                    projectile.remainingRange -= stepRemaining;
+                    stepRemaining = 0;
+                    break;
+                }
+
+                const traveled = Math.max(0, nearestHitDistance);
+                currX += dirX * traveled;
+                currY += dirY * traveled;
+                projectile.remainingRange -= traveled;
+                stepRemaining -= traveled;
+
+                if (hitType === 'wall') {
+                    this._despawnProjectile(projectileId, 'wall');
+                    despawned = true;
+                    break;
+                }
+
+                if (hitType === 'entity' && hitEntityKey) {
+                    projectile.hitEntities.add(hitEntityKey);
+                    this._applyDamageToWorldEntity(hitEntityKey, projectile.damage);
+                }
+
+                if (projectile.penetrationRemaining > 0) {
+                    projectile.penetrationRemaining -= 1;
+                    const nudge = Math.min(epsilon, stepRemaining);
+                    currX += dirX * nudge;
+                    currY += dirY * nudge;
+                    projectile.remainingRange -= nudge;
+                    stepRemaining -= nudge;
+                    continue;
+                }
+
+                this._despawnProjectile(projectileId, 'hit');
+                despawned = true;
+                break;
+            }
+
+            if (despawned) continue;
+            if (!this.projectiles.has(projectileId)) continue;
+
+            projectile.x = currX;
+            projectile.y = currY;
+            if (projectile.remainingRange <= 0) {
+                this._despawnProjectile(projectileId, 'range');
+            } else {
+                this.projectiles.set(projectileId, projectile);
+            }
+        }
+    }
+
+    _despawnProjectile(projectileId, reason = 'unknown') {
+        const existed = this.projectiles.delete(projectileId);
+        if (!existed) return;
+        this.#broadcastAll({
+            type: MSG.PROJECTILE_DESPAWN,
+            projectileId,
+            reason,
+        });
     }
 
     /**
@@ -1058,23 +1277,33 @@ export class GameRoom {
     }
 
     _applyBanditMeleeHit(attackerEntityKey, victimSessionId, nowMs) {
+        this._applyDamageToPlayer(victimSessionId, BANDIT_ATTACK_DAMAGE, attackerEntityKey, nowMs);
+    }
+
+    _applyDamageToPlayer(victimSessionId, damage, attackerId, timestamp = null) {
         const victim = this.players.get(victimSessionId);
         if (!victim) return;
-        const newHp = Math.max(0, victim.stats.hp - BANDIT_ATTACK_DAMAGE);
+
+        const newHp = Math.max(0, victim.stats.hp - damage);
         const died = newHp === 0;
+        const nextHp = died ? PLAYER_HEALTH_MAX : newHp;
         this.players.set(victimSessionId, {
             ...victim,
-            stats: { ...victim.stats, hp: died ? PLAYER_HEALTH_MAX : newHp },
+            stats: { ...victim.stats, hp: nextHp },
         });
-        this.#broadcastAll({
+
+        const payload = {
             type: MSG.PLAYER_DAMAGED,
             sessionId: victimSessionId,
-            attackerId: attackerEntityKey,
-            damage: BANDIT_ATTACK_DAMAGE,
-            hp: died ? PLAYER_HEALTH_MAX : newHp,
+            attackerId,
+            damage,
+            hp: nextHp,
             died,
-            timestamp: nowMs,
-        });
+        };
+        if (Number.isFinite(timestamp)) {
+            payload.timestamp = timestamp;
+        }
+        this.#broadcastAll(payload);
     }
 
     _applyDamageToWorldEntity(entityKey, damage) {

@@ -18,6 +18,7 @@ export const ARROW_MAX_SPEED = 950;   // px/s at full charge (faster than bullet
 export const BOW_MIN_CHARGE_MS = 200;  // ms minimum hold before release will fire
 export const BOW_FULL_CHARGE_MS = 500; // ms to reach full charge
 export const ARROW_MAX_RANGE = 1000;
+export const ARROW_PENETRATION = 0;
 
 // Melee timing defaults
 export const SWORD_QUEUE_GRACE_MS = 120;
@@ -27,6 +28,7 @@ export const SWORD_SWING_2_WINDUP_MS = 200;
 export const SWORD_SWING_2_ACTIVE_MS = 100;
 export const SWORD_SWING_3_WINDUP_MS = 300;
 export const SWORD_SWING_3_ACTIVE_MS = 500;
+export const SWORD_FINISH_LOCKOUT_MS = 140; // short recovery after swing 3 before combo can restart
 
 export const FISTS_SWING_WINDUP_MS = 100;
 export const FISTS_SWING_ACTIVE_MS = 100;

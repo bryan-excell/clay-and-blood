@@ -341,6 +341,7 @@ export const BULLET_MAX_RANGE = 800;
 export const ARROW_MIN_DAMAGE = 5;
 export const ARROW_MAX_DAMAGE = 20;
 export const ARROW_MAX_RANGE = 1000;
+export const ARROW_BASE_PENETRATION = 0;
 
 // WebSocket message types for client <-> server communication
 export const MSG = {
@@ -358,6 +359,7 @@ export const MSG = {
     STATE_SNAPSHOT: 'state_snapshot',
     LEVEL_CHANGE:   'level_change',
     BULLET_FIRED:    'bullet_fired',
+    PROJECTILE_DESPAWN: 'projectile_despawn',
     PLAYER_DAMAGED:  'player_damaged',
 };
 

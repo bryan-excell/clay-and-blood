@@ -58,6 +58,7 @@ export class GameScene extends Phaser.Scene {
         this.exitManager = new ExitManager(this);
         this._worldEntityStateCache = new Map(); // entityKey -> { x, y, levelId, controllerSessionId, possessionMsRemaining }
         this._replicationTracks = new Map(); // trackKey -> { stageId, snapshots: [{timeMs,tick,x,y,stageId}] }
+        this._networkProjectiles = new Map(); // projectileId -> entityId
 
         // Track time for fixed updates
         this.lastUpdateTime = Date.now();
@@ -539,34 +540,55 @@ export class GameScene extends Phaser.Scene {
                 };
             }
         });
-        // A remote player fired a bullet – spawn it locally if in the same level
-        eventBus.on('network:bulletFired', ({ x, y, velocityX, velocityY, levelId }) => {
+        // A remote player fired a projectile - spawn it locally if in the same level.
+        eventBus.on('network:bulletFired', ({
+            x,
+            y,
+            velocityX,
+            velocityY,
+            levelId,
+            projectileType,
+            projectileId,
+            penetration,
+        }) => {
             if (levelId === gameState.currentLevelId) {
-                const bulletEntity = this.entityFactory.createFromPrefab('bullet', { x, y, velocityX, velocityY });
-                const bulletGO = bulletEntity.getComponent('circle')?.gameObject;
-                this.lightingRenderer?.maskGameObject(bulletGO);
+                const prefabName = projectileType === 'arrow' ? 'arrow' : 'bullet';
+                const projectileEntity = this.entityFactory.createFromPrefab(prefabName, {
+                    x,
+                    y,
+                    velocityX,
+                    velocityY,
+                    penetration,
+                });
+                if (!projectileEntity) return;
+                if (projectileId) {
+                    this._networkProjectiles.set(projectileId, projectileEntity.id);
+                }
+                const projectileGO =
+                    projectileEntity.getComponent('rectangle')?.gameObject ??
+                    projectileEntity.getComponent('circle')?.gameObject;
+                this.lightingRenderer?.maskGameObject(projectileGO);
             }
         });
 
-        // Server confirmed a hit via lag-compensated detection
-        eventBus.on('network:playerDamaged', ({ sessionId, damage, hp, died }) => {
-            // Find world position of the damaged player
-            let worldX, worldY;
+        eventBus.on('network:projectileDespawn', ({ projectileId }) => {
+            if (!projectileId) return;
+            const entityId = this._networkProjectiles.get(projectileId);
+            if (!entityId) return;
+            const projectile = this.entityManager.getEntityById(entityId);
+            projectile?.destroy?.();
+            this._networkProjectiles.delete(projectileId);
+        });
+
+        // Server confirmed an authoritative health change.
+        eventBus.on('network:playerDamaged', ({ sessionId, hp }) => {
             if (sessionId === networkManager.sessionId) {
-                // Local player
-                const circle = this.player?.getComponent('circle');
-                worldX = circle?.gameObject?.x ?? 0;
-                worldY = circle?.gameObject?.y ?? 0;
                 const localStats = this.player?.getComponent('stats');
                 if (localStats) localStats.setHp(hp);
-            } else {
-                const rp = this.remotePlayers.get(sessionId);
-                worldX = rp?.circle?.x ?? 0;
-                worldY = rp?.circle?.y ?? 0;
             }
 
             this.uiProjectionSystem?.publishImmediate();
-            this._spawnDamageFloat(worldX, worldY, damage, died);
+            // Damage float popups are intentionally disabled for now.
         });
 
         // Inventory drawer equip actions — UIScene emits these, we route them to the
@@ -617,6 +639,10 @@ export class GameScene extends Phaser.Scene {
             }
             this._worldEntityStateCache.clear();
             this._replicationTracks.clear();
+            for (const entityId of this._networkProjectiles.values()) {
+                this.entityManager.getEntityById(entityId)?.destroy?.();
+            }
+            this._networkProjectiles.clear();
         });
 
         eventBus.on('network:connected', () => {
@@ -627,6 +653,10 @@ export class GameScene extends Phaser.Scene {
             }
             this._worldEntityStateCache.clear();
             this._replicationTracks.clear();
+            for (const entityId of this._networkProjectiles.values()) {
+                this.entityManager.getEntityById(entityId)?.destroy?.();
+            }
+            this._networkProjectiles.clear();
         });
     }
 
@@ -1393,34 +1423,6 @@ export class GameScene extends Phaser.Scene {
 
         this._updateExitLabel(delta);
         this._updatePossessionBar();
-    }
-
-    /**
-     * Spawn a floating damage number at the given world position.
-     * @param {number} worldX
-     * @param {number} worldY
-     * @param {number} damage
-     * @param {boolean} [died]
-     */
-    _spawnDamageFloat(worldX, worldY, damage, died = false) {
-        const label = died ? `${damage} 💀` : `-${damage}`;
-        const color = died ? '#ff4444' : '#ffdd44';
-        const text = this.add.text(worldX, worldY - 20, label, {
-            fontSize:        died ? '20px' : '16px',
-            fontFamily:      'monospace',
-            color,
-            stroke:          '#000000',
-            strokeThickness: 3,
-        }).setOrigin(0.5, 1).setDepth(300);
-
-        this.tweens.add({
-            targets:  text,
-            y:        worldY - 70,
-            alpha:    0,
-            duration: 900,
-            ease:     'Quad.easeOut',
-            onComplete: () => text.destroy(),
-        });
     }
 
     _updateExitLabel(delta) {

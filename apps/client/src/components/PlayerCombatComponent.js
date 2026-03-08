@@ -8,6 +8,7 @@ import {
     PLAYER_RADIUS,
     ARROW_MIN_SPEED,
     ARROW_MAX_SPEED,
+    ARROW_PENETRATION,
     BOW_MIN_CHARGE_MS,
     BOW_FULL_CHARGE_MS,
     SWORD_QUEUE_GRACE_MS,
@@ -24,6 +25,7 @@ import {
     SWORD_SWING_1_STEP_DISTANCE,
     SWORD_SWING_2_STEP_DISTANCE,
     SWORD_SWING_3_STEP_DISTANCE,
+    SWORD_FINISH_LOCKOUT_MS,
     FISTS_SWING_STEP_DISTANCE,
 } from '../config.js';
 
@@ -97,6 +99,10 @@ class ComboWeaponStateMachine {
             return;
         }
 
+        if (this.phase === 'lockout') {
+            return;
+        }
+
         this.queuedNext = true;
 
         if (this.phase === 'chain') {
@@ -118,6 +124,17 @@ class ComboWeaponStateMachine {
             }
 
             if (this.phase === 'active') {
+                const step = this.steps[this.stepIndex];
+                const isFinalStep = this.stepIndex >= this.steps.length - 1;
+                const finishLockoutMs = Number.isFinite(step.finishLockoutMs) ? Math.max(0, step.finishLockoutMs) : 0;
+
+                if (isFinalStep && finishLockoutMs > 0) {
+                    this.phase = 'lockout';
+                    this.timerMs += finishLockoutMs;
+                    this.queuedNext = false;
+                    continue;
+                }
+
                 this.phase = 'chain';
                 this.timerMs += this.queueGraceMs;
                 if (this.queuedNext) {
@@ -127,6 +144,11 @@ class ComboWeaponStateMachine {
             }
 
             if (this.phase === 'chain') {
+                this._reset();
+                continue;
+            }
+
+            if (this.phase === 'lockout') {
                 this._reset();
                 continue;
             }
@@ -214,6 +236,7 @@ export class PlayerCombatComponent extends Component {
                     windupMs: SWORD_SWING_3_WINDUP_MS,
                     activeMs: SWORD_SWING_3_ACTIVE_MS,
                     stepDistance: SWORD_SWING_3_STEP_DISTANCE,
+                    finishLockoutMs: SWORD_FINISH_LOCKOUT_MS,
                     attackSpec: { radius: 102, arc: Math.PI * 0.88, color: 0xb8c2ff, alpha: 0.84 },
                 },
             ], SWORD_QUEUE_GRACE_MS),
@@ -477,6 +500,7 @@ export class PlayerCombatComponent extends Component {
             velocityX: nx * speed,
             velocityY: ny * speed,
             angle,
+            penetration: ARROW_PENETRATION,
         });
         const arrowGO = arrowEntity.getComponent('rectangle')?.gameObject;
         scene.lightingRenderer?.maskGameObject(arrowGO);
@@ -496,6 +520,7 @@ export class PlayerCombatComponent extends Component {
             networkManager.sendBullet(spawnX, spawnY, nx * speed, ny * speed, gameState.currentLevelId, {
                 projectileType: 'arrow',
                 chargeRatio: pct,
+                penetration: ARROW_PENETRATION,
             });
         }
     }

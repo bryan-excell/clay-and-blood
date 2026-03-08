@@ -162,6 +162,17 @@ class NetworkManager {
                     velocityX: msg.velocityX,
                     velocityY: msg.velocityY,
                     levelId:   msg.levelId,
+                    projectileId: typeof msg.projectileId === 'string' ? msg.projectileId : null,
+                    projectileType: msg.projectileType ?? 'bullet',
+                    chargeRatio: Number.isFinite(msg.chargeRatio) ? msg.chargeRatio : 1,
+                    penetration: Number.isFinite(msg.penetration) ? Math.max(0, Math.floor(msg.penetration)) : 0,
+                });
+                break;
+
+            case MSG.PROJECTILE_DESPAWN:
+                eventBus.emit('network:projectileDespawn', {
+                    projectileId: typeof msg.projectileId === 'string' ? msg.projectileId : null,
+                    reason: typeof msg.reason === 'string' ? msg.reason : 'unknown',
                 });
                 break;
 
@@ -272,6 +283,7 @@ class NetworkManager {
      * @param {object} [opts]
      * @param {string} [opts.projectileType] - 'bullet' (default) or 'arrow'
      * @param {number} [opts.chargeRatio]    - 0-1, arrow charge fraction (used for damage)
+     * @param {number} [opts.penetration]    - projectile penetration count
      */
     sendBullet(x, y, velocityX, velocityY, levelId, opts = {}) {
         this.send({
@@ -279,6 +291,7 @@ class NetworkManager {
             x, y, velocityX, velocityY, levelId,
             projectileType: opts.projectileType ?? 'bullet',
             chargeRatio:    opts.chargeRatio    ?? 1,
+            penetration: Number.isFinite(opts.penetration) ? Math.max(0, Math.floor(opts.penetration)) : 0,
             lastKnownTick:  this._lastServerTick,
         });
     }
