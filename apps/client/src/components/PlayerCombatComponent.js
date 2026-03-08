@@ -4,30 +4,195 @@ import { networkManager } from '../core/NetworkManager.js';
 import { gameState } from '../core/GameState.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { WEAPONS, SPELLS } from '../data/ItemRegistry.js';
-import { PLAYER_RADIUS, ARROW_MIN_SPEED, ARROW_MAX_SPEED, BOW_FULL_CHARGE_MS } from '../config.js';
+import {
+    PLAYER_RADIUS,
+    ARROW_MIN_SPEED,
+    ARROW_MAX_SPEED,
+    BOW_MIN_CHARGE_MS,
+    BOW_FULL_CHARGE_MS,
+    SWORD_QUEUE_GRACE_MS,
+    SWORD_SWING_1_WINDUP_MS,
+    SWORD_SWING_1_ACTIVE_MS,
+    SWORD_SWING_2_WINDUP_MS,
+    SWORD_SWING_2_ACTIVE_MS,
+    SWORD_SWING_3_WINDUP_MS,
+    SWORD_SWING_3_ACTIVE_MS,
+    FISTS_SWING_WINDUP_MS,
+    FISTS_SWING_ACTIVE_MS,
+    FISTS_QUEUE_GRACE_MS,
+} from '../config.js';
+
+class BowWeaponStateMachine {
+    constructor(owner) {
+        this.owner = owner;
+        this.charging = false;
+        this.chargeMs = 0;
+    }
+
+    onEquip() {}
+
+    onUnequip() {
+        this.charging = false;
+        this.chargeMs = 0;
+        this.owner._destroyChargeBar();
+    }
+
+    handlePrimary({ down, up, targetX, targetY }) {
+        if (down && !this.charging) {
+            this.charging = true;
+            this.chargeMs = 0;
+        }
+
+        if (up && this.charging) {
+            const heldMs = this.chargeMs;
+            this.charging = false;
+            this.chargeMs = 0;
+            this.owner._destroyChargeBar();
+
+            if (heldMs < BOW_MIN_CHARGE_MS) return;
+            this.owner._releaseArrow(targetX, targetY, heldMs);
+        }
+    }
+
+    update(deltaTime) {
+        if (!this.charging) return;
+        this.chargeMs = Math.min(this.chargeMs + deltaTime, BOW_FULL_CHARGE_MS);
+        this.owner._updateChargeBar(this.chargeMs);
+    }
+}
+
+class ComboWeaponStateMachine {
+    constructor(owner, steps, queueGraceMs) {
+        this.owner = owner;
+        this.steps = steps;
+        this.queueGraceMs = queueGraceMs;
+
+        this.phase = 'idle';
+        this.timerMs = 0;
+        this.stepIndex = 0;
+        this.queuedNext = false;
+    }
+
+    onEquip() {}
+
+    onUnequip() {
+        this._reset();
+    }
+
+    handlePrimary({ down }) {
+        if (!down) return;
+
+        if (this.phase === 'idle') {
+            this._startStep(0);
+            return;
+        }
+
+        this.queuedNext = true;
+
+        if (this.phase === 'chain') {
+            this._consumeQueueAndAdvance();
+        }
+    }
+
+    update(deltaTime) {
+        if (this.phase === 'idle') return;
+
+        this.timerMs -= deltaTime;
+
+        while (this.phase !== 'idle' && this.timerMs <= 0) {
+            if (this.phase === 'windup') {
+                this._triggerHitForCurrentStep();
+                this.phase = 'active';
+                this.timerMs += this.steps[this.stepIndex].activeMs;
+                continue;
+            }
+
+            if (this.phase === 'active') {
+                this.phase = 'chain';
+                this.timerMs += this.queueGraceMs;
+                if (this.queuedNext) {
+                    this._consumeQueueAndAdvance();
+                }
+                continue;
+            }
+
+            if (this.phase === 'chain') {
+                this._reset();
+                continue;
+            }
+        }
+    }
+
+    _startStep(index) {
+        this.stepIndex = index;
+        this.phase = 'windup';
+        this.timerMs = this.steps[index].windupMs;
+        this.queuedNext = false;
+    }
+
+    _triggerHitForCurrentStep() {
+        const step = this.steps[this.stepIndex];
+        this.owner._spawnMeleeArc(step.attackSpec, step.activeMs);
+    }
+
+    _consumeQueueAndAdvance() {
+        this.queuedNext = false;
+        const nextIndex = this.stepIndex + 1;
+        if (nextIndex < this.steps.length) {
+            this._startStep(nextIndex);
+            return;
+        }
+
+        this._startStep(0);
+    }
+
+    _reset() {
+        this.phase = 'idle';
+        this.timerMs = 0;
+        this.stepIndex = 0;
+        this.queuedNext = false;
+    }
+}
 
 /**
  * Combat component for player-like controllable entities.
- *
- * Dispatches primary and secondary actions based on what is currently equipped
- * in the entity's LoadoutComponent:
- *
- *   LMB → equipped weapon primary action
- *   RMB → if weapon.mouseUsage === 'both': weapon secondary action
- *          otherwise: equipped spell primary action
- *
- * Entities without a LoadoutComponent fall back to unarmed/nothing behavior.
  */
 export class PlayerCombatComponent extends Component {
     constructor() {
         super('playerCombat');
 
-        this.bowCharging   = false;
-        this.bowChargeTime = 0;
-        this.chargeBarGfx  = null;
-        this.spearActive   = false;
+        this.chargeBarGfx = null;
+        this.activeWeaponId = null;
+        this.weaponStateMachines = {
+            bow: new BowWeaponStateMachine(this),
+            sword: new ComboWeaponStateMachine(this, [
+                {
+                    windupMs: SWORD_SWING_1_WINDUP_MS,
+                    activeMs: SWORD_SWING_1_ACTIVE_MS,
+                    attackSpec: { radius: 58, arc: Math.PI * 0.62, color: 0xd2d8ff, alpha: 0.78 },
+                },
+                {
+                    windupMs: SWORD_SWING_2_WINDUP_MS,
+                    activeMs: SWORD_SWING_2_ACTIVE_MS,
+                    attackSpec: { radius: 74, arc: Math.PI * 0.72, color: 0xc4ceff, alpha: 0.8 },
+                },
+                {
+                    windupMs: SWORD_SWING_3_WINDUP_MS,
+                    activeMs: SWORD_SWING_3_ACTIVE_MS,
+                    attackSpec: { radius: 102, arc: Math.PI * 0.88, color: 0xb8c2ff, alpha: 0.84 },
+                },
+            ], SWORD_QUEUE_GRACE_MS),
+            unarmed: new ComboWeaponStateMachine(this, [
+                {
+                    windupMs: FISTS_SWING_WINDUP_MS,
+                    activeMs: FISTS_SWING_ACTIVE_MS,
+                    attackSpec: { radius: 46, arc: Math.PI * 0.56, color: 0xff9b47, alpha: 0.85 },
+                },
+            ], FISTS_QUEUE_GRACE_MS),
+        };
 
         this._unsubscribeControlChanged = null;
+        this._unsubscribeLoadoutChanged = null;
 
         this.requireComponent('intent');
         this.optionalComponent('control');
@@ -38,17 +203,19 @@ export class PlayerCombatComponent extends Component {
         if (!super.onAttach()) return false;
 
         this._setupMouseInput();
+        this._refreshActiveWeapon(true);
 
         this._unsubscribeControlChanged = eventBus.on('control:changed', ({ entityId, controlMode }) => {
             if (entityId !== this.entity.id) return;
-            if (controlMode !== 'local' && this.bowCharging) {
-                this.bowCharging   = false;
-                this.bowChargeTime = 0;
-                this._destroyChargeBar();
-            }
             if (controlMode !== 'local') {
                 this.entity.getComponent('intent')?.clearTransient();
+                this._resetAllWeaponStateMachines();
             }
+        });
+
+        this._unsubscribeLoadoutChanged = eventBus.on('loadout:changed', ({ entityId }) => {
+            if (entityId !== this.entity.id) return;
+            this._refreshActiveWeapon(true);
         });
 
         return true;
@@ -58,7 +225,7 @@ export class PlayerCombatComponent extends Component {
         const scene = this.entity?.scene;
         if (scene) {
             scene.input.off('pointerdown', this._onPointerDown, this);
-            scene.input.off('pointerup',   this._onPointerUp,   this);
+            scene.input.off('pointerup', this._onPointerUp, this);
         }
 
         this._destroyChargeBar();
@@ -67,6 +234,13 @@ export class PlayerCombatComponent extends Component {
             this._unsubscribeControlChanged();
             this._unsubscribeControlChanged = null;
         }
+
+        if (this._unsubscribeLoadoutChanged) {
+            this._unsubscribeLoadoutChanged();
+            this._unsubscribeLoadoutChanged = null;
+        }
+
+        this._resetAllWeaponStateMachines();
     }
 
     isLocallyControlled() {
@@ -74,51 +248,54 @@ export class PlayerCombatComponent extends Component {
         return !!control && control.controlMode === 'local';
     }
 
-    // ------------------------------------------------------------------
-    // Mouse input capture
-    // ------------------------------------------------------------------
-
     _setupMouseInput() {
         const scene = this.entity.scene;
         scene.input.off('pointerdown', this._onPointerDown, this);
-        scene.input.off('pointerup',   this._onPointerUp,   this);
-        scene.input.on('pointerdown',  this._onPointerDown, this);
-        scene.input.on('pointerup',    this._onPointerUp,   this);
+        scene.input.off('pointerup', this._onPointerUp, this);
+        scene.input.on('pointerdown', this._onPointerDown, this);
+        scene.input.on('pointerup', this._onPointerUp, this);
     }
 
     _onPointerDown(pointer) {
         if (!this.isLocallyControlled()) return;
-        // Suppress clicks that land inside the open inventory drawer.
         if (this._isPointerInsideUiDrawer(pointer)) return;
         this._writeAimFromPointer(pointer);
 
         const intent = this.entity.getComponent('intent');
         if (!intent) return;
 
-        if (pointer.leftButtonDown()) {
+        if (pointer.button === 0 || pointer.leftButtonDown()) {
             intent.wantsAttackPrimary = true;
-        } else if (pointer.rightButtonDown()) {
+            intent.attackPrimaryDown = true;
+            intent.attackPrimaryHeld = true;
+        } else if (pointer.button === 2 || pointer.rightButtonDown()) {
             intent.wantsAttackSecondary = true;
+            intent.attackSecondaryDown = true;
+            intent.attackSecondaryHeld = true;
         }
     }
 
     _onPointerUp(pointer) {
         if (!this.isLocallyControlled()) return;
-        // Prevent mouse-up on UI from falling through to gameplay actions.
         if (this._isPointerInsideUiDrawer(pointer)) return;
         this._writeAimFromPointer(pointer);
 
         const intent = this.entity.getComponent('intent');
         if (!intent) return;
 
-        // Left button release fires primary again so the bow can release its charge.
         if (pointer.button === 0 || pointer.leftButtonReleased()) {
             intent.wantsAttackPrimary = true;
+            intent.attackPrimaryUp = true;
+            intent.attackPrimaryHeld = false;
+        } else if (pointer.button === 2 || pointer.rightButtonReleased()) {
+            intent.wantsAttackSecondary = true;
+            intent.attackSecondaryUp = true;
+            intent.attackSecondaryHeld = false;
         }
     }
 
     _writeAimFromPointer(pointer) {
-        const intent    = this.entity.getComponent('intent');
+        const intent = this.entity.getComponent('intent');
         const transform = this.entity.getComponent('transform');
         if (!intent || !transform) return;
 
@@ -132,198 +309,118 @@ export class PlayerCombatComponent extends Component {
         return pointer.x < (uiStateStore.get('drawerWidth') ?? 0);
     }
 
-    // ------------------------------------------------------------------
-    // Primary / secondary dispatch (called by CombatSystem)
-    // ------------------------------------------------------------------
-
-    /**
-     * Dispatches the primary action for the currently equipped weapon.
-     * @param {number} targetX
-     * @param {number} targetY
-     */
-    handlePrimaryAttack(targetX, targetY) {
-        const loadout = this.entity.getComponent('loadout');
-        const weapon  = loadout?.getEquippedWeapon() ?? WEAPONS.unarmed;
-        this._handleWeaponPrimary(weapon, targetX, targetY);
+    handlePrimaryInput({ down, held, up, targetX, targetY }) {
+        this._refreshActiveWeapon();
+        const weaponMachine = this._getActiveWeaponStateMachine();
+        weaponMachine?.handlePrimary({ down, held, up, targetX, targetY });
     }
 
-    /**
-     * Dispatches either the weapon's secondary action (if weapon.mouseUsage === 'both')
-     * or the equipped spell's primary action.
-     * @param {number} targetX
-     * @param {number} targetY
-     */
-    handleSecondaryAttack(targetX, targetY) {
+    handleSecondaryInput({ down, held, up, targetX, targetY }) {
         const loadout = this.entity.getComponent('loadout');
-        const weapon  = loadout?.getEquippedWeapon() ?? WEAPONS.unarmed;
+        const weapon = loadout?.getEquippedWeapon() ?? WEAPONS.unarmed;
 
         if (weapon.mouseUsage === 'both') {
-            this._handleWeaponSecondary(weapon, targetX, targetY);
-        } else {
-            const spell = loadout?.getEquippedSpell() ?? SPELLS.nothing;
-            this._handleSpellPrimary(spell, targetX, targetY);
+            const weaponMachine = this._getActiveWeaponStateMachine();
+            weaponMachine?.handleSecondary?.({ down, held, up, targetX, targetY });
+            return;
+        }
+
+        if (!down) return;
+        const spell = loadout?.getEquippedSpell() ?? SPELLS.nothing;
+        this._handleSpellPrimary(spell, targetX, targetY);
+    }
+
+    _refreshActiveWeapon(force = false) {
+        const loadout = this.entity.getComponent('loadout');
+        const equipped = loadout?.getEquippedWeapon() ?? WEAPONS.unarmed;
+        const nextWeaponId = this.weaponStateMachines[equipped.id] ? equipped.id : 'unarmed';
+
+        if (!force && nextWeaponId === this.activeWeaponId) return;
+
+        if (this.activeWeaponId && this.weaponStateMachines[this.activeWeaponId]) {
+            this.weaponStateMachines[this.activeWeaponId].onUnequip?.();
+        }
+
+        this.activeWeaponId = nextWeaponId;
+        this.weaponStateMachines[this.activeWeaponId]?.onEquip?.();
+    }
+
+    _resetAllWeaponStateMachines() {
+        for (const machine of Object.values(this.weaponStateMachines)) {
+            machine.onUnequip?.();
         }
     }
 
-    // ------------------------------------------------------------------
-    // Weapon actions
-    // ------------------------------------------------------------------
-
-    _handleWeaponPrimary(weapon, targetX, targetY) {
-        switch (weapon.id) {
-            case 'bow':
-                if (this.bowCharging) this._releaseArrow(targetX, targetY);
-                else this._startBowCharge();
-                break;
-
-            case 'unarmed':
-            default:
-                this.swipeMelee(targetX, targetY);
-                break;
-        }
+    _getActiveWeaponStateMachine() {
+        this._refreshActiveWeapon();
+        return this.weaponStateMachines[this.activeWeaponId] ?? this.weaponStateMachines.unarmed;
     }
 
-    _handleWeaponSecondary(weapon, targetX, targetY) {
-        // Placeholder for future dual-bind weapon secondary actions.
-        // e.g. case 'bomb': detonate
-        switch (weapon.id) {
-            default:
-                break;
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Spell actions
-    // ------------------------------------------------------------------
-
-    _handleSpellPrimary(spell, targetX, targetY) {
-        switch (spell.id) {
-            case 'possess':
-                this.castPossess(targetX, targetY);
-                break;
-            case 'release_possession':
-                this.entity.scene?.requestReleasePossession?.(this.entity);
-                break;
-
-            case 'nothing':
-            default:
-                break;
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Concrete weapon implementations
-    // ------------------------------------------------------------------
-
-    swipeMelee(targetX, targetY) {
+    _spawnMeleeArc({ radius, arc, color, alpha }, activeDurationMs) {
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
 
         const scene = this.entity.scene;
-        const dx    = targetX - transform.position.x;
-        const dy    = targetY - transform.position.y;
+        const aim = this._resolveCurrentAimTarget();
+        const dx = aim.x - transform.position.x;
+        const dy = aim.y - transform.position.y;
         const angle = Math.atan2(dy, dx);
 
-        const SWIPE_RADIUS = 55;
-        const SWIPE_ARC    = Math.PI * 0.55;
-
         const gfx = scene.add.graphics();
-        gfx.fillStyle(0xFF8800, 0.8);
+        gfx.fillStyle(color, alpha);
         gfx.beginPath();
         gfx.moveTo(transform.position.x, transform.position.y);
         gfx.arc(
-            transform.position.x, transform.position.y,
-            SWIPE_RADIUS,
-            angle - SWIPE_ARC / 2,
-            angle + SWIPE_ARC / 2
+            transform.position.x,
+            transform.position.y,
+            radius,
+            angle - arc / 2,
+            angle + arc / 2
         );
         gfx.closePath();
         gfx.fillPath();
 
-        scene.tweens.add({
-            targets: gfx,
-            alpha: 0,
-            duration: 160,
-            ease: 'Quad.easeOut',
-            onComplete: () => gfx.destroy(),
+        scene.time.delayedCall(activeDurationMs, () => {
+            gfx.destroy();
         });
     }
 
-    thrustSpear(targetX, targetY) {
-        if (this.spearActive) return;
+    _resolveCurrentAimTarget() {
+        const intent = this.entity.getComponent('intent');
+        if (!intent) {
+            const transform = this.entity.getComponent('transform');
+            return {
+                x: (transform?.position.x ?? 0) + 1,
+                y: transform?.position.y ?? 0,
+            };
+        }
 
+        return this.resolveAimTarget(intent);
+    }
+
+    _releaseArrow(targetX, targetY, chargeMs) {
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
 
         const scene = this.entity.scene;
-        const dx    = targetX - transform.position.x;
-        const dy    = targetY - transform.position.y;
-        const angle = Math.atan2(dy, dx);
-
-        const SPEAR_LENGTH = 100;
-        const startX = transform.position.x + Math.cos(angle) * PLAYER_RADIUS;
-        const startY = transform.position.y + Math.sin(angle) * PLAYER_RADIUS;
-
-        const spear = scene.add.rectangle(startX, startY, SPEAR_LENGTH, 5, 0xCCCCFF);
-        spear.setOrigin(0, 0.5);
-        spear.setRotation(angle);
-        spear.setScale(0, 1);
-
-        this.spearActive = true;
-        scene.tweens.add({
-            targets: spear,
-            scaleX: 1,
-            duration: 110,
-            ease: 'Quad.easeOut',
-            onComplete: () => {
-                scene.tweens.add({
-                    targets: spear,
-                    scaleX: 0,
-                    duration: 160,
-                    ease: 'Quad.easeIn',
-                    onComplete: () => {
-                        spear.destroy();
-                        this.spearActive = false;
-                    },
-                });
-            },
-        });
-    }
-
-    // ------------------------------------------------------------------
-    // Bow implementation
-    // ------------------------------------------------------------------
-
-    _startBowCharge() {
-        this.bowCharging   = true;
-        this.bowChargeTime = 0;
-    }
-
-    _releaseArrow(targetX, targetY) {
-        this.bowCharging = false;
-        this._destroyChargeBar();
-
-        const transform = this.entity.getComponent('transform');
-        if (!transform) return;
-
-        const scene = this.entity.scene;
-        const dx    = targetX - transform.position.x;
-        const dy    = targetY - transform.position.y;
-        const len   = Math.sqrt(dx * dx + dy * dy);
+        const dx = targetX - transform.position.x;
+        const dy = targetY - transform.position.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
         if (len < 0.001) return;
 
-        const nx    = dx / len;
-        const ny    = dy / len;
+        const nx = dx / len;
+        const ny = dy / len;
         const angle = Math.atan2(dy, dx);
 
-        const pct   = Math.min(this.bowChargeTime / BOW_FULL_CHARGE_MS, 1);
+        const pct = Math.min(chargeMs / BOW_FULL_CHARGE_MS, 1);
         const speed = ARROW_MIN_SPEED + (ARROW_MAX_SPEED - ARROW_MIN_SPEED) * pct;
 
         const spawnX = transform.position.x + nx * (PLAYER_RADIUS + 8);
         const spawnY = transform.position.y + ny * (PLAYER_RADIUS + 8);
 
         const arrowEntity = scene.entityFactory.createFromPrefab('arrow', {
-            x: spawnX, y: spawnY,
+            x: spawnX,
+            y: spawnY,
             velocityX: nx * speed,
             velocityY: ny * speed,
             angle,
@@ -331,10 +428,12 @@ export class PlayerCombatComponent extends Component {
         const arrowGO = arrowEntity.getComponent('rectangle')?.gameObject;
         scene.lightingRenderer?.maskGameObject(arrowGO);
 
-        const flash = scene.add.circle(spawnX, spawnY, PLAYER_RADIUS * 0.5, 0xFFFF88, 0.8);
+        const flash = scene.add.circle(spawnX, spawnY, PLAYER_RADIUS * 0.5, 0xffff88, 0.8);
         scene.tweens.add({
             targets: flash,
-            alpha: 0, scaleX: 2, scaleY: 2,
+            alpha: 0,
+            scaleX: 2,
+            scaleY: 2,
             duration: 60,
             ease: 'Quad.easeOut',
             onComplete: () => flash.destroy(),
@@ -348,15 +447,15 @@ export class PlayerCombatComponent extends Component {
         }
     }
 
-    _updateChargeBar() {
+    _updateChargeBar(chargeMs) {
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
 
-        const pct  = Math.min(this.bowChargeTime / BOW_FULL_CHARGE_MS, 1);
+        const pct = Math.min(chargeMs / BOW_FULL_CHARGE_MS, 1);
         const barW = 36;
         const barH = 6;
-        const bx   = transform.position.x - barW / 2;
-        const by   = transform.position.y - PLAYER_RADIUS - 16;
+        const bx = transform.position.x - barW / 2;
+        const by = transform.position.y - PLAYER_RADIUS - 16;
 
         if (!this.chargeBarGfx) {
             this.chargeBarGfx = this.entity.scene.add.graphics();
@@ -367,7 +466,7 @@ export class PlayerCombatComponent extends Component {
         this.chargeBarGfx.fillStyle(0x111111, 0.9);
         this.chargeBarGfx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
 
-        const fillColor = pct < 0.5 ? 0x44DD44 : pct < 0.85 ? 0xFFDD00 : 0xFF8800;
+        const fillColor = pct < 0.5 ? 0x44dd44 : pct < 0.85 ? 0xffdd00 : 0xff8800;
         this.chargeBarGfx.fillStyle(fillColor, 1);
         this.chargeBarGfx.fillRect(bx, by, Math.ceil(barW * pct), barH);
     }
@@ -379,16 +478,26 @@ export class PlayerCombatComponent extends Component {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Spell implementations
-    // ------------------------------------------------------------------
+    _handleSpellPrimary(spell, targetX, targetY) {
+        switch (spell.id) {
+            case 'possess':
+                this.castPossess(targetX, targetY);
+                break;
+            case 'release_possession':
+                this.entity.scene?.requestReleasePossession?.(this.entity);
+                break;
+            case 'nothing':
+            default:
+                break;
+        }
+    }
 
     castPossess(targetX, targetY) {
-        const scene    = this.entity.scene;
+        const scene = this.entity.scene;
         const possessed = scene.tryPossessAtWorldPoint(this.entity, targetX, targetY);
 
         const color = possessed ? 0x7fe8ff : 0x555f6a;
-        const fx    = scene.add.circle(targetX, targetY, possessed ? 20 : 12, color, 0.55);
+        const fx = scene.add.circle(targetX, targetY, possessed ? 20 : 12, color, 0.55);
         scene.tweens.add({
             targets: fx,
             alpha: 0,
@@ -400,13 +509,9 @@ export class PlayerCombatComponent extends Component {
         });
     }
 
-    // ------------------------------------------------------------------
-    // Aim resolution
-    // ------------------------------------------------------------------
-
     resolveAimTarget(intent) {
         const transform = this.entity.getComponent('transform');
-        const scene     = this.entity.scene;
+        const scene = this.entity.scene;
         if (!transform || !scene) return { x: 0, y: 0 };
 
         const aimX = Number.isFinite(intent.aimX) ? intent.aimX : 0;
@@ -424,14 +529,9 @@ export class PlayerCombatComponent extends Component {
         return { x: transform.position.x + 1, y: transform.position.y };
     }
 
-    // ------------------------------------------------------------------
-    // Update
-    // ------------------------------------------------------------------
-
     update(deltaTime) {
-        if (this.bowCharging) {
-            this.bowChargeTime = Math.min(this.bowChargeTime + deltaTime, BOW_FULL_CHARGE_MS);
-            this._updateChargeBar();
-        }
+        this._refreshActiveWeapon();
+        const weaponMachine = this._getActiveWeaponStateMachine();
+        weaponMachine?.update(deltaTime);
     }
 }

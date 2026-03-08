@@ -13,8 +13,9 @@
  */
 
 export const WEAPONS = Object.freeze({
-    unarmed: Object.freeze({ id: 'unarmed', name: 'Unarmed', mouseUsage: 'left',  implicit: true }),
-    bow:     Object.freeze({ id: 'bow',     name: 'Bow',     mouseUsage: 'left'  }),
+    unarmed: Object.freeze({ id: 'unarmed', name: 'Fists', mouseUsage: 'left',  implicit: true }),
+    bow:     Object.freeze({ id: 'bow',     name: 'Bow',   mouseUsage: 'left'  }),
+    sword:   Object.freeze({ id: 'sword',   name: 'Sword', mouseUsage: 'left'  }),
 });
 
 export const SPELLS = Object.freeze({

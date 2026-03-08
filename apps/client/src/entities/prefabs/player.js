@@ -50,7 +50,7 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new StatsComponent({ hp: PLAYER_HEALTH_MAX, hpMax: PLAYER_HEALTH_MAX }));
     player.addComponent(new ExitTraversalComponent({ canUseExits: true }));
     player.addComponent(new LoadoutComponent({
-        weapons:     ['unarmed', 'bow'],
+        weapons:     ['unarmed', 'bow', 'sword'],
         spells:      ['nothing', 'possess'],
         armorSets:   [],
         accessories: ['cape'],

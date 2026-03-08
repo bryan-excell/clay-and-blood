@@ -25,12 +25,20 @@ export class CombatSystem {
 
             const target = combat.resolveAimTarget(intent);
 
-            if (intent.wantsAttackPrimary) {
-                combat.handlePrimaryAttack(target.x, target.y);
-            }
-            if (intent.wantsAttackSecondary) {
-                combat.handleSecondaryAttack(target.x, target.y);
-            }
+            combat.handlePrimaryInput({
+                down: !!intent.attackPrimaryDown,
+                held: !!intent.attackPrimaryHeld,
+                up: !!intent.attackPrimaryUp,
+                targetX: target.x,
+                targetY: target.y,
+            });
+            combat.handleSecondaryInput({
+                down: !!intent.attackSecondaryDown,
+                held: !!intent.attackSecondaryHeld,
+                up: !!intent.attackSecondaryUp,
+                targetX: target.x,
+                targetY: target.y,
+            });
 
             intent.clearTransient();
         }

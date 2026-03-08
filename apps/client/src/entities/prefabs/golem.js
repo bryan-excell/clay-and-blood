@@ -38,7 +38,7 @@ export function createGolem(scene, config = {}) {
     golem.addComponent(new StatsComponent({ hp: 160, hpMax: 160, stamina: 80, staminaMax: 80 }));
     golem.addComponent(new ExitTraversalComponent({ canUseExits: true }));
     golem.addComponent(new LoadoutComponent({
-        weapons:     ['unarmed'],
+        weapons:     ['unarmed', 'bow', 'sword'],
         spells:      [],
         armorSets:   [],
         accessories: [],

@@ -30,6 +30,12 @@ export class InputIntentSystem {
                 wantsDash: false,
                 wantsAttackPrimary: false,
                 wantsAttackSecondary: false,
+                attackPrimaryDown: false,
+                attackPrimaryHeld: false,
+                attackPrimaryUp: false,
+                attackSecondaryDown: false,
+                attackSecondaryHeld: false,
+                attackSecondaryUp: false,
             });
             return;
         }
@@ -44,6 +50,12 @@ export class InputIntentSystem {
                 // Preserve edge-trigger actions set by non-keyboard adapters
                 wantsAttackPrimary: intent.wantsAttackPrimary,
                 wantsAttackSecondary: intent.wantsAttackSecondary,
+                attackPrimaryDown: intent.attackPrimaryDown,
+                attackPrimaryHeld: intent.attackPrimaryHeld,
+                attackPrimaryUp: intent.attackPrimaryUp,
+                attackSecondaryDown: intent.attackSecondaryDown,
+                attackSecondaryHeld: intent.attackSecondaryHeld,
+                attackSecondaryUp: intent.attackSecondaryUp,
             });
             return;
         }
@@ -71,6 +83,12 @@ export class InputIntentSystem {
             // Merge keyboard action edges with other adapters (pointer, AI, replay).
             wantsAttackPrimary: !!keyboard.inputState.attack || !!intent.wantsAttackPrimary,
             wantsAttackSecondary: !!intent.wantsAttackSecondary,
+            attackPrimaryDown: !!keyboard.inputState.attack || !!intent.attackPrimaryDown,
+            attackPrimaryHeld: !!keyboard.inputState.attackHeld || !!intent.attackPrimaryHeld,
+            attackPrimaryUp: !!keyboard.inputState.attackUp || !!intent.attackPrimaryUp,
+            attackSecondaryDown: !!intent.attackSecondaryDown,
+            attackSecondaryHeld: !!intent.attackSecondaryHeld,
+            attackSecondaryUp: !!intent.attackSecondaryUp,
         });
     }
 }

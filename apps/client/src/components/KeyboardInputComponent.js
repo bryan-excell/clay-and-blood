@@ -14,7 +14,9 @@ export class KeyboardInputComponent extends InputComponent {
             right: false,
             sprint: false,
             dash: false,  // New dash input
-            attack: false // Generic attack input
+            attack: false, // Generic attack input (edge/down)
+            attackHeld: false,
+            attackUp: false
         };
 
         // Optional dependency on physics component - StateMachine will handle movement if present
@@ -51,6 +53,8 @@ export class KeyboardInputComponent extends InputComponent {
         this.inputState.sprint = this.keys.sprint.isDown;
         this.inputState.dash = Phaser.Input.Keyboard.JustDown(this.keys.dash); // Only trigger on key press, not hold
         this.inputState.attack = Phaser.Input.Keyboard.JustDown(this.keys.attack);
+        this.inputState.attackHeld = this.keys.attack.isDown;
+        this.inputState.attackUp = Phaser.Input.Keyboard.JustUp(this.keys.attack);
 
         // Check if input has changed
         const inputChanged = (
@@ -60,7 +64,9 @@ export class KeyboardInputComponent extends InputComponent {
             previousState.right !== this.inputState.right ||
             previousState.sprint !== this.inputState.sprint ||
             previousState.dash !== this.inputState.dash ||
-            previousState.attack !== this.inputState.attack
+            previousState.attack !== this.inputState.attack ||
+            previousState.attackHeld !== this.inputState.attackHeld ||
+            previousState.attackUp !== this.inputState.attackUp
         );
 
         // ECS intent-driven entities consume keyboard state via InputIntentSystem.

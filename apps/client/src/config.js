@@ -15,8 +15,22 @@ export const BULLET_MAX_RANGE = 800;
 // Bow and arrow constants
 export const ARROW_MIN_SPEED = 150;   // px/s at zero charge
 export const ARROW_MAX_SPEED = 950;   // px/s at full charge (faster than bullet)
-export const BOW_FULL_CHARGE_MS = 600; // ms to reach full charge
+export const BOW_MIN_CHARGE_MS = 200;  // ms minimum hold before release will fire
+export const BOW_FULL_CHARGE_MS = 500; // ms to reach full charge
 export const ARROW_MAX_RANGE = 1000;
+
+// Melee timing defaults
+export const SWORD_QUEUE_GRACE_MS = 120;
+export const SWORD_SWING_1_WINDUP_MS = 200;
+export const SWORD_SWING_1_ACTIVE_MS = 100;
+export const SWORD_SWING_2_WINDUP_MS = 200;
+export const SWORD_SWING_2_ACTIVE_MS = 100;
+export const SWORD_SWING_3_WINDUP_MS = 300;
+export const SWORD_SWING_3_ACTIVE_MS = 500;
+
+export const FISTS_SWING_WINDUP_MS = 100;
+export const FISTS_SWING_ACTIVE_MS = 100;
+export const FISTS_QUEUE_GRACE_MS = 120;
 
 // Colors — dark forest / dungeon palette
 export const COLOR_SOLID = 0x0d120a;   // Near-black forest void
