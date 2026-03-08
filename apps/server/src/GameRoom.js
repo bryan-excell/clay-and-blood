@@ -206,7 +206,10 @@ export class GameRoom {
 
                 this.players.set(sessionId, {
                     transform: { x: spawnX, y: spawnY, levelId: 'town-square' },
-                    intent:    { up: false, down: false, left: false, right: false, sprint: false },
+                    intent:    {
+                        up: false, down: false, left: false, right: false, sprint: false,
+                        moveSpeedMultiplier: 1, attackPushVx: 0, attackPushVy: 0,
+                    },
                     motion:    { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
                     stats:     { hp: PLAYER_HEALTH_MAX },
                     net:       { lastSeq: 0 },
@@ -271,6 +274,15 @@ export class GameRoom {
                         left:   !!data.left,
                         right:  !!data.right,
                         sprint: !!data.sprint,
+                        moveSpeedMultiplier: Number.isFinite(data.moveSpeedMultiplier)
+                            ? Math.max(0, Math.min(1, data.moveSpeedMultiplier))
+                            : 1,
+                        attackPushVx: Number.isFinite(data.attackPushVx)
+                            ? Math.max(-800, Math.min(800, data.attackPushVx))
+                            : 0,
+                        attackPushVy: Number.isFinite(data.attackPushVy)
+                            ? Math.max(-800, Math.min(800, data.attackPushVy))
+                            : 0,
                     },
                     motion: {
                         dashVx,

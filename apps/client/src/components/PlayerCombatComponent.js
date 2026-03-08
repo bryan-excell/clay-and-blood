@@ -20,6 +20,11 @@ import {
     FISTS_SWING_WINDUP_MS,
     FISTS_SWING_ACTIVE_MS,
     FISTS_QUEUE_GRACE_MS,
+    ATTACK_MOVE_SPEED_MULTIPLIER,
+    SWORD_SWING_1_STEP_DISTANCE,
+    SWORD_SWING_2_STEP_DISTANCE,
+    SWORD_SWING_3_STEP_DISTANCE,
+    FISTS_SWING_STEP_DISTANCE,
 } from '../config.js';
 
 class BowWeaponStateMachine {
@@ -59,6 +64,10 @@ class BowWeaponStateMachine {
         this.chargeMs = Math.min(this.chargeMs + deltaTime, BOW_FULL_CHARGE_MS);
         this.owner._updateChargeBar(this.chargeMs);
     }
+
+    getMovementInfluence() {
+        return null;
+    }
 }
 
 class ComboWeaponStateMachine {
@@ -71,6 +80,7 @@ class ComboWeaponStateMachine {
         this.timerMs = 0;
         this.stepIndex = 0;
         this.queuedNext = false;
+        this.currentAttackDirection = { x: 1, y: 0 };
     }
 
     onEquip() {}
@@ -128,6 +138,7 @@ class ComboWeaponStateMachine {
         this.phase = 'windup';
         this.timerMs = this.steps[index].windupMs;
         this.queuedNext = false;
+        this.currentAttackDirection = this.owner._resolveCurrentAimDirection();
     }
 
     _triggerHitForCurrentStep() {
@@ -151,6 +162,27 @@ class ComboWeaponStateMachine {
         this.timerMs = 0;
         this.stepIndex = 0;
         this.queuedNext = false;
+        this.currentAttackDirection = { x: 1, y: 0 };
+    }
+
+    getMovementInfluence() {
+        if (this.phase === 'idle') return null;
+
+        const step = this.steps[this.stepIndex];
+        let attackPushVx = 0;
+        let attackPushVy = 0;
+
+        if (this.phase === 'windup' && step.windupMs > 0 && step.stepDistance > 0) {
+            const pushSpeed = (step.stepDistance * 1000) / step.windupMs;
+            attackPushVx = this.currentAttackDirection.x * pushSpeed;
+            attackPushVy = this.currentAttackDirection.y * pushSpeed;
+        }
+
+        return {
+            speedMultiplier: ATTACK_MOVE_SPEED_MULTIPLIER,
+            attackPushVx,
+            attackPushVy,
+        };
     }
 }
 
@@ -169,16 +201,19 @@ export class PlayerCombatComponent extends Component {
                 {
                     windupMs: SWORD_SWING_1_WINDUP_MS,
                     activeMs: SWORD_SWING_1_ACTIVE_MS,
+                    stepDistance: SWORD_SWING_1_STEP_DISTANCE,
                     attackSpec: { radius: 58, arc: Math.PI * 0.62, color: 0xd2d8ff, alpha: 0.78 },
                 },
                 {
                     windupMs: SWORD_SWING_2_WINDUP_MS,
                     activeMs: SWORD_SWING_2_ACTIVE_MS,
+                    stepDistance: SWORD_SWING_2_STEP_DISTANCE,
                     attackSpec: { radius: 74, arc: Math.PI * 0.72, color: 0xc4ceff, alpha: 0.8 },
                 },
                 {
                     windupMs: SWORD_SWING_3_WINDUP_MS,
                     activeMs: SWORD_SWING_3_ACTIVE_MS,
+                    stepDistance: SWORD_SWING_3_STEP_DISTANCE,
                     attackSpec: { radius: 102, arc: Math.PI * 0.88, color: 0xb8c2ff, alpha: 0.84 },
                 },
             ], SWORD_QUEUE_GRACE_MS),
@@ -186,6 +221,7 @@ export class PlayerCombatComponent extends Component {
                 {
                     windupMs: FISTS_SWING_WINDUP_MS,
                     activeMs: FISTS_SWING_ACTIVE_MS,
+                    stepDistance: FISTS_SWING_STEP_DISTANCE,
                     attackSpec: { radius: 46, arc: Math.PI * 0.56, color: 0xff9b47, alpha: 0.85 },
                 },
             ], FISTS_QUEUE_GRACE_MS),
@@ -356,6 +392,11 @@ export class PlayerCombatComponent extends Component {
         return this.weaponStateMachines[this.activeWeaponId] ?? this.weaponStateMachines.unarmed;
     }
 
+    getMovementInfluence() {
+        const machine = this._getActiveWeaponStateMachine();
+        return machine?.getMovementInfluence?.() ?? null;
+    }
+
     _spawnMeleeArc({ radius, arc, color, alpha }, activeDurationMs) {
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
@@ -396,6 +437,18 @@ export class PlayerCombatComponent extends Component {
         }
 
         return this.resolveAimTarget(intent);
+    }
+
+    _resolveCurrentAimDirection() {
+        const transform = this.entity.getComponent('transform');
+        if (!transform) return { x: 1, y: 0 };
+
+        const target = this._resolveCurrentAimTarget();
+        const dx = target.x - transform.position.x;
+        const dy = target.y - transform.position.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.001) return { x: 1, y: 0 };
+        return { x: dx / len, y: dy / len };
     }
 
     _releaseArrow(targetX, targetY, chargeMs) {

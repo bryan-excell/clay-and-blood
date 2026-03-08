@@ -32,6 +32,13 @@ export const FISTS_SWING_WINDUP_MS = 100;
 export const FISTS_SWING_ACTIVE_MS = 100;
 export const FISTS_QUEUE_GRACE_MS = 120;
 
+// Attack movement feel
+export const ATTACK_MOVE_SPEED_MULTIPLIER = 0.25;
+export const SWORD_SWING_1_STEP_DISTANCE = 20; // px traveled during windup
+export const SWORD_SWING_2_STEP_DISTANCE = 24;
+export const SWORD_SWING_3_STEP_DISTANCE = 34;
+export const FISTS_SWING_STEP_DISTANCE = 12;
+
 // Colors — dark forest / dungeon palette
 export const COLOR_SOLID = 0x0d120a;   // Near-black forest void
 export const COLOR_EMPTY = 0x1e2e16;   // Dark undergrowth

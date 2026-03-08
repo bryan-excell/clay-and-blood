@@ -24,7 +24,7 @@ const SWEEP_EPSILON = 1e-6;
 
 /**
  * Compute movement velocity from held directional input.
- * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean}} input
+ * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean,moveSpeedMultiplier?:number,attackPushVx?:number,attackPushVy?:number}} input
  * @returns {{ vx:number, vy:number }}
  */
 export function movementVelocityFromInput(input = {}) {
@@ -44,7 +44,14 @@ export function movementVelocityFromInput(input = {}) {
     const speed = input.sprint
         ? PLAYER_SPEED * PLAYER_SPRINT_MULTIPLIER
         : PLAYER_SPEED;
-    return { vx: vx * speed, vy: vy * speed };
+    const moveScale = Number.isFinite(input.moveSpeedMultiplier)
+        ? Math.max(0, input.moveSpeedMultiplier)
+        : 1;
+    const baseVx = vx * speed * moveScale;
+    const baseVy = vy * speed * moveScale;
+    const attackPushVx = Number.isFinite(input.attackPushVx) ? input.attackPushVx : 0;
+    const attackPushVy = Number.isFinite(input.attackPushVy) ? input.attackPushVy : 0;
+    return { vx: baseVx + attackPushVx, vy: baseVy + attackPushVy };
 }
 
 /**
@@ -288,7 +295,7 @@ function sweepPlayerMove(x, y, dx, dy, grid) {
  * Shared movement integration for both client prediction and server authority.
  * Dash start is handled externally by updating dash state before calling this.
  * @param {{x:number,y:number,dashVx?:number,dashVy?:number,dashTimeLeftMs?:number}} state
- * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean}} input
+ * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean,moveSpeedMultiplier?:number,attackPushVx?:number,attackPushVy?:number}} input
  * @param {number} dtMs
  * @param {number[][] | null | undefined} grid
  * @returns {{x:number,y:number,vx:number,vy:number,dashVx:number,dashVy:number,dashTimeLeftMs:number}}

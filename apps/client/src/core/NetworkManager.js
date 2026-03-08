@@ -180,7 +180,7 @@ class NetworkManager {
     /**
      * Send the local player's current input state to the server.
      * Throttled to match the server tick rate.
-     * @param {object} inputState - { up, down, left, right, sprint }
+     * @param {object} inputState - { up, down, left, right, sprint, moveSpeedMultiplier, attackPushVx, attackPushVy }
      * @returns {number} The seq number used, or -1 if the message was throttled/not sent.
      */
     sendInput(inputState) {
@@ -200,6 +200,9 @@ class NetworkManager {
             left:   !!inputState.left,
             right:  !!inputState.right,
             sprint: !!inputState.sprint,
+            moveSpeedMultiplier: Number.isFinite(inputState.moveSpeedMultiplier) ? inputState.moveSpeedMultiplier : 1,
+            attackPushVx: Number.isFinite(inputState.attackPushVx) ? inputState.attackPushVx : 0,
+            attackPushVy: Number.isFinite(inputState.attackPushVy) ? inputState.attackPushVy : 0,
         });
 
         // Keep a stable 20 Hz cadence even if frame timing jitters.
@@ -229,6 +232,9 @@ class NetworkManager {
             right:  !!inputState.right,
             sprint: !!inputState.sprint,
             dash:   true,
+            moveSpeedMultiplier: Number.isFinite(inputState.moveSpeedMultiplier) ? inputState.moveSpeedMultiplier : 1,
+            attackPushVx: Number.isFinite(inputState.attackPushVx) ? inputState.attackPushVx : 0,
+            attackPushVy: Number.isFinite(inputState.attackPushVy) ? inputState.attackPushVy : 0,
         });
         // Keep post-dash timing aligned to the normal 20 Hz cadence.
         this._nextInputAt = performance.now() + this._inputInterval;

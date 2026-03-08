@@ -1186,6 +1186,8 @@ export class GameScene extends Phaser.Scene {
 
         const intent = controlled.getComponent('intent');
         const keyboard = controlled.getComponent('keyboard');
+        const combat = controlled.getComponent('playerCombat');
+        const movementInfluence = combat?.getMovementInfluence?.() ?? null;
 
         const levelData = gameState.levels?.[gameState.currentLevelId];
         const grid = levelData?.grid ?? null;
@@ -1196,8 +1198,12 @@ export class GameScene extends Phaser.Scene {
             right: (intent.moveX ?? 0) > 0.0001,
             sprint: !!intent.wantsSprint,
             dash: !!intent.wantsDash,
+            moveSpeedMultiplier: movementInfluence?.speedMultiplier ?? 1,
+            attackPushVx: movementInfluence?.attackPushVx ?? 0,
+            attackPushVy: movementInfluence?.attackPushVy ?? 0,
         } : (keyboard?.inputState ?? {
-            up: false, down: false, left: false, right: false, sprint: false, dash: false
+            up: false, down: false, left: false, right: false, sprint: false, dash: false,
+            moveSpeedMultiplier: 1, attackPushVx: 0, attackPushVy: 0,
         });
 
         const stepped = stepPlayerKinematics(
@@ -1312,6 +1318,8 @@ export class GameScene extends Phaser.Scene {
         // If the message was actually sent (not throttled), buffer it for reconciliation.
         if (this.player) {
             const intent = this.player.getComponent('intent');
+            const combat = this.player.getComponent('playerCombat');
+            const movementInfluence = combat?.getMovementInfluence?.() ?? null;
             if (intent) {
                 networkManager.sendInput({
                     up: (intent.moveY ?? 0) < -0.0001,
@@ -1319,6 +1327,9 @@ export class GameScene extends Phaser.Scene {
                     left: (intent.moveX ?? 0) < -0.0001,
                     right: (intent.moveX ?? 0) > 0.0001,
                     sprint: !!intent.wantsSprint,
+                    moveSpeedMultiplier: movementInfluence?.speedMultiplier ?? 1,
+                    attackPushVx: movementInfluence?.attackPushVx ?? 0,
+                    attackPushVy: movementInfluence?.attackPushVy ?? 0,
                 });
             }
         }
