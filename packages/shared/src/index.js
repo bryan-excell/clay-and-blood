@@ -342,6 +342,10 @@ export const ARROW_MIN_DAMAGE = 5;
 export const ARROW_MAX_DAMAGE = 20;
 export const ARROW_MAX_RANGE = 1000;
 export const ARROW_BASE_PENETRATION = 0;
+export const FISTS_MELEE_DAMAGE = 4;
+export const SWORD_MELEE_DAMAGE_1 = 6;
+export const SWORD_MELEE_DAMAGE_2 = 6;
+export const SWORD_MELEE_DAMAGE_3 = 10;
 
 // WebSocket message types for client <-> server communication
 export const MSG = {
@@ -359,8 +363,10 @@ export const MSG = {
     STATE_SNAPSHOT: 'state_snapshot',
     LEVEL_CHANGE:   'level_change',
     BULLET_FIRED:    'bullet_fired',
+    MELEE_ATTACK:    'melee_attack',
     PROJECTILE_DESPAWN: 'projectile_despawn',
     PLAYER_DAMAGED:  'player_damaged',
+    WORLD_ENTITY_DAMAGED: 'world_entity_damaged',
 };
 
 const CARDINAL_DIRECTIONS = ['north', 'east', 'south', 'west'];

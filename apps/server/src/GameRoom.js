@@ -18,6 +18,10 @@ import {
     ARROW_MAX_DAMAGE,
     ARROW_MAX_RANGE,
     ARROW_BASE_PENETRATION,
+    FISTS_MELEE_DAMAGE,
+    SWORD_MELEE_DAMAGE_1,
+    SWORD_MELEE_DAMAGE_2,
+    SWORD_MELEE_DAMAGE_3,
 } from '@clay-and-blood/shared';
 import {
     phaseInputIntent,
@@ -365,6 +369,33 @@ export class GameRoom {
                         dashTimeLeftMs,
                     },
                     net: { ...player.net, lastSeq: data.seq ?? player.net.lastSeq },
+                });
+                break;
+            }
+
+            case MSG.MELEE_ATTACK: {
+                const player = this.players.get(sessionId);
+                if (!player) break;
+                const dirX = Number.isFinite(data.dirX) ? data.dirX : 1;
+                const dirY = Number.isFinite(data.dirY) ? data.dirY : 0;
+                const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
+                if (dirLen < 0.001) break;
+
+                const requestedWeaponId = data.weaponId === 'sword' ? 'sword' : 'unarmed';
+                const equippedWeaponId = player.equipped?.weaponId === 'sword' ? 'sword' : 'unarmed';
+                const weaponId = requestedWeaponId === equippedWeaponId ? requestedWeaponId : equippedWeaponId;
+                const phaseIndex = Number.isInteger(data.phaseIndex) ? data.phaseIndex : Math.floor(data.phaseIndex ?? 0);
+
+                const requestedLevelId = typeof data.levelId === 'string' ? data.levelId : null;
+                const levelId = player.transform?.levelId ?? requestedLevelId;
+                if (!levelId) break;
+
+                this._applyPlayerMeleeAttack(sessionId, {
+                    weaponId,
+                    phaseIndex,
+                    levelId,
+                    dirX: dirX / dirLen,
+                    dirY: dirY / dirLen,
                 });
                 break;
             }
@@ -1276,6 +1307,51 @@ export class GameRoom {
         return best;
     }
 
+    _resolveMeleeProfile(weaponId, phaseIndex) {
+        if (weaponId === 'sword') {
+            const idx = Math.max(0, Math.min(2, Number.isFinite(phaseIndex) ? Math.floor(phaseIndex) : 0));
+            const swordProfiles = [
+                { damage: SWORD_MELEE_DAMAGE_1, radius: 58, arc: Math.PI * 0.62 },
+                { damage: SWORD_MELEE_DAMAGE_2, radius: 74, arc: Math.PI * 0.72 },
+                { damage: SWORD_MELEE_DAMAGE_3, radius: 102, arc: Math.PI * 0.88 },
+            ];
+            return swordProfiles[idx];
+        }
+
+        return { damage: FISTS_MELEE_DAMAGE, radius: 46, arc: Math.PI * 0.56 };
+    }
+
+    _applyPlayerMeleeAttack(sessionId, { weaponId, phaseIndex, levelId, dirX, dirY }) {
+        const player = this.players.get(sessionId);
+        if (!player) return;
+        const originX = player.transform?.x;
+        const originY = player.transform?.y;
+        if (!Number.isFinite(originX) || !Number.isFinite(originY)) return;
+
+        const profile = this._resolveMeleeProfile(weaponId, phaseIndex);
+        const radiusSq = profile.radius * profile.radius;
+        const minDot = Math.cos(profile.arc / 2);
+
+        for (const [entityKey, entity] of this.worldEntities.entries()) {
+            if (entity?.kind !== 'bandit') continue;
+            if ((entity.levelId ?? null) !== levelId) continue;
+
+            const dx = entity.x - originX;
+            const dy = entity.y - originY;
+            const distSq = dx * dx + dy * dy;
+            if (distSq > radiusSq) continue;
+
+            const dist = Math.sqrt(distSq);
+            let dot = 1;
+            if (dist > 0.001) {
+                dot = ((dx / dist) * dirX) + ((dy / dist) * dirY);
+            }
+            if (dot < minDot) continue;
+
+            this._applyDamageToWorldEntity(entityKey, profile.damage);
+        }
+    }
+
     _applyBanditMeleeHit(attackerEntityKey, victimSessionId, nowMs) {
         this._applyDamageToPlayer(victimSessionId, BANDIT_ATTACK_DAMAGE, attackerEntityKey, nowMs);
     }
@@ -1312,7 +1388,19 @@ export class GameRoom {
         const hpMax = Number.isFinite(entity.stats?.hpMax) ? entity.stats.hpMax : BANDIT_HP_MAX;
         const hp = Number.isFinite(entity.stats?.hp) ? entity.stats.hp : hpMax;
         const nextHp = Math.max(0, hp - damage);
-        if (nextHp <= 0) {
+        const died = nextHp <= 0;
+
+        this.#broadcastAll({
+            type: MSG.WORLD_ENTITY_DAMAGED,
+            entityKey,
+            damage,
+            hp: died ? 0 : nextHp,
+            died,
+            x: Number.isFinite(entity.x) ? entity.x : null,
+            y: Number.isFinite(entity.y) ? entity.y : null,
+            levelId: entity.levelId ?? null,
+        });
+        if (died) {
             this.worldEntities.delete(entityKey);
             return;
         }

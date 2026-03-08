@@ -33,6 +33,11 @@ export const SWORD_FINISH_LOCKOUT_MS = 140; // short recovery after swing 3 befo
 export const FISTS_SWING_WINDUP_MS = 100;
 export const FISTS_SWING_ACTIVE_MS = 100;
 export const FISTS_QUEUE_GRACE_MS = 120;
+export const FISTS_HIT_DAMAGE = 4;
+export const SWORD_HIT_DAMAGE_1 = 6;
+export const SWORD_HIT_DAMAGE_2 = 6;
+export const SWORD_HIT_DAMAGE_3 = 10;
+export const GAME_FONT_FAMILY = '"Libre Baskerville", Georgia, serif';
 
 // Attack movement feel
 export const ATTACK_MOVE_SPEED_MULTIPLIER = 0.25;

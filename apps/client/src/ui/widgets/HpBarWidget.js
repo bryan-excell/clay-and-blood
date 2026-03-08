@@ -1,3 +1,5 @@
+import { GAME_FONT_FAMILY } from '../../config.js';
+
 export class HpBarWidget {
     constructor(scene, x = 16, y = 16) {
         this.scene = scene;
@@ -16,7 +18,7 @@ export class HpBarWidget {
 
         this._valueText = scene.add.text(this.x - 8, this.y + this.height / 2, '0 / 0', {
             fontSize: '12px',
-            fontFamily: 'monospace',
+            fontFamily: GAME_FONT_FAMILY,
             color: '#ffffff',
             stroke: '#000000',
             strokeThickness: 3,

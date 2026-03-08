@@ -23,6 +23,7 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  *   network:playerLeft     { sessionId }
  *   network:levelChanged   { sessionId, levelId }
  *   network:entityEquip    { sessionId, entityKey, levelId, equipped }
+ *   network:worldEntityDamaged { entityKey, damage, hp, died, x, y, levelId }
  */
 class NetworkManager {
     constructor() {
@@ -185,6 +186,18 @@ class NetworkManager {
                     died:       msg.died,
                 });
                 break;
+
+            case MSG.WORLD_ENTITY_DAMAGED:
+                eventBus.emit('network:worldEntityDamaged', {
+                    entityKey: typeof msg.entityKey === 'string' ? msg.entityKey : null,
+                    damage: Number.isFinite(msg.damage) ? msg.damage : 0,
+                    hp: Number.isFinite(msg.hp) ? msg.hp : null,
+                    died: !!msg.died,
+                    x: Number.isFinite(msg.x) ? msg.x : null,
+                    y: Number.isFinite(msg.y) ? msg.y : null,
+                    levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
+                });
+                break;
         }
     }
 
@@ -293,6 +306,27 @@ class NetworkManager {
             chargeRatio:    opts.chargeRatio    ?? 1,
             penetration: Number.isFinite(opts.penetration) ? Math.max(0, Math.floor(opts.penetration)) : 0,
             lastKnownTick:  this._lastServerTick,
+        });
+    }
+
+    /**
+     * Notify the server about a local melee swing request.
+     * Server remains authoritative for hit resolution and damage.
+     * @param {object} payload
+     * @param {'unarmed'|'sword'} payload.weaponId
+     * @param {number} payload.phaseIndex
+     * @param {number} payload.dirX
+     * @param {number} payload.dirY
+     * @param {string|null} payload.levelId
+     */
+    sendMeleeAttack(payload) {
+        this.send({
+            type: MSG.MELEE_ATTACK,
+            weaponId: payload?.weaponId ?? 'unarmed',
+            phaseIndex: Number.isFinite(payload?.phaseIndex) ? Math.floor(payload.phaseIndex) : 0,
+            dirX: Number.isFinite(payload?.dirX) ? payload.dirX : 1,
+            dirY: Number.isFinite(payload?.dirY) ? payload.dirY : 0,
+            levelId: typeof payload?.levelId === 'string' ? payload.levelId : null,
         });
     }
 

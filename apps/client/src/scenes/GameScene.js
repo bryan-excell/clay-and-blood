@@ -14,7 +14,7 @@ import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { NetworkUiAdapter } from '../core/NetworkUiAdapter.js';
-import { PLAYER_RADIUS, TILE_SIZE } from '../config.js';
+import { GAME_FONT_FAMILY, PLAYER_RADIUS, TILE_SIZE } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
 import {
     getExitDestination,
@@ -41,6 +41,8 @@ const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
 const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility'];
 const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
+const DAMAGE_TEXT_RISE_PX = 24;
+const DAMAGE_TEXT_LIFETIME_MS = 460;
 
 /**
  * Main game scene, updated for entity-based levels
@@ -124,7 +126,7 @@ export class GameScene extends Phaser.Scene {
         // --- Exit proximity label ---
         this._exitLabel = this.add.text(0, 0, '', {
             fontSize: '18px',
-            fontFamily: 'Georgia, serif',
+            fontFamily: GAME_FONT_FAMILY,
             color: '#c8e8ff',
             stroke: '#0a1a2a',
             strokeThickness: 5,
@@ -581,14 +583,29 @@ export class GameScene extends Phaser.Scene {
         });
 
         // Server confirmed an authoritative health change.
-        eventBus.on('network:playerDamaged', ({ sessionId, hp }) => {
+        eventBus.on('network:playerDamaged', ({ sessionId, hp, damage }) => {
             if (sessionId === networkManager.sessionId) {
                 const localStats = this.player?.getComponent('stats');
                 if (localStats) localStats.setHp(hp);
             }
 
             this.uiProjectionSystem?.publishImmediate();
-            // Damage float popups are intentionally disabled for now.
+            const damageValue = Number.isFinite(damage) ? Math.max(0, Math.round(damage)) : 0;
+            if (damageValue <= 0) return;
+
+            const targetPos = this._getPlayerDamageAnchor(sessionId);
+            if (!targetPos) return;
+            if (targetPos.levelId !== gameState.currentLevelId) return;
+            this._showDamageNumber(targetPos.x, targetPos.y, damageValue);
+        });
+
+        eventBus.on('network:worldEntityDamaged', ({ entityKey, damage, x, y, levelId }) => {
+            const damageValue = Number.isFinite(damage) ? Math.max(0, Math.round(damage)) : 0;
+            if (damageValue <= 0) return;
+            const anchor = this._getWorldEntityDamageAnchor(entityKey, x, y, levelId);
+            if (!anchor) return;
+            if (anchor.levelId !== gameState.currentLevelId) return;
+            this._showDamageNumber(anchor.x, anchor.y, damageValue);
         });
 
         // Inventory drawer equip actions — UIScene emits these, we route them to the
@@ -657,6 +674,79 @@ export class GameScene extends Phaser.Scene {
                 this.entityManager.getEntityById(entityId)?.destroy?.();
             }
             this._networkProjectiles.clear();
+        });
+    }
+
+    _getPlayerDamageAnchor(sessionId) {
+        if (!sessionId) return null;
+        if (sessionId === networkManager.sessionId) {
+            const circle = this.player?.getComponent('circle');
+            const go = circle?.gameObject;
+            const transform = this.player?.getComponent('transform');
+            const x = Number.isFinite(go?.x) ? go.x : transform?.position?.x;
+            const y = Number.isFinite(go?.y) ? go.y : transform?.position?.y;
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            const radius = circle?.radius ?? PLAYER_RADIUS;
+            const levelId = transform?.levelId ?? gameState.currentLevelId ?? null;
+            return { x, y: y - radius - 8, levelId };
+        }
+
+        const remote = this.remotePlayers.get(sessionId);
+        if (!remote?.circle) return null;
+        const x = remote.circle.x;
+        const y = remote.circle.y - PLAYER_RADIUS - 8;
+        return { x, y, levelId: remote.stageId ?? null };
+    }
+
+    _getWorldEntityDamageAnchor(entityKey, fallbackX, fallbackY, fallbackLevelId) {
+        const entity = this._resolveEntityByNetworkKey(entityKey);
+        const circle = entity?.getComponent?.('circle');
+        const rectangle = entity?.getComponent?.('rectangle');
+        const transform = entity?.getComponent?.('transform');
+        const circleGo = circle?.gameObject;
+        const rectGo = rectangle?.gameObject;
+        const x = Number.isFinite(circleGo?.x)
+            ? circleGo.x
+            : Number.isFinite(rectGo?.x)
+                ? rectGo.x
+                : Number.isFinite(transform?.position?.x)
+                    ? transform.position.x
+                    : fallbackX;
+        const y = Number.isFinite(circleGo?.y)
+            ? circleGo.y
+            : Number.isFinite(rectGo?.y)
+                ? rectGo.y
+                : Number.isFinite(transform?.position?.y)
+                    ? transform.position.y
+                    : fallbackY;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+        const halfHeight = Number.isFinite(circle?.radius)
+            ? circle.radius
+            : Number.isFinite(rectangle?.height)
+                ? rectangle.height / 2
+                : PLAYER_RADIUS;
+        const levelId = transform?.levelId ?? fallbackLevelId ?? gameState.currentLevelId ?? null;
+        return { x, y: y - halfHeight - 8, levelId };
+    }
+
+    _showDamageNumber(x, y, amount) {
+        if (!Number.isFinite(x) || !Number.isFinite(y) || amount <= 0) return;
+        const txt = this.add.text(x, y, String(amount), {
+            fontSize: '18px',
+            fontFamily: GAME_FONT_FAMILY,
+            color: '#ffdf7b',
+            stroke: '#341d10',
+            strokeThickness: 5,
+        }).setOrigin(0.5, 1).setDepth(245);
+
+        this.tweens.add({
+            targets: txt,
+            y: y - DAMAGE_TEXT_RISE_PX,
+            alpha: 0,
+            duration: DAMAGE_TEXT_LIFETIME_MS,
+            ease: 'Cubic.easeOut',
+            onComplete: () => txt.destroy(),
         });
     }
 

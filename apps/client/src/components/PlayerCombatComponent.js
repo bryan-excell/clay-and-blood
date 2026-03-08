@@ -18,9 +18,13 @@ import {
     SWORD_SWING_2_ACTIVE_MS,
     SWORD_SWING_3_WINDUP_MS,
     SWORD_SWING_3_ACTIVE_MS,
+    SWORD_HIT_DAMAGE_1,
+    SWORD_HIT_DAMAGE_2,
+    SWORD_HIT_DAMAGE_3,
     FISTS_SWING_WINDUP_MS,
     FISTS_SWING_ACTIVE_MS,
     FISTS_QUEUE_GRACE_MS,
+    FISTS_HIT_DAMAGE,
     ATTACK_MOVE_SPEED_MULTIPLIER,
     SWORD_SWING_1_STEP_DISTANCE,
     SWORD_SWING_2_STEP_DISTANCE,
@@ -73,10 +77,11 @@ class BowWeaponStateMachine {
 }
 
 class ComboWeaponStateMachine {
-    constructor(owner, steps, queueGraceMs) {
+    constructor(owner, steps, queueGraceMs, weaponId = 'unarmed') {
         this.owner = owner;
         this.steps = steps;
         this.queueGraceMs = queueGraceMs;
+        this.weaponId = weaponId;
 
         this.phase = 'idle';
         this.timerMs = 0;
@@ -165,7 +170,11 @@ class ComboWeaponStateMachine {
 
     _triggerHitForCurrentStep() {
         const step = this.steps[this.stepIndex];
-        this.owner._spawnMeleeArc(step.attackSpec, step.activeMs);
+        this.owner._spawnMeleeArc(step.attackSpec, step.activeMs, {
+            weaponId: this.weaponId,
+            phaseIndex: this.stepIndex,
+            damage: step.damage ?? 0,
+        });
     }
 
     _consumeQueueAndAdvance() {
@@ -224,12 +233,14 @@ export class PlayerCombatComponent extends Component {
                     windupMs: SWORD_SWING_1_WINDUP_MS,
                     activeMs: SWORD_SWING_1_ACTIVE_MS,
                     stepDistance: SWORD_SWING_1_STEP_DISTANCE,
+                    damage: SWORD_HIT_DAMAGE_1,
                     attackSpec: { radius: 58, arc: Math.PI * 0.62, color: 0xd2d8ff, alpha: 0.78 },
                 },
                 {
                     windupMs: SWORD_SWING_2_WINDUP_MS,
                     activeMs: SWORD_SWING_2_ACTIVE_MS,
                     stepDistance: SWORD_SWING_2_STEP_DISTANCE,
+                    damage: SWORD_HIT_DAMAGE_2,
                     attackSpec: { radius: 74, arc: Math.PI * 0.72, color: 0xc4ceff, alpha: 0.8 },
                 },
                 {
@@ -237,17 +248,19 @@ export class PlayerCombatComponent extends Component {
                     activeMs: SWORD_SWING_3_ACTIVE_MS,
                     stepDistance: SWORD_SWING_3_STEP_DISTANCE,
                     finishLockoutMs: SWORD_FINISH_LOCKOUT_MS,
+                    damage: SWORD_HIT_DAMAGE_3,
                     attackSpec: { radius: 102, arc: Math.PI * 0.88, color: 0xb8c2ff, alpha: 0.84 },
                 },
-            ], SWORD_QUEUE_GRACE_MS),
+            ], SWORD_QUEUE_GRACE_MS, 'sword'),
             unarmed: new ComboWeaponStateMachine(this, [
                 {
                     windupMs: FISTS_SWING_WINDUP_MS,
                     activeMs: FISTS_SWING_ACTIVE_MS,
                     stepDistance: FISTS_SWING_STEP_DISTANCE,
+                    damage: FISTS_HIT_DAMAGE,
                     attackSpec: { radius: 46, arc: Math.PI * 0.56, color: 0xff9b47, alpha: 0.85 },
                 },
-            ], FISTS_QUEUE_GRACE_MS),
+            ], FISTS_QUEUE_GRACE_MS, 'unarmed'),
         };
 
         this._unsubscribeControlChanged = null;
@@ -420,7 +433,7 @@ export class PlayerCombatComponent extends Component {
         return machine?.getMovementInfluence?.() ?? null;
     }
 
-    _spawnMeleeArc({ radius, arc, color, alpha }, activeDurationMs) {
+    _spawnMeleeArc({ radius, arc, color, alpha }, activeDurationMs, attackMeta = null) {
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
 
@@ -429,6 +442,9 @@ export class PlayerCombatComponent extends Component {
         const dx = aim.x - transform.position.x;
         const dy = aim.y - transform.position.y;
         const angle = Math.atan2(dy, dx);
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const dirX = len > 0.001 ? dx / len : 1;
+        const dirY = len > 0.001 ? dy / len : 0;
 
         const gfx = scene.add.graphics();
         gfx.fillStyle(color, alpha);
@@ -447,6 +463,16 @@ export class PlayerCombatComponent extends Component {
         scene.time.delayedCall(activeDurationMs, () => {
             gfx.destroy();
         });
+
+        if (this.isLocallyControlled()) {
+            networkManager.sendMeleeAttack({
+                weaponId: attackMeta?.weaponId ?? 'unarmed',
+                phaseIndex: Number.isFinite(attackMeta?.phaseIndex) ? attackMeta.phaseIndex : 0,
+                dirX,
+                dirY,
+                levelId: gameState.currentLevelId ?? null,
+            });
+        }
     }
 
     _resolveCurrentAimTarget() {

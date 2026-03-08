@@ -18,6 +18,7 @@
  */
 
 import Phaser from 'phaser';
+import { GAME_FONT_FAMILY } from '../../config.js';
 
 const RIBBON_W = 44;
 const PANEL_W  = 200;
@@ -177,7 +178,7 @@ export class InventoryDrawerWidget {
             RIBBON_W + PANEL_W / 2,
             10,
             TABS[0].title,
-            { fontSize: '13px', fontFamily: 'monospace', color: C.panelTitle }
+            { fontSize: '13px', fontFamily: GAME_FONT_FAMILY, color: C.panelTitle }
         ).setOrigin(0.5, 0);
         this._container.add(this._panelTitle);
 
@@ -196,7 +197,7 @@ export class InventoryDrawerWidget {
                 TAB_PAD + bw / 2,
                 ty + bh / 2,
                 tab.label,
-                { fontSize: '17px', fontFamily: 'monospace', color: C.tabLabelInact }
+                { fontSize: '17px', fontFamily: GAME_FONT_FAMILY, color: C.tabLabelInact }
             ).setOrigin(0.5, 0.5);
 
             bg.on('pointerdown', () => this._setTab(i));
@@ -287,7 +288,7 @@ export class InventoryDrawerWidget {
                 rowX + 8,
                 rowY + ROW_H / 2,
                 item.name ?? item.id,
-                { fontSize: '12px', fontFamily: 'monospace', color: equipped ? C.rowTextAct : C.rowTextInact }
+                { fontSize: '12px', fontFamily: GAME_FONT_FAMILY, color: equipped ? C.rowTextAct : C.rowTextInact }
             ).setOrigin(0, 0.5);
 
             // Dual-bind glyph — warns the player this item occupies both mouse buttons.
@@ -297,7 +298,7 @@ export class InventoryDrawerWidget {
                     rowX + rowW - 8,
                     rowY + ROW_H / 2,
                     '⊕',
-                    { fontSize: '13px', fontFamily: 'monospace', color: C.glyphColor }
+                    { fontSize: '13px', fontFamily: GAME_FONT_FAMILY, color: C.glyphColor }
                 ).setOrigin(1, 0.5);
                 this._container.add(glyphText);
             }
@@ -328,7 +329,7 @@ export class InventoryDrawerWidget {
             rowX + rowW / 2,
             rowY + ROW_H / 2,
             '— none —',
-            { fontSize: '11px', fontFamily: 'monospace', color: '#3a5068' }
+            { fontSize: '11px', fontFamily: GAME_FONT_FAMILY, color: '#3a5068' }
         ).setOrigin(0.5, 0.5);
 
         this._container.add(bg);
