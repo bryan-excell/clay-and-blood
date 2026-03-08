@@ -1401,6 +1401,18 @@ export class GameRoom {
         const sourceLevelId = source.levelId ?? levelId;
         if (!Number.isFinite(originX) || !Number.isFinite(originY)) return;
 
+        this._broadcastMeleeAttack({
+            sessionId,
+            attackerEntityKey: source.entityKey,
+            weaponId,
+            phaseIndex,
+            levelId: sourceLevelId,
+            originX,
+            originY,
+            dirX,
+            dirY,
+        });
+
         const profile = this._resolveMeleeProfile(weaponId, phaseIndex);
         const radiusSq = profile.radius * profile.radius;
         const minDot = Math.cos(profile.arc / 2);
@@ -1427,7 +1439,52 @@ export class GameRoom {
     }
 
     _applyBanditMeleeHit(attackerEntityKey, victimEntityKey, nowMs) {
+        const attacker = this._getCombatantByEntityKey(attackerEntityKey);
+        const victim = this._getCombatantByEntityKey(victimEntityKey);
+        if (attacker && victim) {
+            const dx = victim.x - attacker.x;
+            const dy = victim.y - attacker.y;
+            const len = Math.hypot(dx, dy);
+            const dirX = len > 0.001 ? dx / len : 1;
+            const dirY = len > 0.001 ? dy / len : 0;
+            this._broadcastMeleeAttack({
+                sessionId: null,
+                attackerEntityKey,
+                weaponId: 'unarmed',
+                phaseIndex: 0,
+                levelId: attacker.levelId ?? null,
+                originX: attacker.x,
+                originY: attacker.y,
+                dirX,
+                dirY,
+            });
+        }
         this._applyDamageToEntity(victimEntityKey, BANDIT_ATTACK_DAMAGE, attackerEntityKey, nowMs);
+    }
+
+    _broadcastMeleeAttack({
+        sessionId = null,
+        attackerEntityKey = null,
+        weaponId = 'unarmed',
+        phaseIndex = 0,
+        levelId = null,
+        originX = null,
+        originY = null,
+        dirX = 1,
+        dirY = 0,
+    }) {
+        this.#broadcastAll({
+            type: MSG.MELEE_ATTACK,
+            sessionId: typeof sessionId === 'string' ? sessionId : null,
+            attackerEntityKey: typeof attackerEntityKey === 'string' ? attackerEntityKey : null,
+            weaponId: weaponId === 'sword' ? 'sword' : 'unarmed',
+            phaseIndex: Number.isFinite(phaseIndex) ? Math.max(0, Math.floor(phaseIndex)) : 0,
+            levelId: typeof levelId === 'string' ? levelId : null,
+            originX: Number.isFinite(originX) ? originX : null,
+            originY: Number.isFinite(originY) ? originY : null,
+            dirX: Number.isFinite(dirX) ? dirX : 1,
+            dirY: Number.isFinite(dirY) ? dirY : 0,
+        });
     }
 
     _applyDamageToPlayer(victimSessionId, damage, attackerId, timestamp = null, attackerTeamId = null) {

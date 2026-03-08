@@ -14,7 +14,15 @@ import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { NetworkUiAdapter } from '../core/NetworkUiAdapter.js';
-import { GAME_FONT_FAMILY, PLAYER_RADIUS, TILE_SIZE } from '../config.js';
+import {
+    GAME_FONT_FAMILY,
+    PLAYER_RADIUS,
+    TILE_SIZE,
+    SWORD_SWING_1_ACTIVE_MS,
+    SWORD_SWING_2_ACTIVE_MS,
+    SWORD_SWING_3_ACTIVE_MS,
+    FISTS_SWING_ACTIVE_MS,
+} from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
 import {
     getExitDestination,
@@ -586,6 +594,10 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
+        eventBus.on('network:meleeAttack', (payload) => {
+            this._renderReplicatedMeleeAttack(payload);
+        });
+
         eventBus.on('network:projectileDespawn', ({ projectileId }) => {
             if (!projectileId) return;
             const entityId = this._networkProjectiles.get(projectileId);
@@ -771,6 +783,100 @@ export class GameScene extends Phaser.Scene {
             duration: DAMAGE_TEXT_LIFETIME_MS,
             ease: 'Cubic.easeOut',
             onComplete: () => txt.destroy(),
+        });
+    }
+
+    _resolveMeleeVisualSpec(weaponId, phaseIndex) {
+        if (weaponId === 'sword') {
+            const swordSpecs = [
+                { radius: 58, arc: Math.PI * 0.62, color: 0xd2d8ff, alpha: 0.78, activeMs: SWORD_SWING_1_ACTIVE_MS },
+                { radius: 74, arc: Math.PI * 0.72, color: 0xc4ceff, alpha: 0.80, activeMs: SWORD_SWING_2_ACTIVE_MS },
+                { radius: 102, arc: Math.PI * 0.88, color: 0xb8c2ff, alpha: 0.84, activeMs: SWORD_SWING_3_ACTIVE_MS },
+            ];
+            const index = Math.max(0, Math.min(swordSpecs.length - 1, Number.isFinite(phaseIndex) ? Math.floor(phaseIndex) : 0));
+            return swordSpecs[index];
+        }
+        return { radius: 46, arc: Math.PI * 0.56, color: 0xff9b47, alpha: 0.85, activeMs: FISTS_SWING_ACTIVE_MS };
+    }
+
+    _resolveReplicatedMeleeOrigin(payload) {
+        const attackerEntityKey = payload?.attackerEntityKey;
+        if (typeof attackerEntityKey === 'string' && attackerEntityKey.startsWith('world:')) {
+            const entity = this._resolveEntityByNetworkKey(attackerEntityKey);
+            const circle = entity?.getComponent?.('circle');
+            const rectangle = entity?.getComponent?.('rectangle');
+            const transform = entity?.getComponent?.('transform');
+            const x = Number.isFinite(circle?.gameObject?.x)
+                ? circle.gameObject.x
+                : Number.isFinite(rectangle?.gameObject?.x)
+                    ? rectangle.gameObject.x
+                    : transform?.position?.x;
+            const y = Number.isFinite(circle?.gameObject?.y)
+                ? circle.gameObject.y
+                : Number.isFinite(rectangle?.gameObject?.y)
+                    ? rectangle.gameObject.y
+                    : transform?.position?.y;
+            const levelId = transform?.levelId ?? payload?.levelId ?? null;
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+                return { x, y, levelId };
+            }
+        }
+
+        if (typeof payload?.sessionId === 'string') {
+            if (payload.sessionId === networkManager.sessionId) {
+                const transform = this.player?.getComponent?.('transform');
+                const x = transform?.position?.x;
+                const y = transform?.position?.y;
+                const levelId = transform?.levelId ?? payload?.levelId ?? null;
+                if (Number.isFinite(x) && Number.isFinite(y)) {
+                    return { x, y, levelId };
+                }
+            } else {
+                const remote = this.remotePlayers.get(payload.sessionId);
+                if (remote?.circle) {
+                    return {
+                        x: remote.circle.x,
+                        y: remote.circle.y,
+                        levelId: remote.stageId ?? payload?.levelId ?? null,
+                    };
+                }
+            }
+        }
+
+        const x = payload?.originX;
+        const y = payload?.originY;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return { x, y, levelId: payload?.levelId ?? null };
+    }
+
+    _renderReplicatedMeleeAttack(payload) {
+        if (!payload) return;
+        if (payload.sessionId && payload.sessionId === networkManager.sessionId) return;
+
+        const origin = this._resolveReplicatedMeleeOrigin(payload);
+        if (!origin) return;
+        if (origin.levelId !== gameState.currentLevelId) return;
+
+        const dirX = Number.isFinite(payload.dirX) ? payload.dirX : 1;
+        const dirY = Number.isFinite(payload.dirY) ? payload.dirY : 0;
+        const dirLen = Math.hypot(dirX, dirY);
+        if (dirLen < 0.001) return;
+        const nx = dirX / dirLen;
+        const ny = dirY / dirLen;
+        const angle = Math.atan2(ny, nx);
+        const spec = this._resolveMeleeVisualSpec(payload.weaponId, payload.phaseIndex);
+
+        const gfx = this.add.graphics();
+        gfx.fillStyle(spec.color, spec.alpha);
+        gfx.beginPath();
+        gfx.moveTo(origin.x, origin.y);
+        gfx.arc(origin.x, origin.y, spec.radius, angle - spec.arc / 2, angle + spec.arc / 2);
+        gfx.closePath();
+        gfx.fillPath();
+        gfx.setDepth(190);
+
+        this.time.delayedCall(spec.activeMs, () => {
+            gfx.destroy();
         });
     }
 

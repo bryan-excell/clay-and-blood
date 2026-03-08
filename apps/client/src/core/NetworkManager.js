@@ -170,6 +170,20 @@ class NetworkManager {
                 });
                 break;
 
+            case MSG.MELEE_ATTACK:
+                eventBus.emit('network:meleeAttack', {
+                    sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : null,
+                    attackerEntityKey: typeof msg.attackerEntityKey === 'string' ? msg.attackerEntityKey : null,
+                    weaponId: msg.weaponId === 'sword' ? 'sword' : 'unarmed',
+                    phaseIndex: Number.isFinite(msg.phaseIndex) ? Math.max(0, Math.floor(msg.phaseIndex)) : 0,
+                    levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
+                    originX: Number.isFinite(msg.originX) ? msg.originX : null,
+                    originY: Number.isFinite(msg.originY) ? msg.originY : null,
+                    dirX: Number.isFinite(msg.dirX) ? msg.dirX : 1,
+                    dirY: Number.isFinite(msg.dirY) ? msg.dirY : 0,
+                });
+                break;
+
             case MSG.PROJECTILE_DESPAWN:
                 eventBus.emit('network:projectileDespawn', {
                     projectileId: typeof msg.projectileId === 'string' ? msg.projectileId : null,
