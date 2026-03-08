@@ -542,7 +542,7 @@ export class PlayerCombatComponent extends Component {
             onComplete: () => flash.destroy(),
         });
 
-        if (this.entity.id === this.entity.scene.player?.id) {
+        if (this.isLocallyControlled()) {
             networkManager.sendBullet(spawnX, spawnY, nx * speed, ny * speed, gameState.currentLevelId, {
                 projectileType: 'arrow',
                 chargeRatio: pct,

@@ -599,7 +599,18 @@ export class GameScene extends Phaser.Scene {
             this._showDamageNumber(targetPos.x, targetPos.y, damageValue);
         });
 
-        eventBus.on('network:worldEntityDamaged', ({ entityKey, damage, x, y, levelId }) => {
+        eventBus.on('network:worldEntityDamaged', ({ entityKey, damage, hp, died, x, y, levelId }) => {
+            const targetEntity = this._resolveEntityByNetworkKey(entityKey);
+            const targetStats = targetEntity?.getComponent('stats');
+            if (targetStats) {
+                if (Number.isFinite(hp)) {
+                    targetStats.setHp(hp);
+                } else if (died) {
+                    targetStats.setHp(0);
+                }
+                this.uiProjectionSystem?.publishImmediate();
+            }
+
             const damageValue = Number.isFinite(damage) ? Math.max(0, Math.round(damage)) : 0;
             if (damageValue <= 0) return;
             const anchor = this._getWorldEntityDamageAnchor(entityKey, x, y, levelId);

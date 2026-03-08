@@ -50,6 +50,11 @@ const BANDIT_ATTACK_DAMAGE = 7;
 const BANDIT_ATTACK_COOLDOWN_MS = 850;
 const BANDIT_HIT_RADIUS = 18;
 const BANDIT_HP_MAX = 75;
+const GOLEM_HIT_RADIUS = 20;
+const GOLEM_HP_MAX = 160;
+const TEAM_PLAYERS = 'players';
+const TEAM_BANDITS = 'bandits';
+const TEAM_NEUTRAL = 'neutral';
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
@@ -295,6 +300,7 @@ export class GameRoom {
                     equipped:  null, // populated on first PLAYER_EQUIP message
                     controlledEntityKey: `player:${sessionId}`,
                     returnEntityKey: `player:${sessionId}`,
+                    teamId: TEAM_PLAYERS,
                 });
 
                 // Ack the join with the caller's session ID
@@ -434,12 +440,17 @@ export class GameRoom {
 
                 let target = this.worldEntities.get(targetEntityKey);
                 if (!target) {
+                    const kind = this._inferWorldKindFromEntityKey(targetEntityKey);
                     target = {
                         entityKey: targetEntityKey,
+                        kind,
                         x,
                         y,
                         levelId,
                         controllerSessionId: null,
+                        teamId: this._defaultTeamForKind(kind),
+                        hitRadius: this._defaultHitRadiusForKind(kind),
+                        stats: this._defaultStatsForKind(kind),
                     };
                     if (DEBUG_WORLD_SYNC && targetEntityKey === PRACTICE_GOLEM_KEY) {
                         console.log('[WorldSync][Server] possess_request created missing golem from request', {
@@ -461,6 +472,13 @@ export class GameRoom {
                         requested: { x, y, levelId },
                         existing: this.worldEntities.get(targetEntityKey) ?? null,
                     });
+                }
+                target.teamId = target.teamId ?? this._defaultTeamForKind(target.kind);
+                target.hitRadius = Number.isFinite(target.hitRadius)
+                    ? target.hitRadius
+                    : this._defaultHitRadiusForKind(target.kind);
+                if (!target.stats) {
+                    target.stats = this._defaultStatsForKind(target.kind);
                 }
 
                 const previousControllerSessionId = target.controllerSessionId;
@@ -544,14 +562,21 @@ export class GameRoom {
 
                 const levelId = typeof data.levelId === 'string' ? data.levelId : null;
                 const prev = this.worldEntities.get(entityKey);
+                const kind = prev?.kind ?? this._inferWorldKindFromEntityKey(entityKey);
                 const next = {
                     ...(prev ?? {}),
                     entityKey,
+                    kind,
                     x: data.x,
                     y: data.y,
                     levelId,
                     controllerSessionId: sessionId,
                     possessionEndAtMs: prev?.possessionEndAtMs ?? null,
+                    teamId: prev?.teamId ?? this._defaultTeamForKind(kind),
+                    hitRadius: Number.isFinite(prev?.hitRadius)
+                        ? prev.hitRadius
+                        : this._defaultHitRadiusForKind(kind),
+                    stats: prev?.stats ?? this._defaultStatsForKind(kind),
                 };
                 this.worldEntities.set(entityKey, next);
                 if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
@@ -575,6 +600,12 @@ export class GameRoom {
             case MSG.BULLET_FIRED: {
                 const { x, y, velocityX, velocityY, levelId,
                         projectileType, chargeRatio, penetration } = data;
+                const source = this._resolveAttackSource(sessionId, levelId);
+                const sourceTeamId = source?.teamId ?? TEAM_PLAYERS;
+                const sourceEntityKey = source?.entityKey ?? `player:${sessionId}`;
+                const projectileLevelId = typeof levelId === 'string'
+                    ? levelId
+                    : (source?.levelId ?? null);
 
                 const normalizedType = projectileType === 'arrow' ? 'arrow' : 'bullet';
                 const ratio = Math.max(0, Math.min(1, chargeRatio ?? 0));
@@ -586,12 +617,14 @@ export class GameRoom {
                 if (normalizedType === 'arrow') {
                     const projectileId = this._spawnProjectile({
                         shooterSessionId: sessionId,
+                        shooterEntityKey: sourceEntityKey,
+                        shooterTeamId: sourceTeamId,
                         projectileType: normalizedType,
                         x,
                         y,
                         velocityX,
                         velocityY,
-                        levelId,
+                        levelId: projectileLevelId,
                         damage,
                         maxRange,
                         penetration: Number.isFinite(penetration)
@@ -601,7 +634,7 @@ export class GameRoom {
                     this.#broadcast({
                         type:      MSG.BULLET_FIRED,
                         sessionId,
-                        x, y, velocityX, velocityY, levelId,
+                        x, y, velocityX, velocityY, levelId: projectileLevelId,
                         projectileId,
                         projectileType: normalizedType,
                         chargeRatio: ratio,
@@ -610,38 +643,38 @@ export class GameRoom {
                             : ARROW_BASE_PENETRATION,
                     }, ws);
                 } else {
-                    // Keep legacy bullet behavior hitscan against hostile world entities only.
-                    // Players are allies and are never valid projectile targets.
+                    // Keep legacy bullet behavior as hitscan; filtering is team-based.
                     let hitEntityKey = null;
                     let hitT = Infinity;
 
-                    for (const [entityKey, entity] of this.worldEntities.entries()) {
-                        if (entity?.kind !== 'bandit') continue;
-                        if (entity.levelId !== levelId) continue;
+                    const candidates = this._listDamageableCombatantsInLevel(projectileLevelId);
+                    for (const target of candidates) {
+                        if (target.entityKey === sourceEntityKey) continue;
+                        if (!this._canDamage(sourceTeamId, target.teamId)) continue;
                         const t = rayHitDistance(
                             x,
                             y,
                             velocityX,
                             velocityY,
-                            entity.x,
-                            entity.y,
-                            BANDIT_HIT_RADIUS,
+                            target.x,
+                            target.y,
+                            target.hitRadius,
                             maxRange
                         );
                         if (t !== null && t < hitT) {
                             hitT = t;
-                            hitEntityKey = entityKey;
+                            hitEntityKey = target.entityKey;
                         }
                     }
 
                     if (hitEntityKey) {
-                        this._applyDamageToWorldEntity(hitEntityKey, damage);
+                        this._applyDamageToEntity(hitEntityKey, damage, sourceEntityKey);
                     }
                     // Relay bullet visuals to other clients.
                     this.#broadcast({
                         type:      MSG.BULLET_FIRED,
                         sessionId,
-                        x, y, velocityX, velocityY, levelId,
+                        x, y, velocityX, velocityY, levelId: projectileLevelId,
                         projectileId: null,
                         projectileType: normalizedType,
                         chargeRatio: ratio,
@@ -880,7 +913,7 @@ export class GameRoom {
             if (!entity.ai) {
                 entity.ai = {
                     state: 'idle',
-                    targetSessionId: null,
+                    targetEntityKey: null,
                     attackCooldownMs: 0,
                 };
             }
@@ -896,13 +929,13 @@ export class GameRoom {
 
             if (entity.controllerSessionId) {
                 entity.ai.state = 'idle';
-                entity.ai.targetSessionId = null;
+                entity.ai.targetEntityKey = null;
                 this.worldEntities.set(entityKey, entity);
                 continue;
             }
 
-            const target = this._findNearestPlayerInRange(entity, BANDIT_AGGRO_RANGE);
-            const targetPlayer = target ? this.players.get(target.sessionId) : null;
+            const target = this._findNearestHostileCombatantInRange(entityKey, BANDIT_AGGRO_RANGE);
+            const targetCombatant = target ? this._getCombatantByEntityKey(target.entityKey) : null;
             const targetDist = target ? Math.sqrt(target.distSq) : Infinity;
             const sameLevelAsHome = (entity.levelId ?? null) === (entity.home?.levelId ?? null);
             const homeDx = (entity.home?.x ?? entity.x) - entity.x;
@@ -911,10 +944,10 @@ export class GameRoom {
             const beyondLeash = !sameLevelAsHome || homeDist > BANDIT_LEASH_RANGE;
 
             let nextState = entity.ai.state ?? 'idle';
-            if (!targetPlayer && nextState !== 'return_home') {
+            if (!targetCombatant && nextState !== 'return_home') {
                 nextState = homeDist > 20 ? 'return_home' : 'idle';
             }
-            if (targetPlayer) {
+            if (targetCombatant) {
                 if (beyondLeash) {
                     nextState = 'return_home';
                 } else if (targetDist <= BANDIT_ATTACK_RANGE) {
@@ -927,7 +960,7 @@ export class GameRoom {
             }
 
             entity.ai.state = nextState;
-            entity.ai.targetSessionId = targetPlayer ? target.sessionId : null;
+            entity.ai.targetEntityKey = targetCombatant ? targetCombatant.entityKey : null;
             entity.intent = {
                 up: false,
                 down: false,
@@ -936,9 +969,9 @@ export class GameRoom {
                 sprint: false,
             };
 
-            if (nextState === 'chase' && targetPlayer) {
-                const dx = targetPlayer.transform.x - entity.x;
-                const dy = targetPlayer.transform.y - entity.y;
+            if (nextState === 'chase' && targetCombatant) {
+                const dx = targetCombatant.x - entity.x;
+                const dy = targetCombatant.y - entity.y;
                 const len = Math.hypot(dx, dy) || 1;
                 entity.intent = intentFromVector(dx / len, dy / len, targetDist > 200);
             } else if (nextState === 'return_home') {
@@ -946,8 +979,8 @@ export class GameRoom {
                 const dy = (entity.home?.y ?? entity.y) - entity.y;
                 const len = Math.hypot(dx, dy) || 1;
                 entity.intent = intentFromVector(dx / len, dy / len, homeDist > 160);
-            } else if (nextState === 'attack' && targetPlayer && entity.ai.attackCooldownMs <= 0) {
-                this._applyBanditMeleeHit(entityKey, target.sessionId, now);
+            } else if (nextState === 'attack' && targetCombatant && entity.ai.attackCooldownMs <= 0) {
+                this._applyBanditMeleeHit(entityKey, targetCombatant.entityKey, now);
                 entity.ai.attackCooldownMs = BANDIT_ATTACK_COOLDOWN_MS;
             }
 
@@ -986,6 +1019,8 @@ export class GameRoom {
 
     _spawnProjectile({
         shooterSessionId,
+        shooterEntityKey = null,
+        shooterTeamId = TEAM_PLAYERS,
         projectileType,
         x,
         y,
@@ -1005,6 +1040,8 @@ export class GameRoom {
         this.projectiles.set(projectileId, {
             id: projectileId,
             shooterSessionId,
+            shooterEntityKey,
+            shooterTeamId,
             projectileType: projectileType === 'arrow' ? 'arrow' : 'bullet',
             x,
             y,
@@ -1058,24 +1095,25 @@ export class GameRoom {
                     hitType = 'wall';
                 }
 
-                for (const [entityKey, entity] of this.worldEntities.entries()) {
-                    if (entity?.kind !== 'bandit') continue;
-                    if (projectile.hitEntities.has(entityKey)) continue;
-                    if ((entity.levelId ?? null) !== projectile.levelId) continue;
+                const candidates = this._listDamageableCombatantsInLevel(projectile.levelId);
+                for (const target of candidates) {
+                    if (projectile.hitEntities.has(target.entityKey)) continue;
+                    if (projectile.shooterEntityKey && target.entityKey === projectile.shooterEntityKey) continue;
+                    if (!this._canDamage(projectile.shooterTeamId, target.teamId)) continue;
                     const t = rayHitDistance(
                         currX,
                         currY,
                         projectile.velocityX,
                         projectile.velocityY,
-                        entity.x,
-                        entity.y,
-                        BANDIT_HIT_RADIUS,
+                        target.x,
+                        target.y,
+                        target.hitRadius,
                         stepRemaining
                     );
                     if (t !== null && t < nearestHitDistance) {
                         nearestHitDistance = t;
                         hitType = 'entity';
-                        hitEntityKey = entityKey;
+                        hitEntityKey = target.entityKey;
                     }
                 }
 
@@ -1101,7 +1139,11 @@ export class GameRoom {
 
                 if (hitType === 'entity' && hitEntityKey) {
                     projectile.hitEntities.add(hitEntityKey);
-                    this._applyDamageToWorldEntity(hitEntityKey, projectile.damage);
+                    this._applyDamageToEntity(
+                        hitEntityKey,
+                        projectile.damage,
+                        projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`
+                    );
                 }
 
                 if (projectile.penetrationRemaining > 0) {
@@ -1250,7 +1292,17 @@ export class GameRoom {
     }
 
     _ensurePracticeGolem() {
-        if (this.worldEntities.has(PRACTICE_GOLEM_KEY)) return;
+        if (this.worldEntities.has(PRACTICE_GOLEM_KEY)) {
+            const existing = this.worldEntities.get(PRACTICE_GOLEM_KEY);
+            this.worldEntities.set(PRACTICE_GOLEM_KEY, {
+                ...existing,
+                kind: existing?.kind ?? 'golem',
+                teamId: existing?.teamId ?? TEAM_PLAYERS,
+                hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : GOLEM_HIT_RADIUS,
+                stats: existing?.stats ?? { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
+            });
+            return;
+        }
         const x = PRACTICE_GOLEM_TILE_X * TILE_SIZE + TILE_SIZE / 2;
         const y = PRACTICE_GOLEM_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
         this.worldEntities.set(PRACTICE_GOLEM_KEY, {
@@ -1261,6 +1313,9 @@ export class GameRoom {
             levelId: PRACTICE_GOLEM_STAGE,
             controllerSessionId: null,
             possessionEndAtMs: null,
+            teamId: TEAM_PLAYERS,
+            hitRadius: GOLEM_HIT_RADIUS,
+            stats: { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
         });
         if (DEBUG_WORLD_SYNC) {
             console.log('[WorldSync][Server] ensurePracticeGolem created', { x, y, levelId: PRACTICE_GOLEM_STAGE });
@@ -1268,7 +1323,17 @@ export class GameRoom {
     }
 
     _ensurePracticeBandit() {
-        if (this.worldEntities.has(PRACTICE_BANDIT_KEY)) return;
+        if (this.worldEntities.has(PRACTICE_BANDIT_KEY)) {
+            const existing = this.worldEntities.get(PRACTICE_BANDIT_KEY);
+            this.worldEntities.set(PRACTICE_BANDIT_KEY, {
+                ...existing,
+                kind: existing?.kind ?? 'bandit',
+                teamId: existing?.teamId ?? TEAM_BANDITS,
+                hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : BANDIT_HIT_RADIUS,
+                stats: existing?.stats ?? { hp: BANDIT_HP_MAX, hpMax: BANDIT_HP_MAX },
+            });
+            return;
+        }
         const x = PRACTICE_BANDIT_TILE_X * TILE_SIZE + TILE_SIZE / 2;
         const y = PRACTICE_BANDIT_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
         this.worldEntities.set(PRACTICE_BANDIT_KEY, {
@@ -1279,29 +1344,35 @@ export class GameRoom {
             levelId: PRACTICE_BANDIT_STAGE,
             controllerSessionId: null,
             possessionEndAtMs: null,
+            teamId: TEAM_BANDITS,
+            hitRadius: BANDIT_HIT_RADIUS,
             intent: { up: false, down: false, left: false, right: false, sprint: false },
             motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
             stats: { hp: BANDIT_HP_MAX, hpMax: BANDIT_HP_MAX },
             home: { x, y, levelId: PRACTICE_BANDIT_STAGE },
             ai: {
                 state: 'idle',
-                targetSessionId: null,
+                targetEntityKey: null,
                 attackCooldownMs: 0,
             },
         });
     }
 
-    _findNearestPlayerInRange(entity, range) {
+    _findNearestHostileCombatantInRange(sourceEntityKey, range) {
+        const source = this._getCombatantByEntityKey(sourceEntityKey);
+        if (!source) return null;
+
         const rangeSq = range * range;
         let best = null;
-        for (const [sessionId, player] of this.players.entries()) {
-            if ((player.transform?.levelId ?? null) !== (entity.levelId ?? null)) continue;
-            const dx = player.transform.x - entity.x;
-            const dy = player.transform.y - entity.y;
+        for (const target of this._listDamageableCombatantsInLevel(source.levelId)) {
+            if (target.entityKey === source.entityKey) continue;
+            if (!this._canDamage(source.teamId, target.teamId)) continue;
+            const dx = target.x - source.x;
+            const dy = target.y - source.y;
             const distSq = dx * dx + dy * dy;
             if (distSq > rangeSq) continue;
             if (!best || distSq < best.distSq) {
-                best = { sessionId, distSq };
+                best = { entityKey: target.entityKey, distSq };
             }
         }
         return best;
@@ -1322,22 +1393,25 @@ export class GameRoom {
     }
 
     _applyPlayerMeleeAttack(sessionId, { weaponId, phaseIndex, levelId, dirX, dirY }) {
-        const player = this.players.get(sessionId);
-        if (!player) return;
-        const originX = player.transform?.x;
-        const originY = player.transform?.y;
+        const source = this._resolveAttackSource(sessionId, levelId);
+        if (!source) return;
+        const originX = source.x;
+        const originY = source.y;
+        const sourceTeamId = source.teamId;
+        const sourceLevelId = source.levelId ?? levelId;
         if (!Number.isFinite(originX) || !Number.isFinite(originY)) return;
 
         const profile = this._resolveMeleeProfile(weaponId, phaseIndex);
         const radiusSq = profile.radius * profile.radius;
         const minDot = Math.cos(profile.arc / 2);
 
-        for (const [entityKey, entity] of this.worldEntities.entries()) {
-            if (entity?.kind !== 'bandit') continue;
-            if ((entity.levelId ?? null) !== levelId) continue;
+        const candidates = this._listDamageableCombatantsInLevel(sourceLevelId);
+        for (const target of candidates) {
+            if (target.entityKey === source.entityKey) continue;
+            if (!this._canDamage(sourceTeamId, target.teamId)) continue;
 
-            const dx = entity.x - originX;
-            const dy = entity.y - originY;
+            const dx = target.x - originX;
+            const dy = target.y - originY;
             const distSq = dx * dx + dy * dy;
             if (distSq > radiusSq) continue;
 
@@ -1348,17 +1422,18 @@ export class GameRoom {
             }
             if (dot < minDot) continue;
 
-            this._applyDamageToWorldEntity(entityKey, profile.damage);
+            this._applyDamageToEntity(target.entityKey, profile.damage, source.entityKey);
         }
     }
 
-    _applyBanditMeleeHit(attackerEntityKey, victimSessionId, nowMs) {
-        this._applyDamageToPlayer(victimSessionId, BANDIT_ATTACK_DAMAGE, attackerEntityKey, nowMs);
+    _applyBanditMeleeHit(attackerEntityKey, victimEntityKey, nowMs) {
+        this._applyDamageToEntity(victimEntityKey, BANDIT_ATTACK_DAMAGE, attackerEntityKey, nowMs);
     }
 
-    _applyDamageToPlayer(victimSessionId, damage, attackerId, timestamp = null) {
+    _applyDamageToPlayer(victimSessionId, damage, attackerId, timestamp = null, attackerTeamId = null) {
         const victim = this.players.get(victimSessionId);
         if (!victim) return;
+        if (!this._canDamage(attackerTeamId, this._getPlayerTeamId(victimSessionId))) return;
 
         const newHp = Math.max(0, victim.stats.hp - damage);
         const died = newHp === 0;
@@ -1385,7 +1460,8 @@ export class GameRoom {
     _applyDamageToWorldEntity(entityKey, damage) {
         const entity = this.worldEntities.get(entityKey);
         if (!entity) return;
-        const hpMax = Number.isFinite(entity.stats?.hpMax) ? entity.stats.hpMax : BANDIT_HP_MAX;
+        const defaultStats = this._defaultStatsForKind(entity.kind);
+        const hpMax = Number.isFinite(entity.stats?.hpMax) ? entity.stats.hpMax : defaultStats.hpMax;
         const hp = Number.isFinite(entity.stats?.hp) ? entity.stats.hp : hpMax;
         const nextHp = Math.max(0, hp - damage);
         const died = nextHp <= 0;
@@ -1408,6 +1484,186 @@ export class GameRoom {
             ...entity,
             stats: { hp: nextHp, hpMax },
         });
+    }
+
+    _applyDamageToEntity(targetEntityKey, damage, attackerEntityKey = null, timestamp = null) {
+        if (typeof targetEntityKey !== 'string') return;
+        if (!Number.isFinite(damage) || damage <= 0) return;
+        if (attackerEntityKey && targetEntityKey === attackerEntityKey) return;
+
+        const attackerTeamId = this._getEntityTeamId(attackerEntityKey);
+        const targetTeamId = this._getEntityTeamId(targetEntityKey);
+        if (!this._canDamage(attackerTeamId, targetTeamId)) return;
+
+        if (targetEntityKey.startsWith('player:')) {
+            const victimSessionId = targetEntityKey.slice('player:'.length);
+            this._applyDamageToPlayer(victimSessionId, damage, attackerEntityKey, timestamp, attackerTeamId);
+            return;
+        }
+        if (targetEntityKey.startsWith('world:')) {
+            this._applyDamageToWorldEntity(targetEntityKey, damage);
+        }
+    }
+
+    _defaultTeamForKind(kind) {
+        if (kind === 'bandit') return TEAM_BANDITS;
+        if (kind === 'golem' || kind === 'player') return TEAM_PLAYERS;
+        return TEAM_NEUTRAL;
+    }
+
+    _defaultHitRadiusForKind(kind) {
+        if (kind === 'bandit') return BANDIT_HIT_RADIUS;
+        if (kind === 'golem') return GOLEM_HIT_RADIUS;
+        if (kind === 'player') return PLAYER_RADIUS;
+        return PLAYER_RADIUS;
+    }
+
+    _defaultStatsForKind(kind) {
+        if (kind === 'bandit') return { hp: BANDIT_HP_MAX, hpMax: BANDIT_HP_MAX };
+        if (kind === 'golem') return { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX };
+        return { hp: 0, hpMax: 0 };
+    }
+
+    _inferWorldKindFromEntityKey(entityKey) {
+        if (entityKey === PRACTICE_GOLEM_KEY) return 'golem';
+        if (entityKey === PRACTICE_BANDIT_KEY) return 'bandit';
+        return null;
+    }
+
+    _getPlayerTeamId(sessionId) {
+        const player = this.players.get(sessionId);
+        return player?.teamId ?? TEAM_PLAYERS;
+    }
+
+    _getWorldEntityTeamId(entity) {
+        return entity?.teamId ?? this._defaultTeamForKind(entity?.kind ?? null);
+    }
+
+    _getEntityTeamId(entityKey) {
+        if (typeof entityKey !== 'string') return TEAM_NEUTRAL;
+        if (entityKey.startsWith('player:')) {
+            return this._getPlayerTeamId(entityKey.slice('player:'.length));
+        }
+        if (entityKey.startsWith('world:')) {
+            return this._getWorldEntityTeamId(this.worldEntities.get(entityKey));
+        }
+        return TEAM_NEUTRAL;
+    }
+
+    _canDamage(sourceTeamId, targetTeamId) {
+        if (!sourceTeamId || !targetTeamId) return true;
+        return sourceTeamId !== targetTeamId;
+    }
+
+    _getWorldEntityHitRadius(entity) {
+        if (Number.isFinite(entity?.hitRadius) && entity.hitRadius > 0) return entity.hitRadius;
+        return this._defaultHitRadiusForKind(entity?.kind ?? null);
+    }
+
+    _getCombatantByEntityKey(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+
+        if (entityKey.startsWith('player:')) {
+            const sessionId = entityKey.slice('player:'.length);
+            const player = this.players.get(sessionId);
+            if (!player) return null;
+            const x = player?.transform?.x;
+            const y = player?.transform?.y;
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            return {
+                entityKey,
+                domain: 'player',
+                kind: 'player',
+                teamId: this._getPlayerTeamId(sessionId),
+                levelId: player.transform?.levelId ?? null,
+                x,
+                y,
+                hitRadius: PLAYER_RADIUS,
+                hp: player?.stats?.hp ?? null,
+                hpMax: PLAYER_HEALTH_MAX,
+                controllerSessionId: sessionId,
+            };
+        }
+
+        if (entityKey.startsWith('world:')) {
+            const entity = this.worldEntities.get(entityKey);
+            if (!entity) return null;
+            if (!Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return null;
+            const defaultStats = this._defaultStatsForKind(entity.kind);
+            return {
+                entityKey,
+                domain: 'world',
+                kind: entity.kind ?? null,
+                teamId: this._getWorldEntityTeamId(entity),
+                levelId: entity.levelId ?? null,
+                x: entity.x,
+                y: entity.y,
+                hitRadius: this._getWorldEntityHitRadius(entity),
+                hp: Number.isFinite(entity?.stats?.hp) ? entity.stats.hp : defaultStats.hp,
+                hpMax: Number.isFinite(entity?.stats?.hpMax) ? entity.stats.hpMax : defaultStats.hpMax,
+                controllerSessionId: entity.controllerSessionId ?? null,
+            };
+        }
+
+        return null;
+    }
+
+    _isCombatantDamageable(combatant) {
+        if (!combatant) return false;
+        if (combatant.domain === 'player') return Number.isFinite(combatant.hpMax) && combatant.hpMax > 0;
+        return Number.isFinite(combatant.hpMax) && combatant.hpMax > 0;
+    }
+
+    _listDamageableCombatantsInLevel(levelId) {
+        const candidates = [];
+
+        for (const [sessionId, player] of this.players.entries()) {
+            if ((player?.transform?.levelId ?? null) !== levelId) continue;
+            const combatant = this._getCombatantByEntityKey(`player:${sessionId}`);
+            if (!this._isCombatantDamageable(combatant)) continue;
+            candidates.push(combatant);
+        }
+
+        for (const [entityKey, entity] of this.worldEntities.entries()) {
+            if ((entity?.levelId ?? null) !== levelId) continue;
+            const combatant = this._getCombatantByEntityKey(entityKey);
+            if (!this._isCombatantDamageable(combatant)) continue;
+            candidates.push(combatant);
+        }
+
+        return candidates;
+    }
+
+    _resolveAttackSource(sessionId, fallbackLevelId = null) {
+        const player = this.players.get(sessionId);
+        if (!player) return null;
+
+        const controlledEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
+        if (controlledEntityKey.startsWith('world:')) {
+            const controlled = this.worldEntities.get(controlledEntityKey);
+            if (controlled?.controllerSessionId === sessionId) {
+                const combatant = this._getCombatantByEntityKey(controlledEntityKey);
+                if (combatant) return combatant;
+            }
+        }
+
+        const fallback = this._getCombatantByEntityKey(`player:${sessionId}`);
+        if (fallback) return fallback;
+
+        if (!Number.isFinite(player?.transform?.x) || !Number.isFinite(player?.transform?.y)) return null;
+        return {
+            entityKey: `player:${sessionId}`,
+            domain: 'player',
+            kind: 'player',
+            teamId: this._getPlayerTeamId(sessionId),
+            levelId: player.transform?.levelId ?? fallbackLevelId ?? null,
+            x: player.transform.x,
+            y: player.transform.y,
+            hitRadius: PLAYER_RADIUS,
+            hp: player?.stats?.hp ?? null,
+            hpMax: PLAYER_HEALTH_MAX,
+            controllerSessionId: sessionId,
+        };
     }
 
     /**
@@ -1449,6 +1705,7 @@ export class GameRoom {
         return {
             entityKey: entry.entityKey,
             kind: entry.kind ?? null,
+            teamId: this._getWorldEntityTeamId(entry),
             x: entry.x,
             y: entry.y,
             levelId: entry.levelId ?? null,
