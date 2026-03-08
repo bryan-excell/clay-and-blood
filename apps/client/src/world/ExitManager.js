@@ -141,6 +141,7 @@ export class ExitManager {
         const transform = entity.getComponent('transform');
         if (transform) {
             transform.setPosition(safeX, safeY);
+            transform.levelId = targetLevel?.id ?? transform.levelId ?? gameState.currentLevelId;
         }
 
         const visualComponent = entity.getComponent('circle');

@@ -156,6 +156,10 @@ export class GameScene extends Phaser.Scene {
             x: safePosition.x,
             y: safePosition.y
         });
+        const transform = this.player?.getComponent('transform');
+        if (transform) {
+            transform.levelId = level?.id ?? gameState.currentLevelId ?? 'town-square';
+        }
         
         console.log(`Player created at position (${safePosition.x}, ${safePosition.y})`);
     }
@@ -249,8 +253,7 @@ export class GameScene extends Phaser.Scene {
             const currentControl = currentLocal.getComponent('control');
             currentControl?.setControl('remote', currentControl.controllerId, reason);
             // Keep non-controlled entities visible only when they are in the
-            // currently rendered level. Do not hide the player just because
-            // control switched away from it.
+            // currently rendered level.
             if (currentLocal.id !== nextEntity.id) {
                 const currentLevelId = currentLocal.getComponent('transform')?.levelId ?? gameState.currentLevelId;
                 this._setEntityVisibility(currentLocal, currentLevelId === gameState.currentLevelId);
@@ -384,6 +387,14 @@ export class GameScene extends Phaser.Scene {
             }
             for (const p of players) {
                 if (p.sessionId === networkManager.sessionId) {
+                    const playerTransform = this.player?.getComponent('transform');
+                    if (playerTransform) {
+                        playerTransform.levelId = p.levelId ?? playerTransform.levelId ?? gameState.currentLevelId;
+                    }
+                    this._setEntityVisibility(
+                        this.player,
+                        (playerTransform?.levelId ?? gameState.currentLevelId) === gameState.currentLevelId
+                    );
                     // During possession the server co-locates the player body with
                     // the controlled entity (Phase 1A/B) for level-tracking, but the
                     // player entity is dormant and must not be visually dragged along.
@@ -530,6 +541,8 @@ export class GameScene extends Phaser.Scene {
                 rp.circle.setVisible(rp.stageId === levelId);
             }
             this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+            const playerLevelId = this.player?.getComponent('transform')?.levelId ?? levelId;
+            this._setEntityVisibility(this.player, playerLevelId === levelId);
         });
 
         eventBus.on('player:dashStarted', ({ input }) => {
