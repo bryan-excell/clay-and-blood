@@ -15,6 +15,9 @@ node_modules
 dist
 dist-ssr
 *.local
+.turbo/
+.wrangler/
+apps/server/.wrangler/
 
 # Editor directories and files
 .vscode/*
