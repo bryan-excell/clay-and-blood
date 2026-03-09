@@ -8,6 +8,7 @@ import {
     STAGE_WIDTH,
     STAGE_HEIGHT,
     PLAYER_RADIUS,
+    PLAYER_SPEED,
     stepPlayerKinematics,
     dashStateFromInput,
     resolvePlayerCollisions,
@@ -18,10 +19,12 @@ import {
     ARROW_MAX_DAMAGE,
     ARROW_MAX_RANGE,
     ARROW_BASE_PENETRATION,
-    FISTS_MELEE_DAMAGE,
-    SWORD_MELEE_DAMAGE_1,
-    SWORD_MELEE_DAMAGE_2,
-    SWORD_MELEE_DAMAGE_3,
+    ARCHETYPE_CONFIG,
+    TEAM_IDS,
+    REACTION_CONFIG,
+    resolveArchetypeConfig,
+    resolveMeleeAttackProfile,
+    PROJECTILE_POISE_DAMAGE,
 } from '@clay-and-blood/shared';
 import {
     phaseInputIntent,
@@ -39,22 +42,33 @@ const PRACTICE_GOLEM_KEY = 'world:golem';
 const PRACTICE_GOLEM_STAGE = 'town-square';
 const PRACTICE_GOLEM_TILE_X = 24;
 const PRACTICE_GOLEM_TILE_Y = 20;
-const PRACTICE_BANDIT_KEY = 'world:bandit_1';
-const PRACTICE_BANDIT_STAGE = 'west-gate';
-const PRACTICE_BANDIT_TILE_X = 6;
-const PRACTICE_BANDIT_TILE_Y = 4;
-const BANDIT_AGGRO_RANGE = 420;
-const BANDIT_LEASH_RANGE = 560;
-const BANDIT_ATTACK_RANGE = 62;
-const BANDIT_ATTACK_DAMAGE = 7;
-const BANDIT_ATTACK_COOLDOWN_MS = 850;
-const BANDIT_HIT_RADIUS = 18;
-const BANDIT_HP_MAX = 75;
-const GOLEM_HIT_RADIUS = 20;
-const GOLEM_HP_MAX = 160;
-const TEAM_PLAYERS = 'players';
-const TEAM_BANDITS = 'bandits';
-const TEAM_NEUTRAL = 'neutral';
+const PRACTICE_ZOMBIE_KEY = 'world:zombie_1';
+const PRACTICE_ZOMBIE_STAGE = 'west-gate';
+const PRACTICE_ZOMBIE_TILE_X = 6;
+const PRACTICE_ZOMBIE_TILE_Y = 4;
+const ZOMBIE_DETECTION_RANGE = ARCHETYPE_CONFIG.zombie.ai.detectionRange;
+const ZOMBIE_LEASH_RANGE = ARCHETYPE_CONFIG.zombie.ai.leashRange;
+const ZOMBIE_ATTACK_RANGE = ARCHETYPE_CONFIG.zombie.ai.attackRange;
+const ZOMBIE_REEL_BACK_MS = ARCHETYPE_CONFIG.zombie.ai.reelBackMs;
+const ZOMBIE_REEL_BACK_DISTANCE = ARCHETYPE_CONFIG.zombie.ai.reelBackDistance;
+const ZOMBIE_WINDUP_MS = ARCHETYPE_CONFIG.zombie.ai.windupMs;
+const ZOMBIE_WINDUP_DISTANCE = ARCHETYPE_CONFIG.zombie.ai.windupDistance;
+const ZOMBIE_RECOVER_MS = ARCHETYPE_CONFIG.zombie.ai.recoverMs;
+const ZOMBIE_SHAMBLE_SPEED = ARCHETYPE_CONFIG.zombie.ai.shambleSpeed;
+const ZOMBIE_CHASE_SPEED = ARCHETYPE_CONFIG.zombie.ai.chaseSpeed;
+const ZOMBIE_SHAMBLE_WALK_MIN_MS = ARCHETYPE_CONFIG.zombie.ai.shambleWalkMinMs;
+const ZOMBIE_SHAMBLE_WALK_MAX_MS = ARCHETYPE_CONFIG.zombie.ai.shambleWalkMaxMs;
+const ZOMBIE_SHAMBLE_PAUSE_MIN_MS = ARCHETYPE_CONFIG.zombie.ai.shamblePauseMinMs;
+const ZOMBIE_SHAMBLE_PAUSE_MAX_MS = ARCHETYPE_CONFIG.zombie.ai.shamblePauseMaxMs;
+const ZOMBIE_HIT_RADIUS = ARCHETYPE_CONFIG.zombie.hitRadius;
+const ZOMBIE_HP_MAX = ARCHETYPE_CONFIG.zombie.hpMax;
+const GOLEM_HIT_RADIUS = ARCHETYPE_CONFIG.golem.hitRadius;
+const GOLEM_HP_MAX = ARCHETYPE_CONFIG.golem.hpMax;
+const FLINCH_DURATION_MS = REACTION_CONFIG.flinchDurationMs;
+const STAGGER_DURATION_MS = REACTION_CONFIG.staggerDurationMs;
+const TEAM_PLAYERS = TEAM_IDS.players;
+const TEAM_ZOMBIES = TEAM_IDS.zombies;
+const TEAM_NEUTRAL = TEAM_IDS.neutral;
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
@@ -204,22 +218,6 @@ function resolveCollisions(x, y, grid) {
     return resolvePlayerCollisions(x, y, grid);
 }
 
-function clampUnit(value) {
-    return Math.max(-1, Math.min(1, value));
-}
-
-function intentFromVector(dx, dy, sprint = false) {
-    const normalizedX = clampUnit(dx);
-    const normalizedY = clampUnit(dy);
-    return {
-        up: normalizedY < -0.1,
-        down: normalizedY > 0.1,
-        left: normalizedX < -0.1,
-        right: normalizedX > 0.1,
-        sprint: !!sprint,
-    };
-}
-
 /**
  * GameRoom – Cloudflare Durable Object
  *
@@ -281,7 +279,7 @@ export class GameRoom {
 
             case MSG.PLAYER_JOIN: {
                 this._ensurePracticeGolem();
-                this._ensurePracticeBandit();
+                this._ensurePracticeZombie();
                 const startGrid = this._getGrid('town-square');
                 const startW = startGrid ? startGrid[0].length : STAGE_WIDTH;
                 const startH = startGrid ? startGrid.length   : STAGE_HEIGHT;
@@ -301,6 +299,7 @@ export class GameRoom {
                     controlledEntityKey: `player:${sessionId}`,
                     returnEntityKey: `player:${sessionId}`,
                     teamId: TEAM_PLAYERS,
+                    poise: this._defaultPoiseForKind('player'),
                 });
 
                 // Ack the join with the caller's session ID
@@ -338,6 +337,8 @@ export class GameRoom {
             case MSG.PLAYER_INPUT: {
                 const player = this.players.get(sessionId);
                 if (!player) break;
+                const playerEntityKey = `player:${sessionId}`;
+                const incapacitated = this._isEntityIncapacitated(playerEntityKey, Date.now());
 
                 // Preserve existing dash state unless a new dash is requested
                 let { dashVx, dashVy, dashTimeLeftMs } = player.motion;
@@ -354,18 +355,18 @@ export class GameRoom {
                 this.players.set(sessionId, {
                     ...player,
                     intent: {
-                        up:     !!data.up,
-                        down:   !!data.down,
-                        left:   !!data.left,
-                        right:  !!data.right,
-                        sprint: !!data.sprint,
+                        up:     !incapacitated && !!data.up,
+                        down:   !incapacitated && !!data.down,
+                        left:   !incapacitated && !!data.left,
+                        right:  !incapacitated && !!data.right,
+                        sprint: !incapacitated && !!data.sprint,
                         moveSpeedMultiplier: Number.isFinite(data.moveSpeedMultiplier)
                             ? Math.max(0, Math.min(1, data.moveSpeedMultiplier))
                             : 1,
-                        attackPushVx: Number.isFinite(data.attackPushVx)
+                        attackPushVx: !incapacitated && Number.isFinite(data.attackPushVx)
                             ? Math.max(-800, Math.min(800, data.attackPushVx))
                             : 0,
-                        attackPushVy: Number.isFinite(data.attackPushVy)
+                        attackPushVy: !incapacitated && Number.isFinite(data.attackPushVy)
                             ? Math.max(-800, Math.min(800, data.attackPushVy))
                             : 0,
                     },
@@ -382,6 +383,7 @@ export class GameRoom {
             case MSG.MELEE_ATTACK: {
                 const player = this.players.get(sessionId);
                 if (!player) break;
+                if (this._isEntityIncapacitated(`player:${sessionId}`, Date.now())) break;
                 const dirX = Number.isFinite(data.dirX) ? data.dirX : 1;
                 const dirY = Number.isFinite(data.dirY) ? data.dirY : 0;
                 const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
@@ -451,6 +453,7 @@ export class GameRoom {
                         teamId: this._defaultTeamForKind(kind),
                         hitRadius: this._defaultHitRadiusForKind(kind),
                         stats: this._defaultStatsForKind(kind),
+                        poise: this._defaultPoiseForKind(kind),
                     };
                     if (DEBUG_WORLD_SYNC && targetEntityKey === PRACTICE_GOLEM_KEY) {
                         console.log('[WorldSync][Server] possess_request created missing golem from request', {
@@ -577,6 +580,7 @@ export class GameRoom {
                         ? prev.hitRadius
                         : this._defaultHitRadiusForKind(kind),
                     stats: prev?.stats ?? this._defaultStatsForKind(kind),
+                    poise: prev?.poise ?? this._defaultPoiseForKind(kind),
                 };
                 this.worldEntities.set(entityKey, next);
                 if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
@@ -598,6 +602,7 @@ export class GameRoom {
             }
 
             case MSG.BULLET_FIRED: {
+                if (this._isEntityIncapacitated(`player:${sessionId}`, Date.now())) break;
                 const { x, y, velocityX, velocityY, levelId,
                         projectileType, chargeRatio, penetration } = data;
                 const source = this._resolveAttackSource(sessionId, levelId);
@@ -612,6 +617,9 @@ export class GameRoom {
                 const damage = normalizedType === 'arrow'
                     ? Math.round(ARROW_MIN_DAMAGE + (ARROW_MAX_DAMAGE - ARROW_MIN_DAMAGE) * ratio)
                     : BULLET_DAMAGE;
+                const poiseDamage = normalizedType === 'arrow'
+                    ? (PROJECTILE_POISE_DAMAGE.arrow ?? 0)
+                    : (PROJECTILE_POISE_DAMAGE.bullet ?? 0);
                 const maxRange = normalizedType === 'arrow' ? ARROW_MAX_RANGE : BULLET_MAX_RANGE;
 
                 if (normalizedType === 'arrow') {
@@ -626,6 +634,7 @@ export class GameRoom {
                         velocityY,
                         levelId: projectileLevelId,
                         damage,
+                        poiseDamage,
                         maxRange,
                         penetration: Number.isFinite(penetration)
                             ? Math.max(0, Math.floor(penetration))
@@ -668,7 +677,7 @@ export class GameRoom {
                     }
 
                     if (hitEntityKey) {
-                        this._applyDamageToEntity(hitEntityKey, damage, sourceEntityKey);
+                        this._applyDamageToEntity(hitEntityKey, damage, sourceEntityKey, null, poiseDamage);
                     }
                     // Relay bullet visuals to other clients.
                     this.#broadcast({
@@ -848,11 +857,12 @@ export class GameRoom {
 
     _runTick() {
         this._phaseExpirePossessions();
+        this._phaseUpdatePoiseAndReactions();
         const inputPhase = this._phaseInputIntent();
         const locomotionPhase = this._phaseLocomotionDash(inputPhase);
         this._phasePhysicsTransform(locomotionPhase);
-        this._phaseBanditAi();
-        this._phaseBanditMovement();
+        this._phaseZombieAi();
+        this._phaseZombieMovement();
         this._phaseProjectiles();
 
         const snapshotPlayers = this._phaseBuildSnapshotPlayers();
@@ -862,7 +872,7 @@ export class GameRoom {
 
     _phaseExpirePossessions() {
         this._ensurePracticeGolem();
-        this._ensurePracticeBandit();
+        this._ensurePracticeZombie();
         const now = Date.now();
         for (const [sessionId, player] of this.players.entries()) {
             const controlledKey = player.controlledEntityKey;
@@ -906,93 +916,165 @@ export class GameRoom {
         return phaseBuildSnapshotPlayers(this.players);
     }
 
-    _phaseBanditAi() {
-        const now = Date.now();
+    _phaseZombieAi() {
         for (const [entityKey, entity] of this.worldEntities.entries()) {
-            if (entity?.kind !== 'bandit') continue;
-            if (!entity.ai) {
-                entity.ai = {
-                    state: 'idle',
-                    targetEntityKey: null,
-                    attackCooldownMs: 0,
-                };
-            }
-            if (!entity.home) {
-                entity.home = {
-                    x: entity.x,
-                    y: entity.y,
-                    levelId: entity.levelId ?? PRACTICE_BANDIT_STAGE,
-                };
-            }
-
-            entity.ai.attackCooldownMs = Math.max(0, (entity.ai.attackCooldownMs ?? 0) - TICK_MS);
-
+            if (entity?.kind !== 'zombie') continue;
             if (entity.controllerSessionId) {
-                entity.ai.state = 'idle';
-                entity.ai.targetEntityKey = null;
+                this.worldEntities.set(entityKey, entity);
+                continue;
+            }
+            if (this._isEntityIncapacitated(entityKey, Date.now())) {
+                entity.intent = this._zombieIdleIntent();
                 this.worldEntities.set(entityKey, entity);
                 continue;
             }
 
-            const target = this._findNearestHostileCombatantInRange(entityKey, BANDIT_AGGRO_RANGE);
-            const targetCombatant = target ? this._getCombatantByEntityKey(target.entityKey) : null;
-            const targetDist = target ? Math.sqrt(target.distSq) : Infinity;
+            if (!entity.home) {
+                entity.home = {
+                    x: entity.x,
+                    y: entity.y,
+                    levelId: entity.levelId ?? PRACTICE_ZOMBIE_STAGE,
+                };
+            }
+
+            if (!entity.ai) {
+                entity.ai = {
+                    state: 'shamble_pause',
+                    stateTimerMs: this._randZombiePauseMs(),
+                    targetEntityKey: null,
+                    shambleDirX: 1,
+                    shambleDirY: 0,
+                    attackDirX: 1,
+                    attackDirY: 0,
+                    distanceBudgetPx: 0,
+                };
+            }
+
+            const ai = entity.ai;
+            ai.stateTimerMs = Math.max(0, (ai.stateTimerMs ?? 0) - TICK_MS);
             const sameLevelAsHome = (entity.levelId ?? null) === (entity.home?.levelId ?? null);
             const homeDx = (entity.home?.x ?? entity.x) - entity.x;
             const homeDy = (entity.home?.y ?? entity.y) - entity.y;
-            const homeDist = Math.sqrt(homeDx * homeDx + homeDy * homeDy);
-            const beyondLeash = !sameLevelAsHome || homeDist > BANDIT_LEASH_RANGE;
+            const homeDist = Math.hypot(homeDx, homeDy);
+            const beyondLeash = !sameLevelAsHome || homeDist > ZOMBIE_LEASH_RANGE;
 
-            let nextState = entity.ai.state ?? 'idle';
-            if (!targetCombatant && nextState !== 'return_home') {
-                nextState = homeDist > 20 ? 'return_home' : 'idle';
-            }
-            if (targetCombatant) {
-                if (beyondLeash) {
-                    nextState = 'return_home';
-                } else if (targetDist <= BANDIT_ATTACK_RANGE) {
-                    nextState = 'attack';
-                } else {
-                    nextState = 'chase';
-                }
-            } else if (homeDist <= 20) {
-                nextState = 'idle';
-            }
+            const nearestHostile = this._findNearestHostileCombatantInRange(entityKey, ZOMBIE_DETECTION_RANGE);
+            const targetCombatant = nearestHostile ? this._getCombatantByEntityKey(nearestHostile.entityKey) : null;
+            ai.targetEntityKey = targetCombatant?.entityKey ?? null;
 
-            entity.ai.state = nextState;
-            entity.ai.targetEntityKey = targetCombatant ? targetCombatant.entityKey : null;
-            entity.intent = {
-                up: false,
-                down: false,
-                left: false,
-                right: false,
-                sprint: false,
-            };
-
-            if (nextState === 'chase' && targetCombatant) {
+            let desiredState = ai.state ?? 'shamble_pause';
+            if (desiredState === 'reel_back' || desiredState === 'windup_drive') {
+                // Keep active attack phases until they finish.
+                desiredState = ai.state;
+            } else if (targetCombatant && !beyondLeash) {
                 const dx = targetCombatant.x - entity.x;
                 const dy = targetCombatant.y - entity.y;
-                const len = Math.hypot(dx, dy) || 1;
-                entity.intent = intentFromVector(dx / len, dy / len, targetDist > 200);
-            } else if (nextState === 'return_home') {
-                const dx = (entity.home?.x ?? entity.x) - entity.x;
-                const dy = (entity.home?.y ?? entity.y) - entity.y;
-                const len = Math.hypot(dx, dy) || 1;
-                entity.intent = intentFromVector(dx / len, dy / len, homeDist > 160);
-            } else if (nextState === 'attack' && targetCombatant && entity.ai.attackCooldownMs <= 0) {
-                this._applyBanditMeleeHit(entityKey, targetCombatant.entityKey, now);
-                entity.ai.attackCooldownMs = BANDIT_ATTACK_COOLDOWN_MS;
+                const dist = Math.hypot(dx, dy);
+                if (dist <= ZOMBIE_ATTACK_RANGE) {
+                    desiredState = 'reel_back';
+                    const n = dist > 0.001 ? 1 / dist : 0;
+                    ai.attackDirX = dist > 0.001 ? dx * n : 1;
+                    ai.attackDirY = dist > 0.001 ? dy * n : 0;
+                } else {
+                    desiredState = 'chase';
+                }
+            } else if (homeDist > 12) {
+                desiredState = 'shamble_walk';
+            } else {
+                desiredState = 'shamble_pause';
+            }
+
+            if (desiredState !== ai.state) {
+                ai.state = desiredState;
+                if (desiredState === 'shamble_pause') {
+                    ai.stateTimerMs = this._randZombiePauseMs();
+                } else if (desiredState === 'shamble_walk') {
+                    ai.stateTimerMs = this._randZombieWalkMs();
+                    if (homeDist > ZOMBIE_LEASH_RANGE * 0.8 && homeDist > 0.001) {
+                        ai.shambleDirX = homeDx / homeDist;
+                        ai.shambleDirY = homeDy / homeDist;
+                    } else {
+                        const angle = Math.random() * Math.PI * 2;
+                        ai.shambleDirX = Math.cos(angle);
+                        ai.shambleDirY = Math.sin(angle);
+                    }
+                } else if (desiredState === 'reel_back') {
+                    ai.stateTimerMs = ZOMBIE_REEL_BACK_MS;
+                    ai.distanceBudgetPx = ZOMBIE_REEL_BACK_DISTANCE;
+                } else if (desiredState === 'windup_drive') {
+                    ai.stateTimerMs = ZOMBIE_WINDUP_MS;
+                    ai.distanceBudgetPx = ZOMBIE_WINDUP_DISTANCE;
+                }
+            }
+
+            entity.intent = this._zombieIdleIntent();
+            if (ai.state === 'shamble_pause') {
+                if (ai.stateTimerMs <= 0) {
+                    ai.state = 'shamble_walk';
+                    ai.stateTimerMs = this._randZombieWalkMs();
+                    if (homeDist > ZOMBIE_LEASH_RANGE * 0.8 && homeDist > 0.001) {
+                        ai.shambleDirX = homeDx / homeDist;
+                        ai.shambleDirY = homeDy / homeDist;
+                    } else {
+                        const angle = Math.random() * Math.PI * 2;
+                        ai.shambleDirX = Math.cos(angle);
+                        ai.shambleDirY = Math.sin(angle);
+                    }
+                }
+            } else if (ai.state === 'shamble_walk') {
+                const dirX = beyondLeash && homeDist > 0.001 ? homeDx / homeDist : ai.shambleDirX;
+                const dirY = beyondLeash && homeDist > 0.001 ? homeDy / homeDist : ai.shambleDirY;
+                entity.intent = this._zombieMoveIntent(dirX, dirY, ZOMBIE_SHAMBLE_SPEED);
+                if (ai.stateTimerMs <= 0) {
+                    ai.state = 'shamble_pause';
+                    ai.stateTimerMs = this._randZombiePauseMs();
+                }
+            } else if (ai.state === 'chase') {
+                if (targetCombatant) {
+                    const dx = targetCombatant.x - entity.x;
+                    const dy = targetCombatant.y - entity.y;
+                    const dist = Math.hypot(dx, dy);
+                    if (dist > 0.001) {
+                        entity.intent = this._zombieMoveIntent(dx / dist, dy / dist, ZOMBIE_CHASE_SPEED);
+                    }
+                }
+            } else if (ai.state === 'reel_back') {
+                const durationMs = Math.max(TICK_MS, ai.stateTimerMs + TICK_MS);
+                const speed = ai.distanceBudgetPx > 0 ? (ai.distanceBudgetPx * 1000) / durationMs : 0;
+                entity.intent = this._zombieMoveIntent(-ai.attackDirX, -ai.attackDirY, speed);
+                ai.distanceBudgetPx = Math.max(0, ai.distanceBudgetPx - (speed * TICK_MS / 1000));
+                if (ai.stateTimerMs <= 0) {
+                    ai.state = 'windup_drive';
+                    ai.stateTimerMs = ZOMBIE_WINDUP_MS;
+                    ai.distanceBudgetPx = ZOMBIE_WINDUP_DISTANCE;
+                }
+            } else if (ai.state === 'windup_drive') {
+                const durationMs = Math.max(TICK_MS, ai.stateTimerMs + TICK_MS);
+                const speed = ai.distanceBudgetPx > 0 ? (ai.distanceBudgetPx * 1000) / durationMs : 0;
+                entity.intent = this._zombieMoveIntent(ai.attackDirX, ai.attackDirY, speed);
+                ai.distanceBudgetPx = Math.max(0, ai.distanceBudgetPx - (speed * TICK_MS / 1000));
+                if (ai.stateTimerMs <= 0) {
+                    this._applyWorldEntityMeleeAttack(entityKey, {
+                        weaponId: 'zombie_strike',
+                        phaseIndex: 0,
+                        levelId: entity.levelId ?? null,
+                        dirX: ai.attackDirX,
+                        dirY: ai.attackDirY,
+                    });
+                    ai.state = 'shamble_pause';
+                    ai.stateTimerMs = ZOMBIE_RECOVER_MS;
+                }
             }
 
             this.worldEntities.set(entityKey, entity);
         }
     }
 
-    _phaseBanditMovement() {
+    _phaseZombieMovement() {
         for (const [entityKey, entity] of this.worldEntities.entries()) {
-            if (entity?.kind !== 'bandit') continue;
+            if (entity?.kind !== 'zombie') continue;
             if (entity.controllerSessionId) continue;
-            const grid = this._getGrid(entity.levelId ?? PRACTICE_BANDIT_STAGE);
+            const grid = this._getGrid(entity.levelId ?? PRACTICE_ZOMBIE_STAGE);
             const stepped = stepPlayerKinematics(
                 {
                     x: entity.x,
@@ -1001,7 +1083,7 @@ export class GameRoom {
                     dashVy: entity.motion?.dashVy ?? 0,
                     dashTimeLeftMs: entity.motion?.dashTimeLeftMs ?? 0,
                 },
-                entity.intent ?? { up: false, down: false, left: false, right: false, sprint: false },
+                entity.intent ?? this._zombieIdleIntent(),
                 TICK_MS,
                 grid
             );
@@ -1028,6 +1110,7 @@ export class GameRoom {
         velocityY,
         levelId,
         damage,
+        poiseDamage = 1,
         maxRange,
         penetration = ARROW_BASE_PENETRATION,
     }) {
@@ -1049,6 +1132,7 @@ export class GameRoom {
             velocityY,
             levelId: typeof levelId === 'string' ? levelId : null,
             damage,
+            poiseDamage: Number.isFinite(poiseDamage) ? Math.max(0, poiseDamage) : 0,
             remainingRange: maxRange,
             penetrationRemaining: Math.max(0, Math.floor(penetration)),
             hitEntities: new Set(),
@@ -1142,7 +1226,9 @@ export class GameRoom {
                     this._applyDamageToEntity(
                         hitEntityKey,
                         projectile.damage,
-                        projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`
+                        projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`,
+                        null,
+                        projectile.poiseDamage ?? 0
                     );
                 }
 
@@ -1300,6 +1386,7 @@ export class GameRoom {
                 teamId: existing?.teamId ?? TEAM_PLAYERS,
                 hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : GOLEM_HIT_RADIUS,
                 stats: existing?.stats ?? { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
+                poise: existing?.poise ?? this._defaultPoiseForKind('golem'),
             });
             return;
         }
@@ -1316,44 +1403,52 @@ export class GameRoom {
             teamId: TEAM_PLAYERS,
             hitRadius: GOLEM_HIT_RADIUS,
             stats: { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
+            poise: this._defaultPoiseForKind('golem'),
         });
         if (DEBUG_WORLD_SYNC) {
             console.log('[WorldSync][Server] ensurePracticeGolem created', { x, y, levelId: PRACTICE_GOLEM_STAGE });
         }
     }
 
-    _ensurePracticeBandit() {
-        if (this.worldEntities.has(PRACTICE_BANDIT_KEY)) {
-            const existing = this.worldEntities.get(PRACTICE_BANDIT_KEY);
-            this.worldEntities.set(PRACTICE_BANDIT_KEY, {
+    _ensurePracticeZombie() {
+        if (this.worldEntities.has(PRACTICE_ZOMBIE_KEY)) {
+            const existing = this.worldEntities.get(PRACTICE_ZOMBIE_KEY);
+            this.worldEntities.set(PRACTICE_ZOMBIE_KEY, {
                 ...existing,
-                kind: existing?.kind ?? 'bandit',
-                teamId: existing?.teamId ?? TEAM_BANDITS,
-                hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : BANDIT_HIT_RADIUS,
-                stats: existing?.stats ?? { hp: BANDIT_HP_MAX, hpMax: BANDIT_HP_MAX },
+                kind: existing?.kind ?? 'zombie',
+                teamId: existing?.teamId ?? TEAM_ZOMBIES,
+                hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : ZOMBIE_HIT_RADIUS,
+                stats: existing?.stats ?? { hp: ZOMBIE_HP_MAX, hpMax: ZOMBIE_HP_MAX },
+                poise: existing?.poise ?? this._defaultPoiseForKind('zombie'),
             });
             return;
         }
-        const x = PRACTICE_BANDIT_TILE_X * TILE_SIZE + TILE_SIZE / 2;
-        const y = PRACTICE_BANDIT_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
-        this.worldEntities.set(PRACTICE_BANDIT_KEY, {
-            entityKey: PRACTICE_BANDIT_KEY,
-            kind: 'bandit',
+        const x = PRACTICE_ZOMBIE_TILE_X * TILE_SIZE + TILE_SIZE / 2;
+        const y = PRACTICE_ZOMBIE_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
+        this.worldEntities.set(PRACTICE_ZOMBIE_KEY, {
+            entityKey: PRACTICE_ZOMBIE_KEY,
+            kind: 'zombie',
             x,
             y,
-            levelId: PRACTICE_BANDIT_STAGE,
+            levelId: PRACTICE_ZOMBIE_STAGE,
             controllerSessionId: null,
             possessionEndAtMs: null,
-            teamId: TEAM_BANDITS,
-            hitRadius: BANDIT_HIT_RADIUS,
-            intent: { up: false, down: false, left: false, right: false, sprint: false },
+            teamId: TEAM_ZOMBIES,
+            hitRadius: ZOMBIE_HIT_RADIUS,
+            intent: this._zombieIdleIntent(),
             motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-            stats: { hp: BANDIT_HP_MAX, hpMax: BANDIT_HP_MAX },
-            home: { x, y, levelId: PRACTICE_BANDIT_STAGE },
+            stats: { hp: ZOMBIE_HP_MAX, hpMax: ZOMBIE_HP_MAX },
+            poise: this._defaultPoiseForKind('zombie'),
+            home: { x, y, levelId: PRACTICE_ZOMBIE_STAGE },
             ai: {
-                state: 'idle',
+                state: 'shamble_pause',
+                stateTimerMs: this._randZombiePauseMs(),
                 targetEntityKey: null,
-                attackCooldownMs: 0,
+                shambleDirX: 1,
+                shambleDirY: 0,
+                attackDirX: 1,
+                attackDirY: 0,
+                distanceBudgetPx: 0,
             },
         });
     }
@@ -1379,25 +1474,38 @@ export class GameRoom {
     }
 
     _resolveMeleeProfile(weaponId, phaseIndex) {
-        if (weaponId === 'sword') {
-            const idx = Math.max(0, Math.min(2, Number.isFinite(phaseIndex) ? Math.floor(phaseIndex) : 0));
-            const swordProfiles = [
-                { damage: SWORD_MELEE_DAMAGE_1, radius: 58, arc: Math.PI * 0.62 },
-                { damage: SWORD_MELEE_DAMAGE_2, radius: 74, arc: Math.PI * 0.72 },
-                { damage: SWORD_MELEE_DAMAGE_3, radius: 102, arc: Math.PI * 0.88 },
-            ];
-            return swordProfiles[idx];
-        }
-
-        return { damage: FISTS_MELEE_DAMAGE, radius: 46, arc: Math.PI * 0.56 };
+        return resolveMeleeAttackProfile(weaponId, phaseIndex);
     }
 
     _applyPlayerMeleeAttack(sessionId, { weaponId, phaseIndex, levelId, dirX, dirY }) {
         const source = this._resolveAttackSource(sessionId, levelId);
         if (!source) return;
+        this._applyMeleeAttackFromSource(source, {
+            sessionId,
+            weaponId,
+            phaseIndex,
+            levelId,
+            dirX,
+            dirY,
+        });
+    }
+
+    _applyWorldEntityMeleeAttack(attackerEntityKey, { weaponId, phaseIndex, levelId, dirX, dirY }) {
+        const source = this._getCombatantByEntityKey(attackerEntityKey);
+        if (!source) return;
+        this._applyMeleeAttackFromSource(source, {
+            sessionId: null,
+            weaponId,
+            phaseIndex,
+            levelId,
+            dirX,
+            dirY,
+        });
+    }
+
+    _applyMeleeAttackFromSource(source, { sessionId = null, weaponId, phaseIndex, levelId, dirX, dirY }) {
         const originX = source.x;
         const originY = source.y;
-        const sourceTeamId = source.teamId;
         const sourceLevelId = source.levelId ?? levelId;
         if (!Number.isFinite(originX) || !Number.isFinite(originY)) return;
 
@@ -1414,13 +1522,16 @@ export class GameRoom {
         });
 
         const profile = this._resolveMeleeProfile(weaponId, phaseIndex);
+        if ((profile.hyperArmorMs ?? 0) > 0) {
+            this._setEntityHyperArmor(source.entityKey, profile.hyperArmorMs);
+        }
         const radiusSq = profile.radius * profile.radius;
         const minDot = Math.cos(profile.arc / 2);
 
         const candidates = this._listDamageableCombatantsInLevel(sourceLevelId);
         for (const target of candidates) {
             if (target.entityKey === source.entityKey) continue;
-            if (!this._canDamage(sourceTeamId, target.teamId)) continue;
+            if (!this._canDamage(source.teamId, target.teamId)) continue;
 
             const dx = target.x - originX;
             const dy = target.y - originY;
@@ -1434,32 +1545,53 @@ export class GameRoom {
             }
             if (dot < minDot) continue;
 
-            this._applyDamageToEntity(target.entityKey, profile.damage, source.entityKey);
+            this._applyDamageToEntity(target.entityKey, profile.damage, source.entityKey, null, profile.poiseDamage ?? 0);
         }
     }
 
-    _applyBanditMeleeHit(attackerEntityKey, victimEntityKey, nowMs) {
-        const attacker = this._getCombatantByEntityKey(attackerEntityKey);
-        const victim = this._getCombatantByEntityKey(victimEntityKey);
-        if (attacker && victim) {
-            const dx = victim.x - attacker.x;
-            const dy = victim.y - attacker.y;
-            const len = Math.hypot(dx, dy);
-            const dirX = len > 0.001 ? dx / len : 1;
-            const dirY = len > 0.001 ? dy / len : 0;
-            this._broadcastMeleeAttack({
-                sessionId: null,
-                attackerEntityKey,
-                weaponId: 'unarmed',
-                phaseIndex: 0,
-                levelId: attacker.levelId ?? null,
-                originX: attacker.x,
-                originY: attacker.y,
-                dirX,
-                dirY,
-            });
-        }
-        this._applyDamageToEntity(victimEntityKey, BANDIT_ATTACK_DAMAGE, attackerEntityKey, nowMs);
+    _normalizeMeleeWeaponId(weaponId) {
+        if (weaponId === 'sword') return 'sword';
+        if (weaponId === 'zombie_strike') return 'zombie_strike';
+        return 'unarmed';
+    }
+
+    _randZombieWalkMs() {
+        return ZOMBIE_SHAMBLE_WALK_MIN_MS + (Math.random() * (ZOMBIE_SHAMBLE_WALK_MAX_MS - ZOMBIE_SHAMBLE_WALK_MIN_MS));
+    }
+
+    _randZombiePauseMs() {
+        return ZOMBIE_SHAMBLE_PAUSE_MIN_MS + (Math.random() * (ZOMBIE_SHAMBLE_PAUSE_MAX_MS - ZOMBIE_SHAMBLE_PAUSE_MIN_MS));
+    }
+
+    _zombieIdleIntent() {
+        return {
+            up: false,
+            down: false,
+            left: false,
+            right: false,
+            sprint: false,
+            moveSpeedMultiplier: 0,
+            attackPushVx: 0,
+            attackPushVy: 0,
+        };
+    }
+
+    _zombieMoveIntent(dirX, dirY, speedPxPerSec) {
+        const nx = Number.isFinite(dirX) ? dirX : 0;
+        const ny = Number.isFinite(dirY) ? dirY : 0;
+        const moveScale = Number.isFinite(speedPxPerSec) && speedPxPerSec > 0
+            ? speedPxPerSec / PLAYER_SPEED
+            : 0;
+        return {
+            up: ny < -0.0001,
+            down: ny > 0.0001,
+            left: nx < -0.0001,
+            right: nx > 0.0001,
+            sprint: false,
+            moveSpeedMultiplier: moveScale,
+            attackPushVx: 0,
+            attackPushVy: 0,
+        };
     }
 
     _broadcastMeleeAttack({
@@ -1477,7 +1609,7 @@ export class GameRoom {
             type: MSG.MELEE_ATTACK,
             sessionId: typeof sessionId === 'string' ? sessionId : null,
             attackerEntityKey: typeof attackerEntityKey === 'string' ? attackerEntityKey : null,
-            weaponId: weaponId === 'sword' ? 'sword' : 'unarmed',
+            weaponId: this._normalizeMeleeWeaponId(weaponId),
             phaseIndex: Number.isFinite(phaseIndex) ? Math.max(0, Math.floor(phaseIndex)) : 0,
             levelId: typeof levelId === 'string' ? levelId : null,
             originX: Number.isFinite(originX) ? originX : null,
@@ -1543,7 +1675,7 @@ export class GameRoom {
         });
     }
 
-    _applyDamageToEntity(targetEntityKey, damage, attackerEntityKey = null, timestamp = null) {
+    _applyDamageToEntity(targetEntityKey, damage, attackerEntityKey = null, timestamp = null, poiseDamage = 0) {
         if (typeof targetEntityKey !== 'string') return;
         if (!Number.isFinite(damage) || damage <= 0) return;
         if (attackerEntityKey && targetEntityKey === attackerEntityKey) return;
@@ -1551,6 +1683,9 @@ export class GameRoom {
         const attackerTeamId = this._getEntityTeamId(attackerEntityKey);
         const targetTeamId = this._getEntityTeamId(targetEntityKey);
         if (!this._canDamage(attackerTeamId, targetTeamId)) return;
+
+        const nowMs = Date.now();
+        this._applyPoiseDamageToEntity(targetEntityKey, poiseDamage, attackerEntityKey, nowMs);
 
         if (targetEntityKey.startsWith('player:')) {
             const victimSessionId = targetEntityKey.slice('player:'.length);
@@ -1562,28 +1697,207 @@ export class GameRoom {
         }
     }
 
+    _defaultPoiseForKind(kind) {
+        const archetype = resolveArchetypeConfig(kind) ?? resolveArchetypeConfig('player');
+        const poiseCfg = archetype?.poise ?? resolveArchetypeConfig('player')?.poise;
+        return {
+            current: poiseCfg?.max ?? 0,
+            max: poiseCfg?.max ?? 0,
+            flinchThreshold: poiseCfg?.flinchThreshold ?? 0,
+            regenDelayMs: poiseCfg?.regenDelayMs ?? 0,
+            regenPerSec: poiseCfg?.regenPerSec ?? 0,
+            lastDamageAtMs: 0,
+            flinchEndAtMs: 0,
+            staggerEndAtMs: 0,
+            hyperArmorUntilMs: 0,
+        };
+    }
+
+    _getEntityPoiseState(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            return this.players.get(sid)?.poise ?? null;
+        }
+        if (entityKey.startsWith('world:')) {
+            return this.worldEntities.get(entityKey)?.poise ?? null;
+        }
+        return null;
+    }
+
+    _setEntityPoiseState(entityKey, poise) {
+        if (!poise || typeof entityKey !== 'string') return;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            const player = this.players.get(sid);
+            if (!player) return;
+            this.players.set(sid, { ...player, poise });
+            return;
+        }
+        if (entityKey.startsWith('world:')) {
+            const world = this.worldEntities.get(entityKey);
+            if (!world) return;
+            this.worldEntities.set(entityKey, { ...world, poise });
+        }
+    }
+
+    _setEntityHyperArmor(entityKey, durationMs) {
+        const poise = this._getEntityPoiseState(entityKey);
+        if (!poise || !Number.isFinite(durationMs) || durationMs <= 0) return;
+        const nowMs = Date.now();
+        poise.hyperArmorUntilMs = Math.max(poise.hyperArmorUntilMs ?? 0, nowMs + durationMs);
+        this._setEntityPoiseState(entityKey, poise);
+    }
+
+    _emitEntityReaction(type, entityKey, durationMs, levelId = null) {
+        if (!entityKey) return;
+        if (type === 'flinch') {
+            this.#broadcastAll({
+                type: MSG.ENTITY_FLINCHED,
+                entityKey,
+                durationMs: Number.isFinite(durationMs) ? durationMs : FLINCH_DURATION_MS,
+                levelId: typeof levelId === 'string' ? levelId : null,
+            });
+            return;
+        }
+        this.#broadcastAll({
+            type: MSG.ENTITY_STAGGERED,
+            entityKey,
+            durationMs: Number.isFinite(durationMs) ? durationMs : STAGGER_DURATION_MS,
+            levelId: typeof levelId === 'string' ? levelId : null,
+        });
+    }
+
+    _cancelEntityActions(entityKey) {
+        if (typeof entityKey !== 'string') return;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            const player = this.players.get(sid);
+            if (!player) return;
+            this.players.set(sid, {
+                ...player,
+                intent: {
+                    up: false, down: false, left: false, right: false, sprint: false,
+                    moveSpeedMultiplier: 0, attackPushVx: 0, attackPushVy: 0,
+                },
+                motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+            });
+            return;
+        }
+        if (entityKey.startsWith('world:')) {
+            const world = this.worldEntities.get(entityKey);
+            if (!world) return;
+            const next = {
+                ...world,
+                intent: this._zombieIdleIntent(),
+                motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+            };
+            if (next.kind === 'zombie' && next.ai) {
+                next.ai = {
+                    ...next.ai,
+                    state: 'shamble_pause',
+                    stateTimerMs: this._randZombiePauseMs(),
+                    targetEntityKey: null,
+                    distanceBudgetPx: 0,
+                };
+            }
+            this.worldEntities.set(entityKey, next);
+        }
+    }
+
+    _isEntityIncapacitated(entityKey, nowMs = Date.now()) {
+        const poise = this._getEntityPoiseState(entityKey);
+        if (!poise) return false;
+        return (poise.staggerEndAtMs ?? 0) > nowMs || (poise.flinchEndAtMs ?? 0) > nowMs;
+    }
+
+    _applyPoiseDamageToEntity(targetEntityKey, poiseDamage, attackerEntityKey = null, nowMs = Date.now()) {
+        if (!Number.isFinite(poiseDamage) || poiseDamage <= 0) return;
+        const poise = this._getEntityPoiseState(targetEntityKey);
+        if (!poise) return;
+
+        poise.current = Math.max(0, (poise.current ?? poise.max ?? 0) - poiseDamage);
+        poise.lastDamageAtMs = nowMs;
+        const levelId = this._getCombatantByEntityKey(targetEntityKey)?.levelId ?? null;
+
+        if (poise.current <= 0) {
+            const alreadyStaggered = (poise.staggerEndAtMs ?? 0) > nowMs;
+            poise.current = 0;
+            poise.staggerEndAtMs = Math.max(poise.staggerEndAtMs ?? 0, nowMs + STAGGER_DURATION_MS);
+            poise.flinchEndAtMs = Math.max(poise.flinchEndAtMs ?? 0, poise.staggerEndAtMs);
+            this._setEntityPoiseState(targetEntityKey, poise);
+            this._cancelEntityActions(targetEntityKey);
+            if (!alreadyStaggered) {
+                this._emitEntityReaction('stagger', targetEntityKey, STAGGER_DURATION_MS, levelId);
+            }
+            return;
+        }
+
+        const hyperArmorActive = (poise.hyperArmorUntilMs ?? 0) > nowMs;
+        if (!hyperArmorActive && poiseDamage >= (poise.flinchThreshold ?? 0)) {
+            poise.flinchEndAtMs = Math.max(poise.flinchEndAtMs ?? 0, nowMs + FLINCH_DURATION_MS);
+            this._setEntityPoiseState(targetEntityKey, poise);
+            this._cancelEntityActions(targetEntityKey);
+            this._emitEntityReaction('flinch', targetEntityKey, FLINCH_DURATION_MS, levelId);
+            return;
+        }
+
+        this._setEntityPoiseState(targetEntityKey, poise);
+    }
+
+    _phaseUpdatePoiseAndReactions() {
+        const nowMs = Date.now();
+        for (const [sid, player] of this.players.entries()) {
+            const poise = player?.poise ?? this._defaultPoiseForKind('player');
+            if ((poise.staggerEndAtMs ?? 0) <= nowMs && poise.current <= 0) {
+                poise.current = poise.max;
+                poise.staggerEndAtMs = 0;
+            }
+            if ((poise.lastDamageAtMs ?? 0) + (poise.regenDelayMs ?? 0) <= nowMs &&
+                (poise.staggerEndAtMs ?? 0) <= nowMs &&
+                poise.current < poise.max) {
+                poise.current = Math.min(poise.max, poise.current + (poise.regenPerSec * (TICK_MS / 1000)));
+            }
+            this.players.set(sid, { ...player, poise });
+        }
+
+        for (const [entityKey, world] of this.worldEntities.entries()) {
+            const kind = world?.kind ?? null;
+            const poise = world?.poise ?? this._defaultPoiseForKind(kind);
+            if ((poise.staggerEndAtMs ?? 0) <= nowMs && poise.current <= 0) {
+                poise.current = poise.max;
+                poise.staggerEndAtMs = 0;
+            }
+            if ((poise.lastDamageAtMs ?? 0) + (poise.regenDelayMs ?? 0) <= nowMs &&
+                (poise.staggerEndAtMs ?? 0) <= nowMs &&
+                poise.current < poise.max) {
+                poise.current = Math.min(poise.max, poise.current + (poise.regenPerSec * (TICK_MS / 1000)));
+            }
+            this.worldEntities.set(entityKey, { ...world, poise });
+        }
+    }
+
     _defaultTeamForKind(kind) {
-        if (kind === 'bandit') return TEAM_BANDITS;
-        if (kind === 'golem' || kind === 'player') return TEAM_PLAYERS;
-        return TEAM_NEUTRAL;
+        const archetype = resolveArchetypeConfig(kind);
+        return archetype?.teamId ?? TEAM_NEUTRAL;
     }
 
     _defaultHitRadiusForKind(kind) {
-        if (kind === 'bandit') return BANDIT_HIT_RADIUS;
-        if (kind === 'golem') return GOLEM_HIT_RADIUS;
-        if (kind === 'player') return PLAYER_RADIUS;
-        return PLAYER_RADIUS;
+        const archetype = resolveArchetypeConfig(kind);
+        return Number.isFinite(archetype?.hitRadius) ? archetype.hitRadius : PLAYER_RADIUS;
     }
 
     _defaultStatsForKind(kind) {
-        if (kind === 'bandit') return { hp: BANDIT_HP_MAX, hpMax: BANDIT_HP_MAX };
-        if (kind === 'golem') return { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX };
+        const archetype = resolveArchetypeConfig(kind);
+        if (Number.isFinite(archetype?.hpMax) && archetype.hpMax > 0) {
+            return { hp: archetype.hpMax, hpMax: archetype.hpMax };
+        }
         return { hp: 0, hpMax: 0 };
     }
 
     _inferWorldKindFromEntityKey(entityKey) {
         if (entityKey === PRACTICE_GOLEM_KEY) return 'golem';
-        if (entityKey === PRACTICE_BANDIT_KEY) return 'bandit';
+        if (entityKey === PRACTICE_ZOMBIE_KEY) return 'zombie';
         return null;
     }
 

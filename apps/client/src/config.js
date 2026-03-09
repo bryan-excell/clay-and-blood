@@ -20,31 +20,23 @@ export const BOW_FULL_CHARGE_MS = 500; // ms to reach full charge
 export const ARROW_MAX_RANGE = 1000;
 export const ARROW_PENETRATION = 0;
 
-// Melee timing defaults
-export const SWORD_QUEUE_GRACE_MS = 120;
-export const SWORD_SWING_1_WINDUP_MS = 200;
-export const SWORD_SWING_1_ACTIVE_MS = 100;
-export const SWORD_SWING_2_WINDUP_MS = 200;
-export const SWORD_SWING_2_ACTIVE_MS = 100;
-export const SWORD_SWING_3_WINDUP_MS = 300;
-export const SWORD_SWING_3_ACTIVE_MS = 500;
-export const SWORD_FINISH_LOCKOUT_MS = 140; // short recovery after swing 3 before combo can restart
-
-export const FISTS_SWING_WINDUP_MS = 100;
-export const FISTS_SWING_ACTIVE_MS = 100;
-export const FISTS_QUEUE_GRACE_MS = 120;
-export const FISTS_HIT_DAMAGE = 4;
-export const SWORD_HIT_DAMAGE_1 = 6;
-export const SWORD_HIT_DAMAGE_2 = 6;
-export const SWORD_HIT_DAMAGE_3 = 10;
 export const GAME_FONT_FAMILY = '"Libre Baskerville", Georgia, serif';
 
 // Attack movement feel
 export const ATTACK_MOVE_SPEED_MULTIPLIER = 0.25;
-export const SWORD_SWING_1_STEP_DISTANCE = 20; // px traveled during windup
-export const SWORD_SWING_2_STEP_DISTANCE = 24;
-export const SWORD_SWING_3_STEP_DISTANCE = 34;
-export const FISTS_SWING_STEP_DISTANCE = 12;
+
+// Zombie AI behaviour
+export const ZOMBIE_SPEED = 65;              // px/s while shambling
+export const ZOMBIE_CHASE_SPEED = 80;        // px/s while chasing
+export const ZOMBIE_DETECTION_RADIUS = 140;  // world-unit sight radius
+export const ZOMBIE_LEASH_RADIUS = 300;      // max dist from spawn before heading home
+export const ZOMBIE_ATTACK_RANGE = 65;       // px to enter reel-back
+export const ZOMBIE_REEL_BACK_MS = 500;      // ms of backward telegraph
+export const ZOMBIE_REEL_BACK_DISTANCE = 32; // px moved backward during reel-back
+export const ZOMBIE_SHAMBLE_WALK_MIN_MS = 1500;
+export const ZOMBIE_SHAMBLE_WALK_MAX_MS = 2500;
+export const ZOMBIE_SHAMBLE_PAUSE_MIN_MS = 800;
+export const ZOMBIE_SHAMBLE_PAUSE_MAX_MS = 1800;
 
 // Colors — dark forest / dungeon palette
 export const COLOR_SOLID = 0x0d120a;   // Near-black forest void

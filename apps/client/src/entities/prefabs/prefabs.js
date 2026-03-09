@@ -6,7 +6,7 @@
 // Character prefabs
 export { createPlayer } from './player.js';
 export { createGolem } from './golem.js';
-export { createBandit } from './bandit.js';
+export { createZombie } from './zombie.js';
 
 // Interactive object prefabs
 export { createExit } from './exit.js';

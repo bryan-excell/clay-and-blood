@@ -4,6 +4,7 @@ import { networkManager } from '../core/NetworkManager.js';
 import { gameState } from '../core/GameState.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { WEAPONS, SPELLS } from '../data/ItemRegistry.js';
+import { resolveMeleeWeaponConfig } from '@clay-and-blood/shared';
 import {
     PLAYER_RADIUS,
     ARROW_MIN_SPEED,
@@ -11,26 +12,7 @@ import {
     ARROW_PENETRATION,
     BOW_MIN_CHARGE_MS,
     BOW_FULL_CHARGE_MS,
-    SWORD_QUEUE_GRACE_MS,
-    SWORD_SWING_1_WINDUP_MS,
-    SWORD_SWING_1_ACTIVE_MS,
-    SWORD_SWING_2_WINDUP_MS,
-    SWORD_SWING_2_ACTIVE_MS,
-    SWORD_SWING_3_WINDUP_MS,
-    SWORD_SWING_3_ACTIVE_MS,
-    SWORD_HIT_DAMAGE_1,
-    SWORD_HIT_DAMAGE_2,
-    SWORD_HIT_DAMAGE_3,
-    FISTS_SWING_WINDUP_MS,
-    FISTS_SWING_ACTIVE_MS,
-    FISTS_QUEUE_GRACE_MS,
-    FISTS_HIT_DAMAGE,
     ATTACK_MOVE_SPEED_MULTIPLIER,
-    SWORD_SWING_1_STEP_DISTANCE,
-    SWORD_SWING_2_STEP_DISTANCE,
-    SWORD_SWING_3_STEP_DISTANCE,
-    SWORD_FINISH_LOCKOUT_MS,
-    FISTS_SWING_STEP_DISTANCE,
 } from '../config.js';
 
 class BowWeaponStateMachine {
@@ -226,41 +208,58 @@ export class PlayerCombatComponent extends Component {
 
         this.chargeBarGfx = null;
         this.activeWeaponId = null;
+        const swordCfg = resolveMeleeWeaponConfig('sword');
+        const sword1 = swordCfg.phases[0];
+        const sword2 = swordCfg.phases[1];
+        const sword3 = swordCfg.phases[2];
+        const unarmedCfg = resolveMeleeWeaponConfig('unarmed');
+        const fists = unarmedCfg.phases[0];
+        const zombieCfg = resolveMeleeWeaponConfig('zombie_strike');
+        const zombieStrike = zombieCfg.phases[0];
         this.weaponStateMachines = {
             bow: new BowWeaponStateMachine(this),
             sword: new ComboWeaponStateMachine(this, [
                 {
-                    windupMs: SWORD_SWING_1_WINDUP_MS,
-                    activeMs: SWORD_SWING_1_ACTIVE_MS,
-                    stepDistance: SWORD_SWING_1_STEP_DISTANCE,
-                    damage: SWORD_HIT_DAMAGE_1,
-                    attackSpec: { radius: 58, arc: Math.PI * 0.62, color: 0xd2d8ff, alpha: 0.78 },
+                    windupMs: sword1.windupMs,
+                    activeMs: sword1.activeMs,
+                    stepDistance: sword1.stepDistance,
+                    damage: sword1.damage,
+                    attackSpec: { radius: sword1.radius, arc: sword1.arc, color: sword1.visual.color, alpha: sword1.visual.alpha },
                 },
                 {
-                    windupMs: SWORD_SWING_2_WINDUP_MS,
-                    activeMs: SWORD_SWING_2_ACTIVE_MS,
-                    stepDistance: SWORD_SWING_2_STEP_DISTANCE,
-                    damage: SWORD_HIT_DAMAGE_2,
-                    attackSpec: { radius: 74, arc: Math.PI * 0.72, color: 0xc4ceff, alpha: 0.8 },
+                    windupMs: sword2.windupMs,
+                    activeMs: sword2.activeMs,
+                    stepDistance: sword2.stepDistance,
+                    damage: sword2.damage,
+                    attackSpec: { radius: sword2.radius, arc: sword2.arc, color: sword2.visual.color, alpha: sword2.visual.alpha },
                 },
                 {
-                    windupMs: SWORD_SWING_3_WINDUP_MS,
-                    activeMs: SWORD_SWING_3_ACTIVE_MS,
-                    stepDistance: SWORD_SWING_3_STEP_DISTANCE,
-                    finishLockoutMs: SWORD_FINISH_LOCKOUT_MS,
-                    damage: SWORD_HIT_DAMAGE_3,
-                    attackSpec: { radius: 102, arc: Math.PI * 0.88, color: 0xb8c2ff, alpha: 0.84 },
+                    windupMs: sword3.windupMs,
+                    activeMs: sword3.activeMs,
+                    stepDistance: sword3.stepDistance,
+                    finishLockoutMs: sword3.finishLockoutMs,
+                    damage: sword3.damage,
+                    attackSpec: { radius: sword3.radius, arc: sword3.arc, color: sword3.visual.color, alpha: sword3.visual.alpha },
                 },
-            ], SWORD_QUEUE_GRACE_MS, 'sword'),
+            ], swordCfg.queueGraceMs, 'sword'),
             unarmed: new ComboWeaponStateMachine(this, [
                 {
-                    windupMs: FISTS_SWING_WINDUP_MS,
-                    activeMs: FISTS_SWING_ACTIVE_MS,
-                    stepDistance: FISTS_SWING_STEP_DISTANCE,
-                    damage: FISTS_HIT_DAMAGE,
-                    attackSpec: { radius: 46, arc: Math.PI * 0.56, color: 0xff9b47, alpha: 0.85 },
+                    windupMs: fists.windupMs,
+                    activeMs: fists.activeMs,
+                    stepDistance: fists.stepDistance,
+                    damage: fists.damage,
+                    attackSpec: { radius: fists.radius, arc: fists.arc, color: fists.visual.color, alpha: fists.visual.alpha },
                 },
-            ], FISTS_QUEUE_GRACE_MS, 'unarmed'),
+            ], unarmedCfg.queueGraceMs, 'unarmed'),
+            zombie_strike: new ComboWeaponStateMachine(this, [
+                {
+                    windupMs: zombieStrike.windupMs,
+                    activeMs: zombieStrike.activeMs,
+                    stepDistance: zombieStrike.stepDistance,
+                    damage: zombieStrike.damage,
+                    attackSpec: { radius: zombieStrike.radius, arc: zombieStrike.arc, color: zombieStrike.visual.color, alpha: zombieStrike.visual.alpha },
+                },
+            ], zombieCfg.queueGraceMs, 'zombie_strike'),
         };
 
         this._unsubscribeControlChanged = null;
@@ -431,6 +430,25 @@ export class PlayerCombatComponent extends Component {
     getMovementInfluence() {
         const machine = this._getActiveWeaponStateMachine();
         return machine?.getMovementInfluence?.() ?? null;
+    }
+
+    /** Returns true when the active weapon state machine is fully idle (no attack in flight). */
+    isWeaponIdle() {
+        const machine = this._getActiveWeaponStateMachine();
+        return !machine || machine.phase === 'idle' || machine.phase === undefined;
+    }
+
+    forceInterrupt() {
+        this._resetAllWeaponStateMachines();
+        this._destroyChargeBar();
+        const intent = this.entity.getComponent('intent');
+        if (intent) {
+            intent.wantsAttackPrimary = false;
+            intent.wantsAttackSecondary = false;
+            intent.attackPrimaryHeld = false;
+            intent.attackSecondaryHeld = false;
+            intent.clearTransient();
+        }
     }
 
     _spawnMeleeArc({ radius, arc, color, alpha }, activeDurationMs, attackMeta = null) {

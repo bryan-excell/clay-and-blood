@@ -18,16 +18,13 @@ import {
     GAME_FONT_FAMILY,
     PLAYER_RADIUS,
     TILE_SIZE,
-    SWORD_SWING_1_ACTIVE_MS,
-    SWORD_SWING_2_ACTIVE_MS,
-    SWORD_SWING_3_ACTIVE_MS,
-    FISTS_SWING_ACTIVE_MS,
 } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
 import {
     getExitDestination,
     dashStateFromInput,
     stepPlayerKinematics,
+    resolveMeleeAttackProfile,
 } from '@clay-and-blood/shared';
 
 // ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
@@ -69,6 +66,7 @@ export class GameScene extends Phaser.Scene {
         this._worldEntityStateCache = new Map(); // entityKey -> { x, y, levelId, controllerSessionId, possessionMsRemaining }
         this._replicationTracks = new Map(); // trackKey -> { stageId, snapshots: [{timeMs,tick,x,y,stageId}] }
         this._networkProjectiles = new Map(); // projectileId -> entityId
+        this._staggerPulseState = new Map(); // entityKey -> { event, originalColor, originalAlpha }
 
         // Track time for fixed updates
         this.lastUpdateTime = Date.now();
@@ -190,52 +188,53 @@ export class GameScene extends Phaser.Scene {
 
     _spawnPracticeEntitiesForLevel(levelId) {
         if (levelId !== 'town-square') return;
-        if (this.entityManager.getEntitiesByType('golem').length > 0) return;
 
         const level = this.levelManager.currentLevel || this.levelManager.getLevel(levelId);
         if (!level?.grid) return;
 
-        const cached = this._worldEntityStateCache?.get('world:golem');
-        if (DEBUG_WORLD_SYNC) {
-            console.log('[WorldSync] spawnPractice: cache lookup world:golem', {
-                levelId,
-                cached: cached ?? null,
+        // ── Golem (possession target) ─────────────────────────────────────────
+        if (this.entityManager.getEntitiesByType('golem').length === 0) {
+            const cached = this._worldEntityStateCache?.get('world:golem');
+            if (DEBUG_WORLD_SYNC) {
+                console.log('[WorldSync] spawnPractice: cache lookup world:golem', {
+                    levelId,
+                    cached: cached ?? null,
+                });
+            }
+            let gx, gy;
+            if (
+                cached &&
+                cached.levelId === levelId &&
+                Number.isFinite(cached.x) &&
+                Number.isFinite(cached.y)
+            ) {
+                gx = cached.x;
+                gy = cached.y;
+            } else {
+                const tile = this._findNearestWalkableTile(level.grid, 24, 20, 10);
+                gx = tile.x * TILE_SIZE + TILE_SIZE / 2;
+                gy = tile.y * TILE_SIZE + TILE_SIZE / 2;
+            }
+
+            const golem = this.entityFactory.createFromPrefab('golem', {
+                x: gx,
+                y: gy,
+                controlMode: 'remote',
             });
-        }
-        let x;
-        let y;
-        if (
-            cached &&
-            cached.levelId === levelId &&
-            Number.isFinite(cached.x) &&
-            Number.isFinite(cached.y)
-        ) {
-            x = cached.x;
-            y = cached.y;
-        } else {
-            const tile = this._findNearestWalkableTile(level.grid, 24, 20, 10);
-            x = tile.x * TILE_SIZE + TILE_SIZE / 2;
-            y = tile.y * TILE_SIZE + TILE_SIZE / 2;
+            if (DEBUG_WORLD_SYNC) {
+                console.log('[WorldSync] spawnPractice: created golem entity', {
+                    levelId,
+                    entityId: golem?.id ?? null,
+                    x: gx,
+                    y: gy,
+                });
+            }
+            const golemCircle = golem?.getComponent('circle');
+            if (golemCircle?.gameObject) {
+                this.lightingRenderer?.maskGameObject(golemCircle.gameObject);
+            }
         }
 
-        const golem = this.entityFactory.createFromPrefab('golem', {
-            x,
-            y,
-            controlMode: 'remote',
-        });
-        if (DEBUG_WORLD_SYNC) {
-            console.log('[WorldSync] spawnPractice: created golem entity', {
-                levelId,
-                entityId: golem?.id ?? null,
-                x,
-                y,
-            });
-        }
-
-        const circle = golem?.getComponent('circle');
-        if (circle?.gameObject) {
-            this.lightingRenderer?.maskGameObject(circle.gameObject);
-        }
     }
 
     getLocallyControlledEntity() {
@@ -644,6 +643,14 @@ export class GameScene extends Phaser.Scene {
             this._showDamageNumber(anchor.x, anchor.y, damageValue);
         });
 
+        eventBus.on('network:entityFlinched', ({ entityKey, levelId }) => {
+            this._onEntityFlinched(entityKey, levelId);
+        });
+
+        eventBus.on('network:entityStaggered', ({ entityKey, durationMs, levelId }) => {
+            this._onEntityStaggered(entityKey, durationMs, levelId);
+        });
+
         // Inventory drawer equip actions — UIScene emits these, we route them to the
         // controlled entity's LoadoutComponent so the ECS stays as the source of truth.
         eventBus.on('ui:equipWeapon', ({ id }) => {
@@ -696,6 +703,10 @@ export class GameScene extends Phaser.Scene {
                 this.entityManager.getEntityById(entityId)?.destroy?.();
             }
             this._networkProjectiles.clear();
+            for (const pulse of this._staggerPulseState.values()) {
+                pulse?.event?.remove?.(false);
+            }
+            this._staggerPulseState.clear();
         });
 
         eventBus.on('network:connected', () => {
@@ -710,6 +721,10 @@ export class GameScene extends Phaser.Scene {
                 this.entityManager.getEntityById(entityId)?.destroy?.();
             }
             this._networkProjectiles.clear();
+            for (const pulse of this._staggerPulseState.values()) {
+                pulse?.event?.remove?.(false);
+            }
+            this._staggerPulseState.clear();
         });
     }
 
@@ -786,17 +801,132 @@ export class GameScene extends Phaser.Scene {
         });
     }
 
+    _resolveReactionVisualTarget(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            if (sid === (networkManager.sessionId ?? '')) {
+                const circle = this.player?.getComponent('circle')?.gameObject;
+                const transform = this.player?.getComponent('transform');
+                if (!circle || !transform) return null;
+                return { go: circle, x: circle.x, y: circle.y, levelId: transform.levelId ?? gameState.currentLevelId ?? null };
+            }
+            const remote = this.remotePlayers.get(sid);
+            if (!remote?.circle) return null;
+            return { go: remote.circle, x: remote.circle.x, y: remote.circle.y, levelId: remote.stageId ?? null };
+        }
+        if (entityKey.startsWith('world:')) {
+            const entity = this._resolveEntityByNetworkKey(entityKey);
+            const circle = entity?.getComponent?.('circle')?.gameObject ?? null;
+            const transform = entity?.getComponent?.('transform');
+            if (!circle || !transform) return null;
+            return { go: circle, x: circle.x, y: circle.y, levelId: transform.levelId ?? null };
+        }
+        return null;
+    }
+
+    _onEntityFlinched(entityKey, levelId = null) {
+        const target = this._resolveReactionVisualTarget(entityKey);
+        if (!target) return;
+        const resolvedLevelId = levelId ?? target.levelId;
+        if (resolvedLevelId !== gameState.currentLevelId) return;
+
+        if (entityKey === `player:${networkManager.sessionId ?? ''}`) {
+            this.player?.getComponent('playerCombat')?.forceInterrupt?.();
+        }
+
+        const burst = this.add.circle(target.x, target.y, 8, 0xffaa66, 0.9).setDepth(250);
+        this.tweens.add({
+            targets: burst,
+            alpha: 0,
+            scaleX: 2.6,
+            scaleY: 2.6,
+            duration: 140,
+            ease: 'Quad.easeOut',
+            onComplete: () => burst.destroy(),
+        });
+    }
+
+    _onEntityStaggered(entityKey, durationMs, levelId = null) {
+        const target = this._resolveReactionVisualTarget(entityKey);
+        if (!target) return;
+        const resolvedLevelId = levelId ?? target.levelId;
+        if (resolvedLevelId !== gameState.currentLevelId) return;
+
+        if (entityKey === `player:${networkManager.sessionId ?? ''}`) {
+            this.player?.getComponent('playerCombat')?.forceInterrupt?.();
+        }
+
+        this._startStaggerPulse(entityKey, Math.max(120, durationMs || 0));
+    }
+
+    _startStaggerPulse(entityKey, durationMs) {
+        const target = this._resolveReactionVisualTarget(entityKey);
+        const go = target?.go;
+        if (!go || typeof go.setFillStyle !== 'function') return;
+
+        const previous = this._staggerPulseState.get(entityKey);
+        if (previous) {
+            previous.event?.remove?.(false);
+            go.setFillStyle(previous.originalColor, previous.originalAlpha);
+            this._staggerPulseState.delete(entityKey);
+        }
+
+        const originalColor = Number.isFinite(go.fillColor) ? go.fillColor : 0xffffff;
+        const originalAlpha = Number.isFinite(go.fillAlpha) ? go.fillAlpha : 1;
+        const endAt = performance.now() + durationMs;
+        let on = false;
+
+        const event = this.time.addEvent({
+            delay: 120,
+            loop: true,
+            callback: () => {
+                if (!go.active || performance.now() >= endAt) {
+                    go.setFillStyle(originalColor, originalAlpha);
+                    event.remove(false);
+                    this._staggerPulseState.delete(entityKey);
+                    return;
+                }
+                on = !on;
+                if (on) go.setFillStyle(0xff4444, originalAlpha);
+                else go.setFillStyle(originalColor, originalAlpha);
+            },
+        });
+
+        this._staggerPulseState.set(entityKey, { event, originalColor, originalAlpha });
+    }
+
     _resolveMeleeVisualSpec(weaponId, phaseIndex) {
         if (weaponId === 'sword') {
+            const p0 = resolveMeleeAttackProfile('sword', 0);
+            const p1 = resolveMeleeAttackProfile('sword', 1);
+            const p2 = resolveMeleeAttackProfile('sword', 2);
             const swordSpecs = [
-                { radius: 58, arc: Math.PI * 0.62, color: 0xd2d8ff, alpha: 0.78, activeMs: SWORD_SWING_1_ACTIVE_MS },
-                { radius: 74, arc: Math.PI * 0.72, color: 0xc4ceff, alpha: 0.80, activeMs: SWORD_SWING_2_ACTIVE_MS },
-                { radius: 102, arc: Math.PI * 0.88, color: 0xb8c2ff, alpha: 0.84, activeMs: SWORD_SWING_3_ACTIVE_MS },
+                { radius: p0.radius, arc: p0.arc, color: p0.visual.color, alpha: p0.visual.alpha, activeMs: p0.activeMs },
+                { radius: p1.radius, arc: p1.arc, color: p1.visual.color, alpha: p1.visual.alpha, activeMs: p1.activeMs },
+                { radius: p2.radius, arc: p2.arc, color: p2.visual.color, alpha: p2.visual.alpha, activeMs: p2.activeMs },
             ];
             const index = Math.max(0, Math.min(swordSpecs.length - 1, Number.isFinite(phaseIndex) ? Math.floor(phaseIndex) : 0));
             return swordSpecs[index];
         }
-        return { radius: 46, arc: Math.PI * 0.56, color: 0xff9b47, alpha: 0.85, activeMs: FISTS_SWING_ACTIVE_MS };
+        if (weaponId === 'zombie_strike') {
+            const profile = resolveMeleeAttackProfile('zombie_strike', 0);
+            return {
+                radius: profile.radius,
+                arc: profile.arc,
+                color: profile.visual.color,
+                alpha: profile.visual.alpha,
+                activeMs: profile.activeMs,
+            };
+        }
+        const profile = resolveMeleeAttackProfile('unarmed', 0);
+        return {
+            radius: profile.radius,
+            arc: profile.arc,
+            color: profile.visual.color,
+            alpha: profile.visual.alpha,
+            activeMs: profile.activeMs,
+        };
     }
 
     _resolveReplicatedMeleeOrigin(payload) {
@@ -904,14 +1034,15 @@ export class GameScene extends Phaser.Scene {
 
     _resolveWorldPrefabName(entityKey, kind = null) {
         if (kind === 'golem') return 'golem';
-        if (kind === 'bandit') return 'bandit';
+        if (kind === 'zombie') return 'zombie';
         if (entityKey === 'world:golem') return 'golem';
+        if (entityKey === 'world:zombie_1') return 'zombie';
         return null;
     }
 
     _isReplicatedWorldActor(entity) {
         if (!entity) return false;
-        return entity.type === 'golem' || entity.type === 'bandit';
+        return entity.type === 'golem' || entity.type === 'zombie';
     }
 
     _applyNetworkEntityEquips(entityEquips) {

@@ -46,7 +46,7 @@ export function createArrow(scene, config = {}) {
     arrow.addComponent(new BulletComponent(velocityX, velocityY, damage, maxRange, {
         penetration,
         collidesWithEntities: true,
-        targetTypes: ['bandit'],
+        targetTypes: ['zombie'],
     }));
 
     return arrow;

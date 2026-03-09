@@ -174,7 +174,7 @@ class NetworkManager {
                 eventBus.emit('network:meleeAttack', {
                     sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : null,
                     attackerEntityKey: typeof msg.attackerEntityKey === 'string' ? msg.attackerEntityKey : null,
-                    weaponId: msg.weaponId === 'sword' ? 'sword' : 'unarmed',
+                    weaponId: msg.weaponId === 'sword' || msg.weaponId === 'zombie_strike' ? msg.weaponId : 'unarmed',
                     phaseIndex: Number.isFinite(msg.phaseIndex) ? Math.max(0, Math.floor(msg.phaseIndex)) : 0,
                     levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
                     originX: Number.isFinite(msg.originX) ? msg.originX : null,
@@ -209,6 +209,22 @@ class NetworkManager {
                     died: !!msg.died,
                     x: Number.isFinite(msg.x) ? msg.x : null,
                     y: Number.isFinite(msg.y) ? msg.y : null,
+                    levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
+                });
+                break;
+
+            case MSG.ENTITY_FLINCHED:
+                eventBus.emit('network:entityFlinched', {
+                    entityKey: typeof msg.entityKey === 'string' ? msg.entityKey : null,
+                    durationMs: Number.isFinite(msg.durationMs) ? Math.max(0, msg.durationMs) : 0,
+                    levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
+                });
+                break;
+
+            case MSG.ENTITY_STAGGERED:
+                eventBus.emit('network:entityStaggered', {
+                    entityKey: typeof msg.entityKey === 'string' ? msg.entityKey : null,
+                    durationMs: Number.isFinite(msg.durationMs) ? Math.max(0, msg.durationMs) : 0,
                     levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
                 });
                 break;

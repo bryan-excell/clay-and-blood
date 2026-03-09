@@ -367,6 +367,8 @@ export const MSG = {
     PROJECTILE_DESPAWN: 'projectile_despawn',
     PLAYER_DAMAGED:  'player_damaged',
     WORLD_ENTITY_DAMAGED: 'world_entity_damaged',
+    ENTITY_FLINCHED: 'entity_flinched',
+    ENTITY_STAGGERED: 'entity_staggered',
 };
 
 const CARDINAL_DIRECTIONS = ['north', 'east', 'south', 'west'];
@@ -672,6 +674,8 @@ export function resolveExitTransition(fromLevelId, fromExitIndex) {
         entryDirection: null,
     };
 }
+
+export * from './combatData.js';
 
 /**
  * Resolve a deterministic spawn position for arriving through an exit.

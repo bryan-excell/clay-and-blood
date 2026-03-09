@@ -18,7 +18,7 @@ export class BulletComponent extends Component {
      * @param {object} [options]
      * @param {number} [options.penetration=0] - Extra entities this projectile can pass through
      * @param {boolean} [options.collidesWithEntities=false]
-     * @param {string[]} [options.targetTypes=['bandit']]
+     * @param {string[]} [options.targetTypes=['zombie']]
      */
     constructor(velocityX, velocityY, damage = 10, maxRange = 800, options = {}) {
         super('bullet');
@@ -32,7 +32,7 @@ export class BulletComponent extends Component {
         this.collidesWithEntities = !!options.collidesWithEntities;
         this.targetTypes = Array.isArray(options.targetTypes) && options.targetTypes.length > 0
             ? options.targetTypes
-            : ['bandit'];
+            : ['zombie'];
         this._hitEntityIds = new Set();
 
         this.distanceTravelled = 0;
