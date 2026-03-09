@@ -25,6 +25,7 @@ import {
     dashStateFromInput,
     stepPlayerKinematics,
     resolveMeleeAttackProfile,
+    resolveSpellConfig,
 } from '@clay-and-blood/shared';
 
 // ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
@@ -574,14 +575,35 @@ export class GameScene extends Phaser.Scene {
             penetration,
         }) => {
             if (levelId === gameState.currentLevelId) {
-                const prefabName = projectileType === 'arrow' ? 'arrow' : 'bullet';
-                const projectileEntity = this.entityFactory.createFromPrefab(prefabName, {
-                    x,
-                    y,
-                    velocityX,
-                    velocityY,
-                    penetration,
-                });
+                let projectileEntity = null;
+                if (projectileType === 'arrow') {
+                    projectileEntity = this.entityFactory.createFromPrefab('arrow', {
+                        x,
+                        y,
+                        velocityX,
+                        velocityY,
+                        penetration,
+                    });
+                } else if (projectileType === 'imposing_flame') {
+                    const spellCfg = resolveSpellConfig('imposing_flame');
+                    projectileEntity = this.entityFactory.createFromPrefab('bullet', {
+                        x,
+                        y,
+                        velocityX,
+                        velocityY,
+                        maxRange: spellCfg?.projectile?.maxRange ?? 520,
+                        color: 0xff5b1a,
+                        radius: 8,
+                    });
+                } else {
+                    projectileEntity = this.entityFactory.createFromPrefab('bullet', {
+                        x,
+                        y,
+                        velocityX,
+                        velocityY,
+                        penetration,
+                    });
+                }
                 if (!projectileEntity) return;
                 if (projectileId) {
                     this._networkProjectiles.set(projectileId, projectileEntity.id);
@@ -597,13 +619,27 @@ export class GameScene extends Phaser.Scene {
             this._renderReplicatedMeleeAttack(payload);
         });
 
-        eventBus.on('network:projectileDespawn', ({ projectileId }) => {
-            if (!projectileId) return;
-            const entityId = this._networkProjectiles.get(projectileId);
-            if (!entityId) return;
-            const projectile = this.entityManager.getEntityById(entityId);
-            projectile?.destroy?.();
-            this._networkProjectiles.delete(projectileId);
+        eventBus.on('network:projectileDespawn', ({ projectileId, x, y, projectileType, reason }) => {
+            let burstX = Number.isFinite(x) ? x : null;
+            let burstY = Number.isFinite(y) ? y : null;
+            if (projectileId) {
+                const entityId = this._networkProjectiles.get(projectileId);
+                if (entityId) {
+                    const projectile = this.entityManager.getEntityById(entityId);
+                    const transform = projectile?.getComponent('transform');
+                    if (!Number.isFinite(burstX)) burstX = transform?.position?.x ?? null;
+                    if (!Number.isFinite(burstY)) burstY = transform?.position?.y ?? null;
+                    projectile?.destroy?.();
+                    this._networkProjectiles.delete(projectileId);
+                }
+            }
+
+            if (projectileType === 'imposing_flame' &&
+                (reason === 'hit' || reason === 'wall' || reason === 'range' || reason === 'lifetime' || reason === 'destination') &&
+                Number.isFinite(burstX) &&
+                Number.isFinite(burstY)) {
+                this._renderImposingFlameBurstFx(burstX, burstY);
+            }
         });
 
         // Server confirmed an authoritative health change.
@@ -798,6 +834,28 @@ export class GameScene extends Phaser.Scene {
             duration: DAMAGE_TEXT_LIFETIME_MS,
             ease: 'Cubic.easeOut',
             onComplete: () => txt.destroy(),
+        });
+    }
+
+    _renderImposingFlameBurstFx(x, y) {
+        const ring = this.add.circle(x, y, 14, 0xff8f24, 0.55).setDepth(210);
+        const core = this.add.circle(x, y, 10, 0xffd27a, 0.85).setDepth(211);
+        this.tweens.add({
+            targets: ring,
+            radius: 72,
+            alpha: 0,
+            duration: 180,
+            ease: 'Quad.easeOut',
+            onComplete: () => ring.destroy(),
+        });
+        this.tweens.add({
+            targets: core,
+            scaleX: 2.2,
+            scaleY: 2.2,
+            alpha: 0,
+            duration: 160,
+            ease: 'Quad.easeOut',
+            onComplete: () => core.destroy(),
         });
     }
 

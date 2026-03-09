@@ -4,7 +4,7 @@ import { networkManager } from '../core/NetworkManager.js';
 import { gameState } from '../core/GameState.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { WEAPONS, SPELLS } from '../data/ItemRegistry.js';
-import { resolveMeleeWeaponConfig } from '@clay-and-blood/shared';
+import { resolveMeleeWeaponConfig, resolveSpellConfig } from '@clay-and-blood/shared';
 import {
     PLAYER_RADIUS,
     ARROW_MIN_SPEED,
@@ -264,6 +264,7 @@ export class PlayerCombatComponent extends Component {
 
         this._unsubscribeControlChanged = null;
         this._unsubscribeLoadoutChanged = null;
+        this._spellCooldownUntilMs = new Map();
 
         this.requireComponent('intent');
         this.optionalComponent('control');
@@ -608,10 +609,35 @@ export class PlayerCombatComponent extends Component {
             case 'release_possession':
                 this.entity.scene?.requestReleasePossession?.(this.entity);
                 break;
+            case 'imposing_flame':
+                this.castImposingFlame(targetX, targetY);
+                break;
             case 'nothing':
             default:
                 break;
         }
+    }
+
+    castImposingFlame(targetX, targetY) {
+        const spellCfg = resolveSpellConfig('imposing_flame');
+        if (!spellCfg) return;
+
+        const now = performance.now();
+        const cooldownUntilMs = this._spellCooldownUntilMs.get(spellCfg.id) ?? 0;
+        if (now < cooldownUntilMs) return;
+
+        this._spellCooldownUntilMs.set(spellCfg.id, now + spellCfg.cooldownMs);
+        const uiCooldowns = { ...(uiStateStore.get('spellCooldowns') ?? {}) };
+        uiCooldowns[spellCfg.id] = now + spellCfg.cooldownMs;
+        uiStateStore.set('spellCooldowns', uiCooldowns);
+
+        if (!this.isLocallyControlled()) return;
+        networkManager.sendSpellCast({
+            spellId: spellCfg.id,
+            targetX,
+            targetY,
+            levelId: gameState.currentLevelId ?? null,
+        });
     }
 
     castPossess(targetX, targetY) {

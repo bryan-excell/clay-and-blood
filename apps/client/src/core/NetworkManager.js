@@ -188,6 +188,9 @@ class NetworkManager {
                 eventBus.emit('network:projectileDespawn', {
                     projectileId: typeof msg.projectileId === 'string' ? msg.projectileId : null,
                     reason: typeof msg.reason === 'string' ? msg.reason : 'unknown',
+                    x: Number.isFinite(msg.x) ? msg.x : null,
+                    y: Number.isFinite(msg.y) ? msg.y : null,
+                    projectileType: typeof msg.projectileType === 'string' ? msg.projectileType : 'bullet',
                 });
                 break;
 
@@ -336,6 +339,16 @@ class NetworkManager {
             chargeRatio:    opts.chargeRatio    ?? 1,
             penetration: Number.isFinite(opts.penetration) ? Math.max(0, Math.floor(opts.penetration)) : 0,
             lastKnownTick:  this._lastServerTick,
+        });
+    }
+
+    sendSpellCast(payload) {
+        this.send({
+            type: MSG.SPELL_CAST,
+            spellId: typeof payload?.spellId === 'string' ? payload.spellId : 'nothing',
+            targetX: Number.isFinite(payload?.targetX) ? payload.targetX : 0,
+            targetY: Number.isFinite(payload?.targetY) ? payload.targetY : 0,
+            levelId: typeof payload?.levelId === 'string' ? payload.levelId : null,
         });
     }
 

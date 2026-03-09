@@ -25,6 +25,7 @@ import {
     resolveArchetypeConfig,
     resolveMeleeAttackProfile,
     PROJECTILE_POISE_DAMAGE,
+    resolveSpellConfig,
 } from '@clay-and-blood/shared';
 import {
     phaseInputIntent,
@@ -69,6 +70,7 @@ const STAGGER_DURATION_MS = REACTION_CONFIG.staggerDurationMs;
 const TEAM_PLAYERS = TEAM_IDS.players;
 const TEAM_ZOMBIES = TEAM_IDS.zombies;
 const TEAM_NEUTRAL = TEAM_IDS.neutral;
+const IMPOSING_FLAME_SPELL_ID = 'imposing_flame';
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
@@ -300,6 +302,7 @@ export class GameRoom {
                     returnEntityKey: `player:${sessionId}`,
                     teamId: TEAM_PLAYERS,
                     poise: this._defaultPoiseForKind('player'),
+                    spellState: { pendingCast: null, cooldownUntilBySpellId: {} },
                 });
 
                 // Ack the join with the caller's session ID
@@ -692,6 +695,17 @@ export class GameRoom {
                 }
                 break;
             }
+            case MSG.SPELL_CAST: {
+                if (this._isEntityIncapacitated(`player:${sessionId}`, Date.now())) break;
+                const spellId = sanitizeEquipId(data.spellId);
+                if (!spellId) break;
+                const targetX = Number.isFinite(data.targetX) ? data.targetX : null;
+                const targetY = Number.isFinite(data.targetY) ? data.targetY : null;
+                if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) break;
+                const levelId = typeof data.levelId === 'string' ? data.levelId : null;
+                this._queueSpellCastForPlayer(sessionId, { spellId, targetX, targetY, levelId });
+                break;
+            }
             case MSG.LEVEL_CHANGE: {
                 const player = this.players.get(sessionId);
                 if (!player) break;
@@ -863,6 +877,7 @@ export class GameRoom {
         this._phasePhysicsTransform(locomotionPhase);
         this._phaseZombieAi();
         this._phaseZombieMovement();
+        this._phaseSpellCasts();
         this._phaseProjectiles();
 
         const snapshotPlayers = this._phaseBuildSnapshotPlayers();
@@ -1099,6 +1114,135 @@ export class GameRoom {
         }
     }
 
+    _queueSpellCastForPlayer(sessionId, { spellId, targetX, targetY, levelId }) {
+        const player = this.players.get(sessionId);
+        if (!player) return;
+
+        const spellCfg = resolveSpellConfig(spellId);
+        if (!spellCfg) return;
+        const equippedSpellId = player.equipped?.spellId ?? 'nothing';
+        if (equippedSpellId !== spellId) return;
+
+        const nowMs = Date.now();
+        const spellState = player.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+        const cooldownUntil = Number.isFinite(spellState.cooldownUntilBySpellId?.[spellId])
+            ? spellState.cooldownUntilBySpellId[spellId]
+            : 0;
+        if (nowMs < cooldownUntil) return;
+        if (spellState.pendingCast) return;
+
+        const windupMs = Number.isFinite(spellCfg.windupMs) ? Math.max(0, spellCfg.windupMs) : 0;
+        spellState.pendingCast = {
+            spellId,
+            targetX,
+            targetY,
+            requestedLevelId: levelId,
+            executeAtMs: nowMs + windupMs,
+        };
+
+        this.players.set(sessionId, {
+            ...player,
+            spellState,
+        });
+    }
+
+    _phaseSpellCasts() {
+        const nowMs = Date.now();
+        for (const [sessionId, player] of this.players.entries()) {
+            const spellState = player.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+            const pending = spellState.pendingCast;
+            if (!pending) continue;
+            if (!Number.isFinite(pending.executeAtMs) || pending.executeAtMs > nowMs) continue;
+
+            spellState.pendingCast = null;
+            this.players.set(sessionId, { ...player, spellState });
+            this._executeSpellCast(sessionId, pending, nowMs);
+        }
+    }
+
+    _executeSpellCast(sessionId, pendingCast, nowMs = Date.now()) {
+        if (!pendingCast?.spellId) return;
+        if (this._isEntityIncapacitated(`player:${sessionId}`, nowMs)) return;
+        const player = this.players.get(sessionId);
+        if (!player) return;
+        if ((player.equipped?.spellId ?? 'nothing') !== pendingCast.spellId) return;
+
+        const spellCfg = resolveSpellConfig(pendingCast.spellId);
+        if (!spellCfg) return;
+
+        if (pendingCast.spellId === IMPOSING_FLAME_SPELL_ID) {
+            this._castImposingFlame(sessionId, pendingCast, spellCfg);
+        }
+
+        const nextPlayer = this.players.get(sessionId);
+        if (!nextPlayer) return;
+        const nextSpellState = nextPlayer.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+        nextSpellState.cooldownUntilBySpellId[pendingCast.spellId] = nowMs + Math.max(0, spellCfg.cooldownMs ?? 0);
+        this.players.set(sessionId, { ...nextPlayer, spellState: nextSpellState });
+    }
+
+    _castImposingFlame(sessionId, pendingCast, spellCfg) {
+        const source = this._resolveAttackSource(sessionId, pendingCast.requestedLevelId ?? null);
+        if (!source || !Number.isFinite(source.x) || !Number.isFinite(source.y)) return;
+
+        const dxRaw = pendingCast.targetX - source.x;
+        const dyRaw = pendingCast.targetY - source.y;
+        const rawLen = Math.sqrt(dxRaw * dxRaw + dyRaw * dyRaw);
+        if (rawLen < 0.001) return;
+
+        const projectileCfg = spellCfg.projectile ?? {};
+        const speed = Number.isFinite(projectileCfg.speed) ? Math.max(1, projectileCfg.speed) : 200;
+        const maxRange = Number.isFinite(projectileCfg.maxRange) ? Math.max(1, projectileCfg.maxRange) : 500;
+        const maxLifetimeMs = Number.isFinite(projectileCfg.maxLifetimeMs) ? Math.max(1, projectileCfg.maxLifetimeMs) : 1500;
+        const spawnOffset = Number.isFinite(projectileCfg.spawnOffset) ? Math.max(0, projectileCfg.spawnOffset) : 0;
+
+        const dirX = dxRaw / rawLen;
+        const dirY = dyRaw / rawLen;
+        const spawnX = source.x + dirX * spawnOffset;
+        const spawnY = source.y + dirY * spawnOffset;
+        const distToTarget = Math.sqrt((pendingCast.targetX - spawnX) ** 2 + (pendingCast.targetY - spawnY) ** 2);
+        const destinationDistance = Math.max(0, Math.min(distToTarget, maxRange));
+        const destinationX = spawnX + dirX * destinationDistance;
+        const destinationY = spawnY + dirY * destinationDistance;
+        const levelId = source.levelId ?? pendingCast.requestedLevelId ?? null;
+        const burstCfg = spellCfg.burst ?? {};
+
+        const projectileId = this._spawnProjectile({
+            shooterSessionId: sessionId,
+            shooterEntityKey: source.entityKey ?? `player:${sessionId}`,
+            shooterTeamId: source.teamId ?? TEAM_PLAYERS,
+            projectileType: IMPOSING_FLAME_SPELL_ID,
+            x: spawnX,
+            y: spawnY,
+            velocityX: dirX * speed,
+            velocityY: dirY * speed,
+            levelId,
+            damage: Number.isFinite(burstCfg.damage) ? Math.max(0, burstCfg.damage) : 0,
+            poiseDamage: Number.isFinite(burstCfg.poiseDamage) ? Math.max(0, burstCfg.poiseDamage) : 0,
+            maxRange,
+            maxLifetimeMs,
+            destinationX,
+            destinationY,
+            burstRadius: Number.isFinite(burstCfg.radius) ? Math.max(1, burstCfg.radius) : 1,
+            penetration: 0,
+        });
+        if (!projectileId) return;
+
+        this.#broadcastAll({
+            type: MSG.BULLET_FIRED,
+            sessionId,
+            x: spawnX,
+            y: spawnY,
+            velocityX: dirX * speed,
+            velocityY: dirY * speed,
+            levelId,
+            projectileId,
+            projectileType: IMPOSING_FLAME_SPELL_ID,
+            chargeRatio: 1,
+            penetration: 0,
+        });
+    }
+
     _spawnProjectile({
         shooterSessionId,
         shooterEntityKey = null,
@@ -1112,6 +1256,10 @@ export class GameRoom {
         damage,
         poiseDamage = 1,
         maxRange,
+        maxLifetimeMs = null,
+        destinationX = null,
+        destinationY = null,
+        burstRadius = null,
         penetration = ARROW_BASE_PENETRATION,
     }) {
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -1120,12 +1268,18 @@ export class GameRoom {
         if (!Number.isFinite(damage) || damage <= 0) return null;
 
         const projectileId = crypto.randomUUID();
+        const normalizedType = projectileType === 'arrow' ? 'arrow'
+            : projectileType === IMPOSING_FLAME_SPELL_ID ? IMPOSING_FLAME_SPELL_ID
+                : 'bullet';
+        const destinationDistance = Number.isFinite(destinationX) && Number.isFinite(destinationY)
+            ? Math.sqrt((destinationX - x) ** 2 + (destinationY - y) ** 2)
+            : null;
         this.projectiles.set(projectileId, {
             id: projectileId,
             shooterSessionId,
             shooterEntityKey,
             shooterTeamId,
-            projectileType: projectileType === 'arrow' ? 'arrow' : 'bullet',
+            projectileType: normalizedType,
             x,
             y,
             velocityX,
@@ -1134,6 +1288,11 @@ export class GameRoom {
             damage,
             poiseDamage: Number.isFinite(poiseDamage) ? Math.max(0, poiseDamage) : 0,
             remainingRange: maxRange,
+            remainingLifetimeMs: Number.isFinite(maxLifetimeMs) ? Math.max(0, maxLifetimeMs) : null,
+            destinationX: Number.isFinite(destinationX) ? destinationX : null,
+            destinationY: Number.isFinite(destinationY) ? destinationY : null,
+            remainingToDestination: Number.isFinite(destinationDistance) ? destinationDistance : null,
+            burstRadius: Number.isFinite(burstRadius) ? Math.max(0, burstRadius) : 0,
             penetrationRemaining: Math.max(0, Math.floor(penetration)),
             hitEntities: new Set(),
         });
@@ -1158,11 +1317,25 @@ export class GameRoom {
 
             const dirX = projectile.velocityX / speed;
             const dirY = projectile.velocityY / speed;
+            const isImposingFlame = projectile.projectileType === IMPOSING_FLAME_SPELL_ID;
+            if (isImposingFlame && Number.isFinite(projectile.remainingLifetimeMs)) {
+                projectile.remainingLifetimeMs -= TICK_MS;
+                if (projectile.remainingLifetimeMs <= 0) {
+                    this._burstProjectile(projectile, projectile.x, projectile.y, 'lifetime');
+                    this._despawnProjectile(projectileId, 'lifetime', projectile.x, projectile.y, projectile.projectileType);
+                    continue;
+                }
+            }
+
             let stepRemaining = Math.min(projectile.remainingRange, speed * dtSeconds);
+            if (isImposingFlame && Number.isFinite(projectile.remainingToDestination)) {
+                stepRemaining = Math.min(stepRemaining, Math.max(0, projectile.remainingToDestination));
+            }
 
             let currX = projectile.x;
             let currY = projectile.y;
             let despawned = false;
+            let terminationReason = null;
 
             while (!despawned && stepRemaining > epsilon) {
                 const endX = currX + dirX * stepRemaining;
@@ -1205,6 +1378,9 @@ export class GameRoom {
                     currX = endX;
                     currY = endY;
                     projectile.remainingRange -= stepRemaining;
+                    if (isImposingFlame && Number.isFinite(projectile.remainingToDestination)) {
+                        projectile.remainingToDestination -= stepRemaining;
+                    }
                     stepRemaining = 0;
                     break;
                 }
@@ -1213,23 +1389,35 @@ export class GameRoom {
                 currX += dirX * traveled;
                 currY += dirY * traveled;
                 projectile.remainingRange -= traveled;
+                if (isImposingFlame && Number.isFinite(projectile.remainingToDestination)) {
+                    projectile.remainingToDestination -= traveled;
+                }
                 stepRemaining -= traveled;
 
                 if (hitType === 'wall') {
-                    this._despawnProjectile(projectileId, 'wall');
+                    terminationReason = 'wall';
+                    if (isImposingFlame) {
+                        this._burstProjectile(projectile, currX, currY, terminationReason);
+                    }
+                    this._despawnProjectile(projectileId, terminationReason, currX, currY, projectile.projectileType);
                     despawned = true;
                     break;
                 }
 
                 if (hitType === 'entity' && hitEntityKey) {
-                    projectile.hitEntities.add(hitEntityKey);
-                    this._applyDamageToEntity(
-                        hitEntityKey,
-                        projectile.damage,
-                        projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`,
-                        null,
-                        projectile.poiseDamage ?? 0
-                    );
+                    if (isImposingFlame) {
+                        terminationReason = 'hit';
+                        this._burstProjectile(projectile, currX, currY, terminationReason);
+                    } else {
+                        projectile.hitEntities.add(hitEntityKey);
+                        this._applyDamageToEntity(
+                            hitEntityKey,
+                            projectile.damage,
+                            projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`,
+                            null,
+                            projectile.poiseDamage ?? 0
+                        );
+                    }
                 }
 
                 if (projectile.penetrationRemaining > 0) {
@@ -1238,11 +1426,15 @@ export class GameRoom {
                     currX += dirX * nudge;
                     currY += dirY * nudge;
                     projectile.remainingRange -= nudge;
+                    if (isImposingFlame && Number.isFinite(projectile.remainingToDestination)) {
+                        projectile.remainingToDestination -= nudge;
+                    }
                     stepRemaining -= nudge;
                     continue;
                 }
 
-                this._despawnProjectile(projectileId, 'hit');
+                if (!terminationReason) terminationReason = 'hit';
+                this._despawnProjectile(projectileId, terminationReason, currX, currY, projectile.projectileType);
                 despawned = true;
                 break;
             }
@@ -1252,21 +1444,54 @@ export class GameRoom {
 
             projectile.x = currX;
             projectile.y = currY;
+            if (isImposingFlame && Number.isFinite(projectile.remainingToDestination) && projectile.remainingToDestination <= epsilon) {
+                this._burstProjectile(projectile, currX, currY, 'destination');
+                this._despawnProjectile(projectileId, 'destination', currX, currY, projectile.projectileType);
+                continue;
+            }
             if (projectile.remainingRange <= 0) {
-                this._despawnProjectile(projectileId, 'range');
+                if (isImposingFlame) {
+                    this._burstProjectile(projectile, currX, currY, 'range');
+                }
+                this._despawnProjectile(projectileId, 'range', currX, currY, projectile.projectileType);
             } else {
                 this.projectiles.set(projectileId, projectile);
             }
         }
     }
 
-    _despawnProjectile(projectileId, reason = 'unknown') {
+    _burstProjectile(projectile, centerX, centerY, _reason = 'burst') {
+        if (!projectile) return;
+        if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return;
+        const burstRadius = Number.isFinite(projectile.burstRadius) ? Math.max(0, projectile.burstRadius) : 0;
+        const damage = Number.isFinite(projectile.damage) ? Math.max(0, projectile.damage) : 0;
+        if (burstRadius <= 0 || damage <= 0) return;
+        const poiseDamage = Number.isFinite(projectile.poiseDamage) ? Math.max(0, projectile.poiseDamage) : 0;
+        const levelId = projectile.levelId ?? null;
+        const sourceEntityKey = projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`;
+
+        const targets = this._listDamageableCombatantsInLevel(levelId);
+        for (const target of targets) {
+            if (target.entityKey === sourceEntityKey) continue;
+            if (!this._canDamage(projectile.shooterTeamId, target.teamId)) continue;
+            const dx = target.x - centerX;
+            const dy = target.y - centerY;
+            const hitDistance = burstRadius + Math.max(0, target.hitRadius);
+            if (dx * dx + dy * dy > hitDistance * hitDistance) continue;
+            this._applyDamageToEntity(target.entityKey, damage, sourceEntityKey, null, poiseDamage);
+        }
+    }
+
+    _despawnProjectile(projectileId, reason = 'unknown', x = null, y = null, projectileType = 'bullet') {
         const existed = this.projectiles.delete(projectileId);
         if (!existed) return;
         this.#broadcastAll({
             type: MSG.PROJECTILE_DESPAWN,
             projectileId,
             reason,
+            x: Number.isFinite(x) ? x : null,
+            y: Number.isFinite(y) ? y : null,
+            projectileType,
         });
     }
 

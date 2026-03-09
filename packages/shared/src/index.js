@@ -363,6 +363,7 @@ export const MSG = {
     STATE_SNAPSHOT: 'state_snapshot',
     LEVEL_CHANGE:   'level_change',
     BULLET_FIRED:    'bullet_fired',
+    SPELL_CAST:      'spell_cast',
     MELEE_ATTACK:    'melee_attack',
     PROJECTILE_DESPAWN: 'projectile_despawn',
     PLAYER_DAMAGED:  'player_damaged',

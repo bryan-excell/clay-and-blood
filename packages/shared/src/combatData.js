@@ -153,6 +153,25 @@ export const PROJECTILE_POISE_DAMAGE = Object.freeze({
     arrow: 1,
 });
 
+export const SPELL_CONFIG = Object.freeze({
+    imposing_flame: Object.freeze({
+        id: 'imposing_flame',
+        windupMs: 200,
+        cooldownMs: 1000,
+        projectile: Object.freeze({
+            speed: 220,
+            maxRange: 520,
+            maxLifetimeMs: 1500,
+            spawnOffset: 24,
+        }),
+        burst: Object.freeze({
+            damage: 20,
+            poiseDamage: 5,
+            radius: 72,
+        }),
+    }),
+});
+
 export function resolveArchetypeConfig(kind) {
     if (typeof kind !== 'string') return null;
     return ARCHETYPE_CONFIG[kind] ?? null;
@@ -170,4 +189,9 @@ export function resolveMeleeAttackProfile(weaponId, phaseIndex = 0) {
 export function resolveMeleeWeaponConfig(weaponId) {
     const key = MELEE_WEAPON_CONFIG[weaponId] ? weaponId : 'unarmed';
     return MELEE_WEAPON_CONFIG[key];
+}
+
+export function resolveSpellConfig(spellId) {
+    if (typeof spellId !== 'string') return null;
+    return SPELL_CONFIG[spellId] ?? null;
 }
