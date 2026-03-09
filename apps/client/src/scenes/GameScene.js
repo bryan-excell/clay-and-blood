@@ -642,6 +642,30 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
+        eventBus.on('network:spellEffect', ({
+            spellId,
+            phase,
+            x,
+            y,
+            levelId,
+            sourceX,
+            sourceY,
+            hitX,
+            hitY,
+        }) => {
+            if (levelId !== gameState.currentLevelId) return;
+            if (spellId === 'gelid_cradle' && phase === 'manifest') {
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+                this._renderGelidCradleManifestFx(x, y);
+                return;
+            }
+            if (spellId === 'arc_flash' && phase === 'flash') {
+                if (!Number.isFinite(sourceX) || !Number.isFinite(sourceY)) return;
+                if (!Number.isFinite(hitX) || !Number.isFinite(hitY)) return;
+                this._renderArcFlashFx(sourceX, sourceY, hitX, hitY);
+            }
+        });
+
         // Server confirmed an authoritative health change.
         eventBus.on('network:playerDamaged', ({ sessionId, hp, damage }) => {
             if (sessionId === networkManager.sessionId) {
@@ -856,6 +880,56 @@ export class GameScene extends Phaser.Scene {
             duration: 160,
             ease: 'Quad.easeOut',
             onComplete: () => core.destroy(),
+        });
+    }
+
+    _renderGelidCradleManifestFx(x, y) {
+        const ring = this.add.circle(x, y, 12, 0x8fd8ff, 0.5).setDepth(210);
+        const core = this.add.circle(x, y, 8, 0xe5f7ff, 0.9).setDepth(211);
+        this.tweens.add({
+            targets: ring,
+            radius: 80,
+            alpha: 0,
+            duration: 220,
+            ease: 'Quad.easeOut',
+            onComplete: () => ring.destroy(),
+        });
+        this.tweens.add({
+            targets: core,
+            scaleX: 2.3,
+            scaleY: 2.3,
+            alpha: 0,
+            duration: 180,
+            ease: 'Quad.easeOut',
+            onComplete: () => core.destroy(),
+        });
+    }
+
+    _renderArcFlashFx(x1, y1, x2, y2) {
+        const gfx = this.add.graphics().setDepth(212);
+        gfx.lineStyle(4, 0xe8f8ff, 0.95);
+        gfx.beginPath();
+        gfx.moveTo(x1, y1);
+        gfx.lineTo(x2, y2);
+        gfx.strokePath();
+
+        const impact = this.add.circle(x2, y2, 8, 0xd6f2ff, 0.9).setDepth(213);
+        this.tweens.add({
+            targets: impact,
+            alpha: 0,
+            scaleX: 1.9,
+            scaleY: 1.9,
+            duration: 120,
+            ease: 'Quad.easeOut',
+            onComplete: () => impact.destroy(),
+        });
+
+        this.tweens.add({
+            targets: gfx,
+            alpha: 0,
+            duration: 120,
+            ease: 'Quad.easeOut',
+            onComplete: () => gfx.destroy(),
         });
     }
 

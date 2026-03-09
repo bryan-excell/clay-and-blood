@@ -265,6 +265,10 @@ export class PlayerCombatComponent extends Component {
         this._unsubscribeControlChanged = null;
         this._unsubscribeLoadoutChanged = null;
         this._spellCooldownUntilMs = new Map();
+        this._spellWindupUntilMs = 0;
+        this._spellWindupMoveSpeedMultiplier = 1;
+        this._holdingSpellTargetId = null;
+        this._spellTargetIndicatorGfx = null;
 
         this.requireComponent('intent');
         this.optionalComponent('control');
@@ -282,6 +286,7 @@ export class PlayerCombatComponent extends Component {
             if (controlMode !== 'local') {
                 this.entity.getComponent('intent')?.clearTransient();
                 this._resetAllWeaponStateMachines();
+                this._clearSpellHoldTargeting();
             }
         });
 
@@ -301,6 +306,7 @@ export class PlayerCombatComponent extends Component {
         }
 
         this._destroyChargeBar();
+        this._clearSpellHoldTargeting();
 
         if (this._unsubscribeControlChanged) {
             this._unsubscribeControlChanged();
@@ -397,8 +403,47 @@ export class PlayerCombatComponent extends Component {
             return;
         }
 
-        if (!down) return;
         const spell = loadout?.getEquippedSpell() ?? SPELLS.nothing;
+        const spellCfg = resolveSpellConfig(spell.id);
+        if (spellCfg?.castMode === 'hold_release') {
+            const liveTarget = this._resolveLivePointerTarget(targetX, targetY);
+            const canStartHold = this._isSpellReady(spellCfg);
+            if (this._holdingSpellTargetId && this._holdingSpellTargetId !== spell.id) {
+                this._clearSpellHoldTargeting();
+            }
+            if (down) {
+                if (!canStartHold) {
+                    this._clearSpellHoldTargeting();
+                    return;
+                }
+                this._beginSpellHoldTargeting(spellCfg, liveTarget.x, liveTarget.y);
+            }
+            if (held && this._holdingSpellTargetId === spell.id) {
+                this._updateSpellHoldTargeting(spellCfg, liveTarget.x, liveTarget.y);
+            }
+            if (up && this._holdingSpellTargetId === spell.id) {
+                this._attemptSpellCast(spellCfg, liveTarget.x, liveTarget.y);
+                this._clearSpellHoldTargeting();
+            }
+            return;
+        }
+
+        if (spellCfg?.castMode === 'target_click') {
+            if (!down) return;
+            if (!this._isSpellReady(spellCfg)) return;
+            const liveTarget = this._resolveLivePointerTarget(targetX, targetY);
+            const clicked = this._resolveClickableSpellTarget(liveTarget.x, liveTarget.y);
+            if (!clicked) return;
+            this._attemptSpellCast(spellCfg, liveTarget.x, liveTarget.y, {
+                targetEntityKey: clicked.entityKey,
+            });
+            return;
+        }
+
+        if (this._holdingSpellTargetId) {
+            this._clearSpellHoldTargeting();
+        }
+        if (!down) return;
         this._handleSpellPrimary(spell, targetX, targetY);
     }
 
@@ -430,7 +475,29 @@ export class PlayerCombatComponent extends Component {
 
     getMovementInfluence() {
         const machine = this._getActiveWeaponStateMachine();
-        return machine?.getMovementInfluence?.() ?? null;
+        const weaponInfluence = machine?.getMovementInfluence?.() ?? null;
+        const nowMs = performance.now();
+        if (nowMs >= this._spellWindupUntilMs) {
+            this._spellWindupMoveSpeedMultiplier = 1;
+            return weaponInfluence;
+        }
+
+        const spellInfluence = {
+            speedMultiplier: Number.isFinite(this._spellWindupMoveSpeedMultiplier)
+                ? Math.max(0, Math.min(1, this._spellWindupMoveSpeedMultiplier))
+                : 1,
+            attackPushVx: 0,
+            attackPushVy: 0,
+        };
+        if (!weaponInfluence) return spellInfluence;
+        return {
+            speedMultiplier: Math.min(
+                Number.isFinite(weaponInfluence.speedMultiplier) ? weaponInfluence.speedMultiplier : 1,
+                spellInfluence.speedMultiplier
+            ),
+            attackPushVx: Number.isFinite(weaponInfluence.attackPushVx) ? weaponInfluence.attackPushVx : 0,
+            attackPushVy: Number.isFinite(weaponInfluence.attackPushVy) ? weaponInfluence.attackPushVy : 0,
+        };
     }
 
     /** Returns true when the active weapon state machine is fully idle (no attack in flight). */
@@ -442,6 +509,9 @@ export class PlayerCombatComponent extends Component {
     forceInterrupt() {
         this._resetAllWeaponStateMachines();
         this._destroyChargeBar();
+        this._clearSpellHoldTargeting();
+        this._spellWindupUntilMs = 0;
+        this._spellWindupMoveSpeedMultiplier = 1;
         const intent = this.entity.getComponent('intent');
         if (intent) {
             intent.wantsAttackPrimary = false;
@@ -612,6 +682,12 @@ export class PlayerCombatComponent extends Component {
             case 'imposing_flame':
                 this.castImposingFlame(targetX, targetY);
                 break;
+            case 'gelid_cradle':
+                this.castGelidCradle(targetX, targetY);
+                break;
+            case 'arc_flash':
+                // Arc Flash uses target-click flow in handleSecondaryInput.
+                break;
             case 'nothing':
             default:
                 break;
@@ -620,24 +696,132 @@ export class PlayerCombatComponent extends Component {
 
     castImposingFlame(targetX, targetY) {
         const spellCfg = resolveSpellConfig('imposing_flame');
+        this._attemptSpellCast(spellCfg, targetX, targetY);
+    }
+
+    castGelidCradle(targetX, targetY) {
+        const spellCfg = resolveSpellConfig('gelid_cradle');
+        this._attemptSpellCast(spellCfg, targetX, targetY);
+    }
+
+    _attemptSpellCast(spellCfg, targetX, targetY, options = {}) {
         if (!spellCfg) return;
-
         const now = performance.now();
-        const cooldownUntilMs = this._spellCooldownUntilMs.get(spellCfg.id) ?? 0;
-        if (now < cooldownUntilMs) return;
+        if (!this._isSpellReady(spellCfg, now)) return;
 
-        this._spellCooldownUntilMs.set(spellCfg.id, now + spellCfg.cooldownMs);
+        const cooldownMs = Number.isFinite(spellCfg.cooldownMs) ? Math.max(0, spellCfg.cooldownMs) : 0;
+        this._spellCooldownUntilMs.set(spellCfg.id, now + cooldownMs);
         const uiCooldowns = { ...(uiStateStore.get('spellCooldowns') ?? {}) };
-        uiCooldowns[spellCfg.id] = now + spellCfg.cooldownMs;
+        uiCooldowns[spellCfg.id] = now + cooldownMs;
         uiStateStore.set('spellCooldowns', uiCooldowns);
+
+        const windupMs = Number.isFinite(spellCfg.windupMs) ? Math.max(0, spellCfg.windupMs) : 0;
+        this._spellWindupUntilMs = Math.max(this._spellWindupUntilMs, now + windupMs);
+        this._spellWindupMoveSpeedMultiplier = Number.isFinite(spellCfg.windupMoveSpeedMultiplier)
+            ? Math.max(0, Math.min(1, spellCfg.windupMoveSpeedMultiplier))
+            : 1;
 
         if (!this.isLocallyControlled()) return;
         networkManager.sendSpellCast({
             spellId: spellCfg.id,
             targetX,
             targetY,
+            targetEntityKey: typeof options.targetEntityKey === 'string' ? options.targetEntityKey : null,
             levelId: gameState.currentLevelId ?? null,
         });
+    }
+
+    _isSpellReady(spellCfg, now = performance.now()) {
+        if (!spellCfg?.id) return false;
+        const cooldownUntilMs = this._spellCooldownUntilMs.get(spellCfg.id) ?? 0;
+        return now >= cooldownUntilMs;
+    }
+
+    _resolveLivePointerTarget(fallbackX, fallbackY) {
+        const scene = this.entity?.scene;
+        const pointer = scene?.input?.activePointer;
+        if (scene?.cameras?.main && pointer) {
+            const world = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+            if (Number.isFinite(world?.x) && Number.isFinite(world?.y)) {
+                return { x: world.x, y: world.y };
+            }
+        }
+        return { x: fallbackX, y: fallbackY };
+    }
+
+    _resolveClickableSpellTarget(worldX, worldY) {
+        const scene = this.entity?.scene;
+        const manager = scene?.entityManager;
+        if (!manager) return null;
+
+        const candidates = manager.getEntitiesWithComponent('stats');
+        let best = null;
+        let bestDistSq = Infinity;
+
+        for (const entity of candidates) {
+            if (!entity || entity.id === this.entity?.id) continue;
+            if (entity.type === 'exit') continue;
+            const circle = entity.getComponent('circle');
+            const transform = entity.getComponent('transform');
+            const cx = Number.isFinite(circle?.gameObject?.x) ? circle.gameObject.x : transform?.position?.x;
+            const cy = Number.isFinite(circle?.gameObject?.y) ? circle.gameObject.y : transform?.position?.y;
+            const radius = Number.isFinite(circle?.radius) ? circle.radius : PLAYER_RADIUS;
+            if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+            if (circle?.gameObject && !circle.gameObject.visible) continue;
+
+            const dx = worldX - cx;
+            const dy = worldY - cy;
+            const distSq = dx * dx + dy * dy;
+            if (distSq > radius * radius) continue;
+
+            const entityKey = typeof scene._getNetworkEntityKey === 'function'
+                ? scene._getNetworkEntityKey(entity)
+                : null;
+            if (!entityKey || entityKey === `player:${networkManager.sessionId ?? ''}`) continue;
+
+            if (distSq < bestDistSq) {
+                best = { entity, entityKey };
+                bestDistSq = distSq;
+            }
+        }
+
+        return best;
+    }
+
+    _beginSpellHoldTargeting(spellCfg, targetX, targetY) {
+        this._holdingSpellTargetId = spellCfg.id;
+        this._updateSpellHoldTargeting(spellCfg, targetX, targetY);
+    }
+
+    _updateSpellHoldTargeting(spellCfg, targetX, targetY) {
+        const indicator = spellCfg.indicator ?? {};
+        const radius = Number.isFinite(indicator.radius)
+            ? Math.max(1, indicator.radius)
+            : Math.max(1, spellCfg?.burst?.radius ?? 1);
+        if (!this._spellTargetIndicatorGfx) {
+            this._spellTargetIndicatorGfx = this.entity.scene.add.graphics();
+            this._spellTargetIndicatorGfx.setDepth(205);
+        }
+
+        const fillColor = Number.isFinite(indicator.color) ? indicator.color : 0x7ad2ff;
+        const fillAlpha = Number.isFinite(indicator.alpha) ? indicator.alpha : 0.2;
+        const outlineColor = Number.isFinite(indicator.outlineColor) ? indicator.outlineColor : 0xc7ecff;
+        const outlineAlpha = Number.isFinite(indicator.outlineAlpha) ? indicator.outlineAlpha : 0.9;
+        const outlineWidth = Number.isFinite(indicator.outlineWidth) ? Math.max(1, indicator.outlineWidth) : 2;
+
+        this._spellTargetIndicatorGfx.clear();
+        this._spellTargetIndicatorGfx.fillStyle(fillColor, fillAlpha);
+        this._spellTargetIndicatorGfx.fillCircle(targetX, targetY, radius);
+        this._spellTargetIndicatorGfx.lineStyle(outlineWidth, outlineColor, outlineAlpha);
+        this._spellTargetIndicatorGfx.strokeCircle(targetX, targetY, radius);
+    }
+
+    _clearSpellHoldTargeting() {
+        this._holdingSpellTargetId = null;
+        if (this._spellTargetIndicatorGfx) {
+            this._spellTargetIndicatorGfx.destroy();
+            this._spellTargetIndicatorGfx = null;
+        }
     }
 
     castPossess(targetX, targetY) {

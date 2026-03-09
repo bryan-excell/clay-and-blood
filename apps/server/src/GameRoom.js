@@ -71,6 +71,9 @@ const TEAM_PLAYERS = TEAM_IDS.players;
 const TEAM_ZOMBIES = TEAM_IDS.zombies;
 const TEAM_NEUTRAL = TEAM_IDS.neutral;
 const IMPOSING_FLAME_SPELL_ID = 'imposing_flame';
+const GELID_CRADLE_SPELL_ID = 'gelid_cradle';
+const ARC_FLASH_SPELL_ID = 'arc_flash';
+const ARC_FLASH_RAY_HIT_EPSILON = 0.5; // px tolerance to avoid endpoint precision misses
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
@@ -247,6 +250,7 @@ export class GameRoom {
         this.entityEquips = new Map(); // entityKey -> { entityKey, levelId, equipped, ownerSessionId }
         this.worldEntities = new Map(); // entityKey -> { entityKey, x, y, levelId, controllerSessionId }
         this.projectiles = new Map(); // projectileId -> { id, shooterSessionId, projectileType, x, y, velocityX, velocityY, levelId, damage, remainingRange }
+        this.pendingSpellEffects = new Map(); // effectId -> { id, spellId, sourceEntityKey, sourceTeamId, levelId, x, y, executeAtMs, damage, poiseDamage, radius }
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
         this.tickCount = 0;
@@ -363,9 +367,9 @@ export class GameRoom {
                         left:   !incapacitated && !!data.left,
                         right:  !incapacitated && !!data.right,
                         sprint: !incapacitated && !!data.sprint,
-                        moveSpeedMultiplier: Number.isFinite(data.moveSpeedMultiplier)
+                        moveSpeedMultiplier: (Number.isFinite(data.moveSpeedMultiplier)
                             ? Math.max(0, Math.min(1, data.moveSpeedMultiplier))
-                            : 1,
+                            : 1) * this._resolveSpellWindupMoveMultiplier(player, Date.now()),
                         attackPushVx: !incapacitated && Number.isFinite(data.attackPushVx)
                             ? Math.max(-800, Math.min(800, data.attackPushVx))
                             : 0,
@@ -699,11 +703,11 @@ export class GameRoom {
                 if (this._isEntityIncapacitated(`player:${sessionId}`, Date.now())) break;
                 const spellId = sanitizeEquipId(data.spellId);
                 if (!spellId) break;
-                const targetX = Number.isFinite(data.targetX) ? data.targetX : null;
-                const targetY = Number.isFinite(data.targetY) ? data.targetY : null;
-                if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) break;
+                const targetX = Number.isFinite(data.targetX) ? data.targetX : 0;
+                const targetY = Number.isFinite(data.targetY) ? data.targetY : 0;
+                const targetEntityKey = sanitizeEntityKey(data.targetEntityKey);
                 const levelId = typeof data.levelId === 'string' ? data.levelId : null;
-                this._queueSpellCastForPlayer(sessionId, { spellId, targetX, targetY, levelId });
+                this._queueSpellCastForPlayer(sessionId, { spellId, targetX, targetY, targetEntityKey, levelId });
                 break;
             }
             case MSG.LEVEL_CHANGE: {
@@ -878,6 +882,7 @@ export class GameRoom {
         this._phaseZombieAi();
         this._phaseZombieMovement();
         this._phaseSpellCasts();
+        this._phaseSpellEffects();
         this._phaseProjectiles();
 
         const snapshotPlayers = this._phaseBuildSnapshotPlayers();
@@ -1114,7 +1119,7 @@ export class GameRoom {
         }
     }
 
-    _queueSpellCastForPlayer(sessionId, { spellId, targetX, targetY, levelId }) {
+    _queueSpellCastForPlayer(sessionId, { spellId, targetX, targetY, targetEntityKey = null, levelId }) {
         const player = this.players.get(sessionId);
         if (!player) return;
 
@@ -1131,12 +1136,23 @@ export class GameRoom {
         if (nowMs < cooldownUntil) return;
         if (spellState.pendingCast) return;
 
+        if (spellCfg.castMode === 'target_click') {
+            if (!targetEntityKey) return;
+            const source = this._resolveAttackSource(sessionId, levelId);
+            if (!source) return;
+            if (!this._isValidSpellTarget(source, targetEntityKey)) return;
+        } else if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) {
+            return;
+        }
+
         const windupMs = Number.isFinite(spellCfg.windupMs) ? Math.max(0, spellCfg.windupMs) : 0;
         spellState.pendingCast = {
             spellId,
             targetX,
             targetY,
+            targetEntityKey,
             requestedLevelId: levelId,
+            windupStartAtMs: nowMs,
             executeAtMs: nowMs + windupMs,
         };
 
@@ -1170,8 +1186,18 @@ export class GameRoom {
         const spellCfg = resolveSpellConfig(pendingCast.spellId);
         if (!spellCfg) return;
 
+        let didCast = false;
         if (pendingCast.spellId === IMPOSING_FLAME_SPELL_ID) {
-            this._castImposingFlame(sessionId, pendingCast, spellCfg);
+            didCast = this._castImposingFlame(sessionId, pendingCast, spellCfg);
+        } else if (pendingCast.spellId === GELID_CRADLE_SPELL_ID) {
+            didCast = this._castGelidCradle(sessionId, pendingCast, spellCfg, nowMs);
+        } else if (pendingCast.spellId === ARC_FLASH_SPELL_ID) {
+            didCast = this._castArcFlash(sessionId, pendingCast, spellCfg, nowMs);
+        }
+        if (!didCast) return;
+
+        if ((spellCfg.cooldownStartsAt ?? 'cast') === 'resolution') {
+            return;
         }
 
         const nextPlayer = this.players.get(sessionId);
@@ -1181,14 +1207,22 @@ export class GameRoom {
         this.players.set(sessionId, { ...nextPlayer, spellState: nextSpellState });
     }
 
+    _setPlayerSpellCooldown(sessionId, spellId, cooldownMs, nowMs = Date.now()) {
+        const player = this.players.get(sessionId);
+        if (!player || !spellId) return;
+        const spellState = player.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+        spellState.cooldownUntilBySpellId[spellId] = nowMs + Math.max(0, cooldownMs ?? 0);
+        this.players.set(sessionId, { ...player, spellState });
+    }
+
     _castImposingFlame(sessionId, pendingCast, spellCfg) {
         const source = this._resolveAttackSource(sessionId, pendingCast.requestedLevelId ?? null);
-        if (!source || !Number.isFinite(source.x) || !Number.isFinite(source.y)) return;
+        if (!source || !Number.isFinite(source.x) || !Number.isFinite(source.y)) return false;
 
         const dxRaw = pendingCast.targetX - source.x;
         const dyRaw = pendingCast.targetY - source.y;
         const rawLen = Math.sqrt(dxRaw * dxRaw + dyRaw * dyRaw);
-        if (rawLen < 0.001) return;
+        if (rawLen < 0.001) return false;
 
         const projectileCfg = spellCfg.projectile ?? {};
         const speed = Number.isFinite(projectileCfg.speed) ? Math.max(1, projectileCfg.speed) : 200;
@@ -1226,7 +1260,7 @@ export class GameRoom {
             burstRadius: Number.isFinite(burstCfg.radius) ? Math.max(1, burstCfg.radius) : 1,
             penetration: 0,
         });
-        if (!projectileId) return;
+        if (!projectileId) return false;
 
         this.#broadcastAll({
             type: MSG.BULLET_FIRED,
@@ -1241,6 +1275,184 @@ export class GameRoom {
             chargeRatio: 1,
             penetration: 0,
         });
+        return true;
+    }
+
+    _castGelidCradle(sessionId, pendingCast, spellCfg, nowMs = Date.now()) {
+        const source = this._resolveAttackSource(sessionId, pendingCast.requestedLevelId ?? null);
+        if (!source) return false;
+
+        const burstCfg = spellCfg.burst ?? {};
+        const radius = Number.isFinite(burstCfg.radius) ? Math.max(1, burstCfg.radius) : 1;
+        const damage = Number.isFinite(burstCfg.damage) ? Math.max(0, burstCfg.damage) : 0;
+        const poiseDamage = Number.isFinite(burstCfg.poiseDamage) ? Math.max(0, burstCfg.poiseDamage) : 0;
+        if (damage <= 0) return false;
+
+        const delayMs = Number.isFinite(spellCfg.manifestDelayMs) ? Math.max(0, spellCfg.manifestDelayMs) : 0;
+        const effectId = crypto.randomUUID();
+        this.pendingSpellEffects.set(effectId, {
+            id: effectId,
+            spellId: GELID_CRADLE_SPELL_ID,
+            ownerSessionId: sessionId,
+            sourceEntityKey: source.entityKey ?? `player:${sessionId}`,
+            sourceTeamId: source.teamId ?? TEAM_PLAYERS,
+            levelId: source.levelId ?? pendingCast.requestedLevelId ?? null,
+            x: pendingCast.targetX,
+            y: pendingCast.targetY,
+            executeAtMs: nowMs + delayMs,
+            damage,
+            poiseDamage,
+            radius,
+        });
+        return true;
+    }
+
+    _castArcFlash(sessionId, pendingCast, spellCfg, nowMs = Date.now()) {
+        const source = this._resolveAttackSource(sessionId, pendingCast.requestedLevelId ?? null);
+        if (!source) return false;
+        if (!pendingCast.targetEntityKey) return false;
+        if (!this._isValidSpellTarget(source, pendingCast.targetEntityKey)) return false;
+        const strike = spellCfg.strike ?? {};
+        const damage = Number.isFinite(strike.damage) ? Math.max(0, strike.damage) : 0;
+        const poiseDamage = Number.isFinite(strike.poiseDamage) ? Math.max(0, strike.poiseDamage) : 0;
+        if (damage <= 0) return false;
+        const delayMs = Number.isFinite(spellCfg.manifestDelayMs) ? Math.max(0, spellCfg.manifestDelayMs) : 0;
+        const effectId = crypto.randomUUID();
+        this.pendingSpellEffects.set(effectId, {
+            id: effectId,
+            spellId: ARC_FLASH_SPELL_ID,
+            ownerSessionId: sessionId,
+            sourceEntityKey: source.entityKey ?? `player:${sessionId}`,
+            targetEntityKey: pendingCast.targetEntityKey,
+            sourceTeamId: source.teamId ?? TEAM_PLAYERS,
+            levelId: source.levelId ?? pendingCast.requestedLevelId ?? null,
+            executeAtMs: nowMs + delayMs,
+            damage,
+            poiseDamage,
+            cooldownMs: Math.max(0, spellCfg.cooldownMs ?? 0),
+        });
+        return true;
+    }
+
+    _phaseSpellEffects(nowMs = Date.now()) {
+        if (this.pendingSpellEffects.size === 0) return;
+        for (const [effectId, effect] of this.pendingSpellEffects.entries()) {
+            if (!effect || !Number.isFinite(effect.executeAtMs) || effect.executeAtMs > nowMs) continue;
+            this.pendingSpellEffects.delete(effectId);
+            if (effect.spellId === ARC_FLASH_SPELL_ID) {
+                this._resolveArcFlashEffect(effect, nowMs);
+                continue;
+            }
+            this.#broadcastAll({
+                type: MSG.SPELL_EFFECT,
+                spellId: effect.spellId ?? null,
+                phase: 'manifest',
+                x: Number.isFinite(effect.x) ? effect.x : null,
+                y: Number.isFinite(effect.y) ? effect.y : null,
+                levelId: effect.levelId ?? null,
+            });
+            this._applyAreaSpellDamage({
+                levelId: effect.levelId ?? null,
+                centerX: effect.x,
+                centerY: effect.y,
+                radius: effect.radius,
+                damage: effect.damage,
+                poiseDamage: effect.poiseDamage,
+                sourceEntityKey: effect.sourceEntityKey,
+                sourceTeamId: effect.sourceTeamId ?? TEAM_PLAYERS,
+            });
+        }
+    }
+
+    _resolveArcFlashEffect(effect, nowMs = Date.now()) {
+        const source = this._getCombatantByEntityKey(effect.sourceEntityKey);
+        const target = this._getCombatantByEntityKey(effect.targetEntityKey);
+        if (!source || !target) return;
+        if (!this._isCombatantDamageable(source) || !this._isCombatantDamageable(target)) return;
+        if ((source.levelId ?? null) !== (target.levelId ?? null)) return;
+        if (!this._canDamage(effect.sourceTeamId ?? source.teamId ?? TEAM_PLAYERS, target.teamId)) return;
+
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const maxRange = Math.sqrt(dx * dx + dy * dy);
+        if (maxRange < 0.001) return;
+
+        const rayHit = this._resolveFirstDamageableEntityOnRay({
+            levelId: source.levelId ?? null,
+            sourceX: source.x,
+            sourceY: source.y,
+            rayVx: dx,
+            rayVy: dy,
+            maxRange,
+            sourceEntityKey: source.entityKey,
+            sourceTeamId: effect.sourceTeamId ?? source.teamId ?? TEAM_PLAYERS,
+        });
+        const hitEntityKey = rayHit?.entityKey ?? null;
+        const hitT = Number.isFinite(rayHit?.distance) ? rayHit.distance : null;
+        const hitX = Number.isFinite(hitT) ? source.x + (dx / maxRange) * hitT : target.x;
+        const hitY = Number.isFinite(hitT) ? source.y + (dy / maxRange) * hitT : target.y;
+        this.#broadcastAll({
+            type: MSG.SPELL_EFFECT,
+            spellId: ARC_FLASH_SPELL_ID,
+            phase: 'flash',
+            levelId: source.levelId ?? null,
+            sourceX: source.x,
+            sourceY: source.y,
+            targetX: target.x,
+            targetY: target.y,
+            hitX: Number.isFinite(hitX) ? hitX : null,
+            hitY: Number.isFinite(hitY) ? hitY : null,
+        });
+
+        if (hitEntityKey) {
+            this._applyDamageToEntity(
+                hitEntityKey,
+                effect.damage,
+                effect.sourceEntityKey ?? null,
+                null,
+                effect.poiseDamage ?? 0
+            );
+        }
+
+        this._setPlayerSpellCooldown(effect.ownerSessionId, ARC_FLASH_SPELL_ID, effect.cooldownMs ?? 0, nowMs);
+    }
+
+    _resolveFirstDamageableEntityOnRay({
+        levelId = null,
+        sourceX,
+        sourceY,
+        rayVx,
+        rayVy,
+        maxRange,
+        sourceEntityKey = null,
+        sourceTeamId = TEAM_PLAYERS,
+    }) {
+        if (!Number.isFinite(sourceX) || !Number.isFinite(sourceY)) return null;
+        if (!Number.isFinite(rayVx) || !Number.isFinite(rayVy)) return null;
+        if (!Number.isFinite(maxRange) || maxRange <= 0) return null;
+        const tolerantMaxRange = maxRange + ARC_FLASH_RAY_HIT_EPSILON;
+
+        let nearest = null;
+        const candidates = this._listDamageableCombatantsInLevel(levelId);
+        for (const candidate of candidates) {
+            if (candidate.entityKey === sourceEntityKey) continue;
+            if (!this._canDamage(sourceTeamId, candidate.teamId)) continue;
+            const t = rayHitDistance(
+                sourceX,
+                sourceY,
+                rayVx,
+                rayVy,
+                candidate.x,
+                candidate.y,
+                candidate.hitRadius,
+                tolerantMaxRange
+            );
+            if (t === null) continue;
+            if (!nearest || t < nearest.distance) {
+                nearest = { entityKey: candidate.entityKey, distance: t };
+            }
+        }
+        return nearest;
     }
 
     _spawnProjectile({
@@ -1467,19 +1679,54 @@ export class GameRoom {
         const damage = Number.isFinite(projectile.damage) ? Math.max(0, projectile.damage) : 0;
         if (burstRadius <= 0 || damage <= 0) return;
         const poiseDamage = Number.isFinite(projectile.poiseDamage) ? Math.max(0, projectile.poiseDamage) : 0;
-        const levelId = projectile.levelId ?? null;
-        const sourceEntityKey = projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`;
+        this._applyAreaSpellDamage({
+            levelId: projectile.levelId ?? null,
+            centerX,
+            centerY,
+            radius: burstRadius,
+            damage,
+            poiseDamage,
+            sourceEntityKey: projectile.shooterEntityKey ?? `player:${projectile.shooterSessionId}`,
+            sourceTeamId: projectile.shooterTeamId ?? TEAM_PLAYERS,
+        });
+    }
+
+    _applyAreaSpellDamage({
+        levelId = null,
+        centerX,
+        centerY,
+        radius,
+        damage,
+        poiseDamage = 0,
+        sourceEntityKey = null,
+        sourceTeamId = TEAM_PLAYERS,
+    }) {
+        if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return;
+        if (!Number.isFinite(radius) || radius <= 0) return;
+        if (!Number.isFinite(damage) || damage <= 0) return;
 
         const targets = this._listDamageableCombatantsInLevel(levelId);
         for (const target of targets) {
-            if (target.entityKey === sourceEntityKey) continue;
-            if (!this._canDamage(projectile.shooterTeamId, target.teamId)) continue;
+            if (sourceEntityKey && target.entityKey === sourceEntityKey) continue;
+            if (!this._canDamage(sourceTeamId, target.teamId)) continue;
             const dx = target.x - centerX;
             const dy = target.y - centerY;
-            const hitDistance = burstRadius + Math.max(0, target.hitRadius);
+            const hitDistance = radius + Math.max(0, target.hitRadius);
             if (dx * dx + dy * dy > hitDistance * hitDistance) continue;
             this._applyDamageToEntity(target.entityKey, damage, sourceEntityKey, null, poiseDamage);
         }
+    }
+
+    _resolveSpellWindupMoveMultiplier(player, nowMs = Date.now()) {
+        const pending = player?.spellState?.pendingCast ?? null;
+        if (!pending) return 1;
+        if (!Number.isFinite(pending.executeAtMs) || pending.executeAtMs <= nowMs) return 1;
+        const spellCfg = resolveSpellConfig(pending.spellId);
+        if (!spellCfg) return 1;
+        const configured = Number.isFinite(spellCfg.windupMoveSpeedMultiplier)
+            ? spellCfg.windupMoveSpeedMultiplier
+            : 1;
+        return Math.max(0, Math.min(1, configured));
     }
 
     _despawnProjectile(projectileId, reason = 'unknown', x = null, y = null, projectileType = 'bullet') {
@@ -2149,6 +2396,16 @@ export class GameRoom {
     _canDamage(sourceTeamId, targetTeamId) {
         if (!sourceTeamId || !targetTeamId) return true;
         return sourceTeamId !== targetTeamId;
+    }
+
+    _isValidSpellTarget(sourceCombatant, targetEntityKey) {
+        if (!sourceCombatant || typeof targetEntityKey !== 'string') return false;
+        const target = this._getCombatantByEntityKey(targetEntityKey);
+        if (!target) return false;
+        if (!this._isCombatantDamageable(target)) return false;
+        if ((sourceCombatant.levelId ?? null) !== (target.levelId ?? null)) return false;
+        if (!this._canDamage(sourceCombatant.teamId, target.teamId)) return false;
+        return true;
     }
 
     _getWorldEntityHitRadius(entity) {

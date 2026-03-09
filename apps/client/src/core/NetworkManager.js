@@ -194,6 +194,22 @@ class NetworkManager {
                 });
                 break;
 
+            case MSG.SPELL_EFFECT:
+                eventBus.emit('network:spellEffect', {
+                    spellId: typeof msg.spellId === 'string' ? msg.spellId : null,
+                    phase: typeof msg.phase === 'string' ? msg.phase : 'manifest',
+                    x: Number.isFinite(msg.x) ? msg.x : null,
+                    y: Number.isFinite(msg.y) ? msg.y : null,
+                    sourceX: Number.isFinite(msg.sourceX) ? msg.sourceX : null,
+                    sourceY: Number.isFinite(msg.sourceY) ? msg.sourceY : null,
+                    targetX: Number.isFinite(msg.targetX) ? msg.targetX : null,
+                    targetY: Number.isFinite(msg.targetY) ? msg.targetY : null,
+                    hitX: Number.isFinite(msg.hitX) ? msg.hitX : null,
+                    hitY: Number.isFinite(msg.hitY) ? msg.hitY : null,
+                    levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
+                });
+                break;
+
             case MSG.PLAYER_DAMAGED:
                 eventBus.emit('network:playerDamaged', {
                     sessionId:  msg.sessionId,
@@ -348,6 +364,7 @@ class NetworkManager {
             spellId: typeof payload?.spellId === 'string' ? payload.spellId : 'nothing',
             targetX: Number.isFinite(payload?.targetX) ? payload.targetX : 0,
             targetY: Number.isFinite(payload?.targetY) ? payload.targetY : 0,
+            targetEntityKey: typeof payload?.targetEntityKey === 'string' ? payload.targetEntityKey : null,
             levelId: typeof payload?.levelId === 'string' ? payload.levelId : null,
         });
     }

@@ -156,7 +156,9 @@ export const PROJECTILE_POISE_DAMAGE = Object.freeze({
 export const SPELL_CONFIG = Object.freeze({
     imposing_flame: Object.freeze({
         id: 'imposing_flame',
+        castMode: 'click',
         windupMs: 200,
+        windupMoveSpeedMultiplier: 0.5,
         cooldownMs: 1000,
         projectile: Object.freeze({
             speed: 220,
@@ -168,6 +170,40 @@ export const SPELL_CONFIG = Object.freeze({
             damage: 20,
             poiseDamage: 5,
             radius: 72,
+        }),
+    }),
+    gelid_cradle: Object.freeze({
+        id: 'gelid_cradle',
+        castMode: 'hold_release',
+        windupMs: 200,
+        manifestDelayMs: 500,
+        windupMoveSpeedMultiplier: 0.5,
+        cooldownMs: 1500,
+        burst: Object.freeze({
+            damage: 15,
+            poiseDamage: 10,
+            radius: 80,
+        }),
+        indicator: Object.freeze({
+            radius: 80,
+            color: 0x7ad2ff,
+            alpha: 0.22,
+            outlineColor: 0xc7ecff,
+            outlineAlpha: 0.9,
+            outlineWidth: 2,
+        }),
+    }),
+    arc_flash: Object.freeze({
+        id: 'arc_flash',
+        castMode: 'target_click',
+        windupMs: 300,
+        manifestDelayMs: 1000,
+        windupMoveSpeedMultiplier: 0.5,
+        cooldownMs: 1000,
+        cooldownStartsAt: 'resolution',
+        strike: Object.freeze({
+            damage: 30,
+            poiseDamage: 5,
         }),
     }),
 });
