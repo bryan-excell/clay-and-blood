@@ -199,6 +199,12 @@ export class LightingRenderer {
         this._redrawAll();
     }
 
+    setLightSourcePolygon(entityId, polygon) {
+        if (!entityId || !this._lightSources.has(entityId)) return;
+        this._lightSources.set(entityId, Array.isArray(polygon) ? polygon : []);
+        this._redrawAll();
+    }
+
     destroy() {
         this._unsubVisibility();
         this._unsubLevelTransition();

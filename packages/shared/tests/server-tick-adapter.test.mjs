@@ -14,6 +14,8 @@ function makePlayer() {
         motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
         stats: { hp: 100 },
         net: { lastSeq: 7 },
+        teamId: 'players',
+        sightRadius: 320,
     };
 }
 
@@ -32,6 +34,8 @@ function testAdapterPipeline() {
     assert.equal(snapshotPlayers.length, 1);
     assert.equal(snapshotPlayers[0].seq, 7);
     assert.equal(snapshotPlayers[0].levelId, 'town-square');
+    assert.equal(snapshotPlayers[0].teamId, 'players');
+    assert.equal(snapshotPlayers[0].sightRadius, 320);
 
     const history = phaseBuildHistoryPositions(players);
     const h = history.get('p1');

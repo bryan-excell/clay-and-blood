@@ -13,10 +13,10 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  * Events emitted on eventBus:
  *   network:connected      { sessionId }
  *   network:disconnected   {}
- *   network:gameState      { players: [{ sessionId, x, y, stageId }] }
- *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq }], self?: { sessionId, hp, hpMax }, worldEntities?: [], entityEquips?: [] }
- *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId }] }
- *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId }
+ *   network:gameState      { players: [{ sessionId, x, y, stageId, teamId, sightRadius }] }
+ *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq, teamId, sightRadius }], self?: { sessionId, hp, hpMax, teamId, sightRadius }, worldEntities?: [], entityEquips?: [] }
+ *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId, teamId }] }
+ *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining }
  *   network:forceControl   { controlledEntityKey, reason, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
  *   network:entityControl  { entityKey, controllerSessionId, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
  *   network:playerJoined   { sessionId }
@@ -117,6 +117,8 @@ class NetworkManager {
                     y: msg.y,
                     levelId: msg.levelId ?? null,
                     controllerSessionId: msg.controllerSessionId ?? null,
+                    teamId: msg.teamId ?? null,
+                    possessionMsRemaining: Number.isFinite(msg.possessionMsRemaining) ? msg.possessionMsRemaining : null,
                 });
                 break;
 

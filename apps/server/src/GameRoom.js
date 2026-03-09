@@ -68,6 +68,7 @@ const GOLEM_HP_MAX = ARCHETYPE_CONFIG.golem.hpMax;
 const FLINCH_DURATION_MS = REACTION_CONFIG.flinchDurationMs;
 const STAGGER_DURATION_MS = REACTION_CONFIG.staggerDurationMs;
 const TEAM_PLAYERS = TEAM_IDS.players;
+const TEAM_GOLEMS = TEAM_IDS.golems;
 const TEAM_ZOMBIES = TEAM_IDS.zombies;
 const TEAM_NEUTRAL = TEAM_IDS.neutral;
 const IMPOSING_FLAME_SPELL_ID = 'imposing_flame';
@@ -305,6 +306,7 @@ export class GameRoom {
                     controlledEntityKey: `player:${sessionId}`,
                     returnEntityKey: `player:${sessionId}`,
                     teamId: TEAM_PLAYERS,
+                    sightRadius: ARCHETYPE_CONFIG.player.sightRadius,
                     poise: this._defaultPoiseForKind('player'),
                     spellState: { pendingCast: null, cooldownUntilBySpellId: {} },
                 });
@@ -320,7 +322,9 @@ export class GameRoom {
                             sessionId: sid,
                             x: p.transform.x,
                             y: p.transform.y,
-                            stageId: p.transform.levelId
+                            stageId: p.transform.levelId,
+                            teamId: typeof p.teamId === 'string' ? p.teamId : null,
+                            sightRadius: Number.isFinite(p.sightRadius) ? p.sightRadius : null,
                         });
                     }
                 }
@@ -518,6 +522,7 @@ export class GameRoom {
                 }
                 target.controllerSessionId = sessionId;
                 target.possessionEndAtMs = Date.now() + POSSESSION_DURATION_MS;
+                target.teamId = this._getPlayerTeamId(sessionId);
                 this.worldEntities.set(targetEntityKey, target);
 
                 // Steal behavior: previous controller is kicked back to their last return key.
@@ -790,18 +795,20 @@ export class GameRoom {
                         y,
                     });
 
-                    this.#broadcast({
-                        type: MSG.ENTITY_STATE,
-                        sessionId,
-                        entityKey: movingEntityKey,
-                        x,
-                        y,
-                        levelId,
-                        controllerSessionId: sessionId,
-                        possessionMsRemaining: Number.isFinite(movingWorldEntity.possessionEndAtMs)
-                            ? Math.max(0, movingWorldEntity.possessionEndAtMs - Date.now())
-                            : null,
-                    }, ws);
+                this.#broadcast({
+                    type: MSG.ENTITY_STATE,
+                    sessionId,
+                    entityKey: movingEntityKey,
+                    kind: movingWorldEntity.kind ?? null,
+                    x,
+                    y,
+                    levelId,
+                    controllerSessionId: sessionId,
+                    teamId: movingWorldEntity.teamId ?? this._defaultTeamForKind(movingWorldEntity.kind),
+                    possessionMsRemaining: Number.isFinite(movingWorldEntity.possessionEndAtMs)
+                        ? Math.max(0, movingWorldEntity.possessionEndAtMs - Date.now())
+                        : null,
+                }, ws);
                 }
 
                 // Send the destination level's current authoritative world entities
@@ -933,6 +940,12 @@ export class GameRoom {
      * Phase 5: build snapshot payload from authoritative state.
      */
     _phaseBuildSnapshotPlayers() {
+        for (const [sessionId, player] of this.players.entries()) {
+            this.players.set(sessionId, {
+                ...player,
+                sightRadius: this._resolveSightRadiusForPlayer(sessionId),
+            });
+        }
         return phaseBuildSnapshotPlayers(this.players);
     }
 
@@ -1771,6 +1784,8 @@ export class GameRoom {
                     sessionId,
                     hp: selfPlayer.stats.hp,
                     hpMax: PLAYER_HEALTH_MAX,
+                    teamId: typeof selfPlayer.teamId === 'string' ? selfPlayer.teamId : null,
+                    sightRadius: Number.isFinite(selfPlayer.sightRadius) ? selfPlayer.sightRadius : null,
                 } : null,
                 worldEntities: Array.from(this.worldEntities.values()).map((entry) => ({
                     ...this._serializeWorldEntity(entry, now),
@@ -1807,6 +1822,7 @@ export class GameRoom {
             if (target && target.controllerSessionId === sessionId) {
                 target.controllerSessionId = null;
                 target.possessionEndAtMs = null;
+                target.teamId = this._defaultTeamForKind(target.kind);
                 this.worldEntities.set(controlledKey, target);
                 this.#broadcastAll({
                     type: MSG.ENTITY_CONTROL,
@@ -1855,7 +1871,7 @@ export class GameRoom {
             this.worldEntities.set(PRACTICE_GOLEM_KEY, {
                 ...existing,
                 kind: existing?.kind ?? 'golem',
-                teamId: existing?.teamId ?? TEAM_PLAYERS,
+                teamId: existing?.teamId ?? TEAM_GOLEMS,
                 hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : GOLEM_HIT_RADIUS,
                 stats: existing?.stats ?? { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
                 poise: existing?.poise ?? this._defaultPoiseForKind('golem'),
@@ -1872,7 +1888,7 @@ export class GameRoom {
             levelId: PRACTICE_GOLEM_STAGE,
             controllerSessionId: null,
             possessionEndAtMs: null,
-            teamId: TEAM_PLAYERS,
+            teamId: TEAM_GOLEMS,
             hitRadius: GOLEM_HIT_RADIUS,
             stats: { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
             poise: this._defaultPoiseForKind('golem'),
@@ -2376,6 +2392,22 @@ export class GameRoom {
     _getPlayerTeamId(sessionId) {
         const player = this.players.get(sessionId);
         return player?.teamId ?? TEAM_PLAYERS;
+    }
+
+    _resolveSightRadiusForPlayer(sessionId) {
+        const player = this.players.get(sessionId);
+        if (!player) return ARCHETYPE_CONFIG.player.sightRadius;
+
+        const controlledEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
+        if (controlledEntityKey.startsWith('world:')) {
+            const controlled = this.worldEntities.get(controlledEntityKey);
+            const archetype = resolveArchetypeConfig(controlled?.kind ?? null);
+            if (Number.isFinite(archetype?.sightRadius)) {
+                return archetype.sightRadius;
+            }
+        }
+
+        return ARCHETYPE_CONFIG.player.sightRadius;
     }
 
     _getWorldEntityTeamId(entity) {

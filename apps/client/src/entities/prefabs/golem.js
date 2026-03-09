@@ -10,6 +10,7 @@ import { IntentComponent } from '../../components/IntentComponent.js';
 import { StatsComponent } from '../../components/StatsComponent.js';
 import { LoadoutComponent } from '../../components/LoadoutComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
+import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 /**
  * Practice possession target in town square.
@@ -49,7 +50,7 @@ export function createGolem(scene, config = {}) {
     golem.addComponent(new KeyboardInputComponent());
     golem.addComponent(new PlayerStateMachine());
     golem.addComponent(new PlayerCombatComponent());
-    golem.addComponent(new VisibilityComponent(260));
+    golem.addComponent(new VisibilityComponent(ARCHETYPE_CONFIG.golem.sightRadius));
 
     return golem;
 }

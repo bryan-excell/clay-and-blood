@@ -71,7 +71,7 @@ export function phasePhysicsTransform(players, locomotionEntries) {
 /**
  * Phase 5: build snapshot payload from authoritative state.
  * @param {Map<string, object>} players
- * @returns {Array<{sessionId:string,x:number,y:number,levelId:string,seq:number}>}
+ * @returns {Array<{sessionId:string,x:number,y:number,levelId:string,seq:number,teamId:string|null,sightRadius:number|null}>}
  */
 export function phaseBuildSnapshotPlayers(players) {
     const snapshotPlayers = [];
@@ -82,6 +82,8 @@ export function phaseBuildSnapshotPlayers(players) {
             y: p.transform.y,
             levelId: p.transform.levelId,
             seq: p.net.lastSeq,
+            teamId: typeof p.teamId === 'string' ? p.teamId : null,
+            sightRadius: Number.isFinite(p.sightRadius) ? p.sightRadius : null,
         });
     }
     return snapshotPlayers;

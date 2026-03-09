@@ -3,6 +3,7 @@ import { EntityManager } from '../entities/EntityManager.js';
 import { EntityLevelManager } from '../world/EntityLevelManager.js';
 import { ExitManager } from '../world/ExitManager.js';
 import { LightingRenderer } from '../world/LightingRenderer.js';
+import { VisibilitySystem } from '../world/VisibilitySystem.js';
 import { InputIntentSystem } from '../world/InputIntentSystem.js';
 import { LocomotionSystem } from '../world/LocomotionSystem.js';
 import { DashSystem } from '../world/DashSystem.js';
@@ -21,6 +22,8 @@ import {
 } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
 import {
+    ARCHETYPE_CONFIG,
+    TEAM_IDS,
     getExitDestination,
     dashStateFromInput,
     stepPlayerKinematics,
@@ -115,6 +118,7 @@ export class GameScene extends Phaser.Scene {
         // --- Multiplayer ---
         // Map of remote sessionId -> Phaser.GameObjects.Arc (circle)
         this.remotePlayers = new Map();
+        this._localTeamId = TEAM_IDS.players;
 
         // --- Networking state ---
         // Latest server tick seen by this client, used for tick-based interpolation.
@@ -281,6 +285,11 @@ export class GameScene extends Phaser.Scene {
         }
 
         this.lightingRenderer?.setPrimaryLightSource(nextEntity.id);
+        if (this.player?.id && nextEntity.id !== this.player.id) {
+            this.lightingRenderer?.addLightSource(this.player.id);
+        } else if (this.player?.id) {
+            this.lightingRenderer?.removeLightSource(this.player.id);
+        }
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
         this._syncReleasePossessionSpell(nextEntity);
         this.uiProjectionSystem?.publishImmediate();
@@ -374,7 +383,14 @@ export class GameScene extends Phaser.Scene {
         // Snapshot of players already in the room when we join
         eventBus.on('network:gameState', ({ players }) => {
             for (const p of players) {
-                this._addRemotePlayer(p.sessionId, p.x, p.y, p.stageId || 'town-square');
+                this._addRemotePlayer(
+                    p.sessionId,
+                    p.x,
+                    p.y,
+                    p.stageId || 'town-square',
+                    p.teamId ?? null,
+                    p.sightRadius ?? null
+                );
             }
         });
 
@@ -384,7 +400,10 @@ export class GameScene extends Phaser.Scene {
         });
 
         // Authoritative state snapshot from the server physics tick
-        eventBus.on('network:stateSnapshot', ({ players, tick, worldEntities, entityEquips }) => {
+        eventBus.on('network:stateSnapshot', ({ players, tick, self, worldEntities, entityEquips }) => {
+            if (typeof self?.teamId === 'string') {
+                this._localTeamId = self.teamId;
+            }
             if (Number.isFinite(tick)) {
                 if (tick > this._latestServerTick) {
                     this._latestServerTick = tick;
@@ -417,7 +436,9 @@ export class GameScene extends Phaser.Scene {
                         p.x,
                         p.y,
                         p.levelId || 'town-square',
-                        tick
+                        tick,
+                        p.teamId ?? null,
+                        p.sightRadius ?? null
                     );
                 }
             }
@@ -444,9 +465,9 @@ export class GameScene extends Phaser.Scene {
             this._applyNetworkWorldState(entities, scope, levelId, null, 'resync');
         });
 
-        eventBus.on('network:entityState', ({ sessionId, entityKey, kind, x, y, levelId, controllerSessionId, possessionMsRemaining }) => {
+        eventBus.on('network:entityState', ({ sessionId, entityKey, kind, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining }) => {
             if (sessionId === networkManager.sessionId) return;
-            this._applyNetworkWorldEntityState({ entityKey, kind, x, y, levelId, controllerSessionId, possessionMsRemaining, tick: null });
+            this._applyNetworkWorldEntityState({ entityKey, kind, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining, tick: null });
         });
 
         eventBus.on('network:forceControl', ({ controlledEntityKey, possessionMsRemaining, levelId, x, y }) => {
@@ -487,6 +508,7 @@ export class GameScene extends Phaser.Scene {
             }
 
             this.setLocallyControlledEntity(target, 'network:forceControl');
+            this._refreshAllRemotePlayerLightSources();
         });
 
         eventBus.on('network:entityControl', ({ entityKey, controllerSessionId, possessionMsRemaining }) => {
@@ -527,6 +549,8 @@ export class GameScene extends Phaser.Scene {
             } else if (!isMine && entity.id === this.getLocallyControlledEntity()?.id) {
                 this._possessionEndAtMs = 0;
             }
+            this._refreshWorldEntityLightSource(entityKey);
+            this._refreshAllRemotePlayerLightSources();
         });
 
         eventBus.on('network:entityEquip', ({ entityKey, levelId, equipped }) => {
@@ -539,6 +563,7 @@ export class GameScene extends Phaser.Scene {
             if (rp) {
                 rp.stageId = levelId;
                 rp.circle.setVisible(levelId === gameState.currentLevelId);
+                this._refreshRemotePlayerLightSource(sessionId);
             }
         });
 
@@ -548,6 +573,7 @@ export class GameScene extends Phaser.Scene {
             for (const rp of this.remotePlayers.values()) {
                 rp.circle.setVisible(rp.stageId === levelId);
             }
+            this._refreshAllRemotePlayerLightSources();
             this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
             const playerLevelId = this.player?.getComponent('transform')?.levelId ?? levelId;
             this._setEntityVisibility(this.player, playerLevelId === levelId);
@@ -744,6 +770,7 @@ export class GameScene extends Phaser.Scene {
         eventBus.on('network:playerLeft', ({ sessionId }) => {
             const rp = this.remotePlayers.get(sessionId);
             if (rp) {
+                this.lightingRenderer?.removeLightSource(this._remotePlayerLightSourceId(sessionId));
                 rp.circle.destroy();
                 this.remotePlayers.delete(sessionId);
                 this._clearReplicationTrack(this._remotePlayerTrackKey(sessionId));
@@ -763,6 +790,12 @@ export class GameScene extends Phaser.Scene {
                 this.entityManager.getEntityById(entityId)?.destroy?.();
             }
             this._networkProjectiles.clear();
+            for (const sessionId of this.remotePlayers.keys()) {
+                this.lightingRenderer?.removeLightSource(this._remotePlayerLightSourceId(sessionId));
+            }
+            for (const entityKey of this._worldEntityStateCache.keys()) {
+                this.lightingRenderer?.removeLightSource(this._worldEntityLightSourceId(entityKey));
+            }
             for (const pulse of this._staggerPulseState.values()) {
                 pulse?.event?.remove?.(false);
             }
@@ -1229,6 +1262,7 @@ export class GameScene extends Phaser.Scene {
                 if (!entityKey || incomingKeys.has(entityKey)) continue;
                 if (entity.id === this.getLocallyControlledEntity()?.id) continue;
                 this._clearReplicationTrack(entityKey);
+                this.lightingRenderer?.removeLightSource(this._worldEntityLightSourceId(entityKey));
                 entity.destroy();
             }
         } else if (scope === 'level' && levelId) {
@@ -1242,6 +1276,7 @@ export class GameScene extends Phaser.Scene {
                 if (!entityKey || incomingKeys.has(entityKey)) continue;
                 if (entity.id === this.getLocallyControlledEntity()?.id) continue;
                 this._clearReplicationTrack(entityKey);
+                this.lightingRenderer?.removeLightSource(this._worldEntityLightSourceId(entityKey));
                 entity.destroy();
             }
         }
@@ -1284,7 +1319,7 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, kind, controllerSessionId, possessionMsRemaining, tick = null }) {
+    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, kind, controllerSessionId, teamId, possessionMsRemaining, tick = null }) {
         if (!entityKey || !entityKey.startsWith('world:')) return;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
@@ -1305,6 +1340,7 @@ export class GameScene extends Phaser.Scene {
             y,
             levelId: levelId ?? null,
             controllerSessionId: controllerSessionId ?? null,
+            teamId: typeof teamId === 'string' ? teamId : null,
             possessionMsRemaining: Number.isFinite(possessionMsRemaining) ? possessionMsRemaining : null,
         });
 
@@ -1356,6 +1392,7 @@ export class GameScene extends Phaser.Scene {
         }
 
         if (!inThisLevel) {
+            this._refreshWorldEntityLightSource(entityKey);
             if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
                 console.log('[WorldSync] applyWorldEntityState:hidden golem (level mismatch)', {
                     entityLevel: levelId,
@@ -1373,10 +1410,12 @@ export class GameScene extends Phaser.Scene {
         if (isLocallyControlled) {
             // Local prediction now drives this entity; drop remote interpolation state.
             this._clearReplicationTrack(entityKey);
+            this._refreshWorldEntityLightSource(entityKey);
             return;
         }
 
         this._pushReplicationTrack(entityKey, x, y, levelId ?? null, tick);
+        this._refreshWorldEntityLightSource(entityKey, x, y);
         if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
             console.log('[WorldSync] applyWorldEntityState:applied golem', {
                 x,
@@ -1446,7 +1485,7 @@ export class GameScene extends Phaser.Scene {
         gfx.fillRect(x, y, Math.round(width * ratio), height);
     }
 
-    _addRemotePlayer(sessionId, x, y, stageId = 'town-square') {
+    _addRemotePlayer(sessionId, x, y, stageId = 'town-square', teamId = null, sightRadius = null) {
         if (this.remotePlayers.has(sessionId)) return;
         const circle = this.add.circle(x, y, PLAYER_RADIUS, 0x6688cc, 0.9);
         circle.setStrokeStyle(3, 0x223355);
@@ -1456,23 +1495,113 @@ export class GameScene extends Phaser.Scene {
         this.remotePlayers.set(sessionId, {
             circle,
             stageId,
+            teamId: typeof teamId === 'string' ? teamId : null,
+            sightRadius: Number.isFinite(sightRadius) ? sightRadius : ARCHETYPE_CONFIG.player.sightRadius,
         });
         this._seedReplicationTrack(this._remotePlayerTrackKey(sessionId), x, y, stageId, null);
+        this._refreshRemotePlayerLightSource(sessionId);
         console.log(`[Network] Remote player joined: ${sessionId} in stage ${stageId}`);
     }
 
-    _pushRemoteSnapshot(sessionId, x, y, stageId, tick) {
+    _pushRemoteSnapshot(sessionId, x, y, stageId, tick, teamId = null, sightRadius = null) {
         let rp = this.remotePlayers.get(sessionId);
         if (!rp) {
-            this._addRemotePlayer(sessionId, x, y, stageId);
+            this._addRemotePlayer(sessionId, x, y, stageId, teamId, sightRadius);
             rp = this.remotePlayers.get(sessionId);
             if (!rp) return;
         }
 
         const nowMs = performance.now();
         rp.stageId = stageId;
+        if (typeof teamId === 'string') {
+            rp.teamId = teamId;
+        }
+        if (Number.isFinite(sightRadius)) {
+            rp.sightRadius = sightRadius;
+        }
         rp.circle.setVisible(stageId === gameState.currentLevelId);
         this._pushReplicationTrack(this._remotePlayerTrackKey(sessionId), x, y, stageId, tick, nowMs);
+        this._refreshRemotePlayerLightSource(sessionId, x, y);
+    }
+
+    _remotePlayerLightSourceId(sessionId) {
+        return `remote-player:${sessionId}`;
+    }
+
+    _worldEntityLightSourceId(entityKey) {
+        return `world-entity:${entityKey}`;
+    }
+
+    _refreshAllRemotePlayerLightSources() {
+        for (const sessionId of this.remotePlayers.keys()) {
+            this._refreshRemotePlayerLightSource(sessionId);
+        }
+        for (const entityKey of this._worldEntityStateCache.keys()) {
+            this._refreshWorldEntityLightSource(entityKey);
+        }
+    }
+
+    _refreshRemotePlayerLightSource(sessionId, x = null, y = null) {
+        const rp = this.remotePlayers.get(sessionId);
+        if (!rp) return;
+
+        const lightSourceId = this._remotePlayerLightSourceId(sessionId);
+        const isAlly = !!rp.teamId && rp.teamId === this._localTeamId;
+        const inCurrentLevel = rp.stageId === gameState.currentLevelId;
+        const grid = this.levelManager?.currentLevel?.grid;
+        const sourceX = Number.isFinite(x) ? x : rp.circle?.x;
+        const sourceY = Number.isFinite(y) ? y : rp.circle?.y;
+        if (
+            !isAlly ||
+            !inCurrentLevel ||
+            !grid ||
+            !Number.isFinite(sourceX) ||
+            !Number.isFinite(sourceY)
+        ) {
+            this.lightingRenderer?.removeLightSource(lightSourceId);
+            return;
+        }
+
+        const sightRadius = Number.isFinite(rp.sightRadius)
+            ? rp.sightRadius
+            : ARCHETYPE_CONFIG.player.sightRadius;
+        const { polygon } = VisibilitySystem.compute(grid, sourceX, sourceY, sightRadius, 360);
+        this.lightingRenderer?.addLightSource(lightSourceId);
+        this.lightingRenderer?.setLightSourcePolygon(lightSourceId, polygon);
+    }
+
+    _refreshWorldEntityLightSource(entityKey, x = null, y = null) {
+        if (!entityKey?.startsWith('world:')) return;
+
+        const lightSourceId = this._worldEntityLightSourceId(entityKey);
+        const cached = this._worldEntityStateCache.get(entityKey);
+        const entity = this._resolveEntityByNetworkKey(entityKey);
+        const isLocallyControlled = entity?.id === this.getLocallyControlledEntity()?.id;
+        const teamId = cached?.teamId ?? null;
+        const levelId = cached?.levelId ?? entity?.getComponent('transform')?.levelId ?? null;
+        const grid = this.levelManager?.currentLevel?.grid;
+        const sourceX = Number.isFinite(x) ? x : (cached?.x ?? entity?.getComponent('transform')?.position?.x);
+        const sourceY = Number.isFinite(y) ? y : (cached?.y ?? entity?.getComponent('transform')?.position?.y);
+        const kind = cached?.kind ?? this._resolveWorldPrefabName(entityKey, null);
+        const sightRadius = Number.isFinite(ARCHETYPE_CONFIG?.[kind]?.sightRadius)
+            ? ARCHETYPE_CONFIG[kind].sightRadius
+            : ARCHETYPE_CONFIG.player.sightRadius;
+
+        if (
+            isLocallyControlled ||
+            teamId !== this._localTeamId ||
+            levelId !== gameState.currentLevelId ||
+            !grid ||
+            !Number.isFinite(sourceX) ||
+            !Number.isFinite(sourceY)
+        ) {
+            this.lightingRenderer?.removeLightSource(lightSourceId);
+            return;
+        }
+
+        const { polygon } = VisibilitySystem.compute(grid, sourceX, sourceY, sightRadius, 360);
+        this.lightingRenderer?.addLightSource(lightSourceId);
+        this.lightingRenderer?.setLightSourcePolygon(lightSourceId, polygon);
     }
 
     _sampleSnapshotBuffer(buffer, renderTick, renderTimeMs) {
@@ -1868,6 +1997,7 @@ export class GameScene extends Phaser.Scene {
             if (sample) {
                 rp.circle.x = sample.x;
                 rp.circle.y = sample.y;
+                this._refreshRemotePlayerLightSource(sessionId, sample.x, sample.y);
             }
         }
 
@@ -1895,6 +2025,7 @@ export class GameScene extends Phaser.Scene {
 
             go.x = sample.x;
             go.y = sample.y;
+            this._refreshWorldEntityLightSource(entityKey, sample.x, sample.y);
 
             const transform = entity.getComponent('transform');
             if (transform) {

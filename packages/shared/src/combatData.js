@@ -3,6 +3,7 @@
 
 export const TEAM_IDS = Object.freeze({
     players: 'players',
+    golems: 'golems',
     zombies: 'zombies',
     neutral: 'neutral',
 });
@@ -16,6 +17,7 @@ export const ARCHETYPE_CONFIG = Object.freeze({
     player: Object.freeze({
         teamId: TEAM_IDS.players,
         hitRadius: 16,
+        sightRadius: 320,
         hpMax: 100,
         poise: Object.freeze({
             max: 10,
@@ -25,8 +27,9 @@ export const ARCHETYPE_CONFIG = Object.freeze({
         }),
     }),
     golem: Object.freeze({
-        teamId: TEAM_IDS.players,
+        teamId: TEAM_IDS.golems,
         hitRadius: 20,
+        sightRadius: 260,
         hpMax: 160,
         poise: Object.freeze({
             max: 18,
@@ -38,6 +41,7 @@ export const ARCHETYPE_CONFIG = Object.freeze({
     zombie: Object.freeze({
         teamId: TEAM_IDS.zombies,
         hitRadius: 18,
+        sightRadius: 140,
         hpMax: 50,
         poise: Object.freeze({
             max: 6,

@@ -11,7 +11,7 @@ import { StatsComponent } from '../../components/StatsComponent.js';
 import { LoadoutComponent } from '../../components/LoadoutComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
 import { PLAYER_RADIUS, COLOR_PLAYER } from '../../config.js';
-import { PLAYER_HEALTH_MAX } from '@clay-and-blood/shared';
+import { ARCHETYPE_CONFIG, PLAYER_HEALTH_MAX } from '@clay-and-blood/shared';
 
 /**
  * Creates a player entity with the updated component architecture
@@ -65,7 +65,7 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new PlayerCombatComponent());
 
     // 6. Field of view - drives lighting and future stealth/AI systems
-    player.addComponent(new VisibilityComponent(320));
+    player.addComponent(new VisibilityComponent(ARCHETYPE_CONFIG.player.sightRadius));
 
     // Set up camera following
     const objectComponent = player.getComponent('circle');
