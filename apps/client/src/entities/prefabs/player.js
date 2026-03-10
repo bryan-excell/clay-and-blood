@@ -51,7 +51,7 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new ExitTraversalComponent({ canUseExits: true }));
     player.addComponent(new LoadoutComponent({
         weapons:     ['unarmed', 'bow', 'sword'],
-        spells:      ['nothing', 'possess', 'imposing_flame', 'gelid_cradle', 'arc_flash'],
+        spells:      ['nothing', 'possess', 'imposing_flame', 'gelid_cradle', 'arc_flash', 'traction'],
         armorSets:   [],
         accessories: ['cape'],
         equipped: { weaponId: 'bow', spellId: 'possess', armorSetId: null, accessoryId: 'cape' },

@@ -8,6 +8,10 @@ export const TEAM_IDS = Object.freeze({
     neutral: 'neutral',
 });
 
+export const DRAGGABLE_WORLD_KINDS = Object.freeze([
+    'corpse',
+]);
+
 export const REACTION_CONFIG = Object.freeze({
     flinchDurationMs: 160,
     staggerDurationMs: 1000,
@@ -223,6 +227,20 @@ export const SPELL_CONFIG = Object.freeze({
             poiseDamage: 5,
         }),
     }),
+    traction: Object.freeze({
+        id: 'traction',
+        castMode: 'target_click',
+        windupMs: 800,
+        windupMoveSpeedMultiplier: 0.5,
+        cooldownMs: 0,
+        traction: Object.freeze({
+            dragMoveSpeedMultiplier: 0.75,
+            followDistance: 28,
+        }),
+        targeting: Object.freeze({
+            draggableKinds: DRAGGABLE_WORLD_KINDS,
+        }),
+    }),
 });
 
 export function resolveArchetypeConfig(kind) {
@@ -247,4 +265,8 @@ export function resolveMeleeWeaponConfig(weaponId) {
 export function resolveSpellConfig(spellId) {
     if (typeof spellId !== 'string') return null;
     return SPELL_CONFIG[spellId] ?? null;
+}
+
+export function isDraggableWorldKind(kind) {
+    return typeof kind === 'string' && DRAGGABLE_WORLD_KINDS.includes(kind);
 }

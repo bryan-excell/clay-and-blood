@@ -79,6 +79,9 @@ export class UiProjectionSystem {
 
         const hp    = canApplyNetworkSelf ? networkSelf.hp    : (stats?.hp    ?? 0);
         const hpMax = canApplyNetworkSelf ? networkSelf.hpMax : (stats?.hpMax ?? 0);
+        const buffs = canApplyNetworkSelf && Array.isArray(networkSelf?.buffs)
+            ? networkSelf.buffs
+            : EMPTY_BUFFS;
 
         return {
             entityId:   controlled.id,
@@ -90,7 +93,7 @@ export class UiProjectionSystem {
             manaMax:    stats?.manaMax    ?? 0,
             stamina:    stats?.stamina    ?? 0,
             staminaMax: stats?.staminaMax ?? 0,
-            buffs: EMPTY_BUFFS,
+            buffs,
             // Full item defs are resolved here so the UI layer doesn't need
             // to import ItemRegistry directly.
             loadout: loadout ? {

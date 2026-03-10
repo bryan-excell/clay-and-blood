@@ -430,9 +430,14 @@ export class PlayerCombatComponent extends Component {
 
         if (spellCfg?.castMode === 'target_click') {
             if (!down) return;
-            if (!this._isSpellReady(spellCfg)) return;
             const liveTarget = this._resolveLivePointerTarget(targetX, targetY);
-            const clicked = this._resolveClickableSpellTarget(liveTarget.x, liveTarget.y);
+            const tractionActive = spellCfg.id === 'traction' && this._hasActiveSpellEffect('traction_source');
+            if (tractionActive) {
+                this._attemptSpellCast(spellCfg, liveTarget.x, liveTarget.y, { isCancellation: true });
+                return;
+            }
+            if (!this._isSpellReady(spellCfg)) return;
+            const clicked = this._resolveClickableSpellTarget(liveTarget.x, liveTarget.y, spellCfg);
             if (!clicked) return;
             this._attemptSpellCast(spellCfg, liveTarget.x, liveTarget.y, {
                 targetEntityKey: clicked.entityKey,
@@ -489,6 +494,13 @@ export class PlayerCombatComponent extends Component {
             attackPushVx: 0,
             attackPushVy: 0,
         };
+        if (this._hasActiveSpellEffect('traction_source')) {
+            const tractionCfg = resolveSpellConfig('traction')?.traction ?? {};
+            const dragMultiplier = Number.isFinite(tractionCfg.dragMoveSpeedMultiplier)
+                ? Math.max(0, Math.min(1, tractionCfg.dragMoveSpeedMultiplier))
+                : 1;
+            spellInfluence.speedMultiplier = Math.min(spellInfluence.speedMultiplier, dragMultiplier);
+        }
         if (!weaponInfluence) return spellInfluence;
         return {
             speedMultiplier: Math.min(
@@ -689,6 +701,9 @@ export class PlayerCombatComponent extends Component {
             case 'arc_flash':
                 // Arc Flash uses target-click flow in handleSecondaryInput.
                 break;
+            case 'traction':
+                // Traction uses target-click flow in handleSecondaryInput.
+                break;
             case 'nothing':
             default:
                 break;
@@ -707,20 +722,23 @@ export class PlayerCombatComponent extends Component {
 
     _attemptSpellCast(spellCfg, targetX, targetY, options = {}) {
         if (!spellCfg) return;
+        const isCancellation = !!options.isCancellation;
         const now = performance.now();
-        if (!this._isSpellReady(spellCfg, now)) return;
+        if (!isCancellation && !this._isSpellReady(spellCfg, now)) return;
 
-        const cooldownMs = Number.isFinite(spellCfg.cooldownMs) ? Math.max(0, spellCfg.cooldownMs) : 0;
-        this._spellCooldownUntilMs.set(spellCfg.id, now + cooldownMs);
-        const uiCooldowns = { ...(uiStateStore.get('spellCooldowns') ?? {}) };
-        uiCooldowns[spellCfg.id] = now + cooldownMs;
-        uiStateStore.set('spellCooldowns', uiCooldowns);
+        if (!isCancellation) {
+            const cooldownMs = Number.isFinite(spellCfg.cooldownMs) ? Math.max(0, spellCfg.cooldownMs) : 0;
+            this._spellCooldownUntilMs.set(spellCfg.id, now + cooldownMs);
+            const uiCooldowns = { ...(uiStateStore.get('spellCooldowns') ?? {}) };
+            uiCooldowns[spellCfg.id] = now + cooldownMs;
+            uiStateStore.set('spellCooldowns', uiCooldowns);
 
-        const windupMs = Number.isFinite(spellCfg.windupMs) ? Math.max(0, spellCfg.windupMs) : 0;
-        this._spellWindupUntilMs = Math.max(this._spellWindupUntilMs, now + windupMs);
-        this._spellWindupMoveSpeedMultiplier = Number.isFinite(spellCfg.windupMoveSpeedMultiplier)
-            ? Math.max(0, Math.min(1, spellCfg.windupMoveSpeedMultiplier))
-            : 1;
+            const windupMs = Number.isFinite(spellCfg.windupMs) ? Math.max(0, spellCfg.windupMs) : 0;
+            this._spellWindupUntilMs = Math.max(this._spellWindupUntilMs, now + windupMs);
+            this._spellWindupMoveSpeedMultiplier = Number.isFinite(spellCfg.windupMoveSpeedMultiplier)
+                ? Math.max(0, Math.min(1, spellCfg.windupMoveSpeedMultiplier))
+                : 1;
+        }
 
         if (!this.isLocallyControlled()) return;
         networkManager.sendSpellCast({
@@ -750,12 +768,19 @@ export class PlayerCombatComponent extends Component {
         return { x: fallbackX, y: fallbackY };
     }
 
-    _resolveClickableSpellTarget(worldX, worldY) {
+    _resolveClickableSpellTarget(worldX, worldY, spellCfg = null) {
         const scene = this.entity?.scene;
         const manager = scene?.entityManager;
         if (!manager) return null;
 
-        const candidates = manager.getEntitiesWithComponent('stats');
+        const statCandidates = manager.getEntitiesWithComponent('stats');
+        const draggableKinds = Array.isArray(spellCfg?.targeting?.draggableKinds)
+            ? new Set(spellCfg.targeting.draggableKinds)
+            : null;
+        const corpseCandidates = draggableKinds?.has('corpse')
+            ? Object.values(manager.entities ?? {}).filter((entity) => entity?.type === 'corpse')
+            : [];
+        const candidates = [...statCandidates, ...corpseCandidates];
         let best = null;
         let bestDistSq = Infinity;
 
@@ -787,6 +812,13 @@ export class PlayerCombatComponent extends Component {
         }
 
         return best;
+    }
+
+    _hasActiveSpellEffect(effectType) {
+        if (typeof effectType !== 'string') return false;
+        const buffs = uiStateStore.get('networkSelf')?.buffs;
+        if (!Array.isArray(buffs)) return false;
+        return buffs.some((buff) => buff?.type === effectType);
     }
 
     _beginSpellHoldTargeting(spellCfg, targetX, targetY) {

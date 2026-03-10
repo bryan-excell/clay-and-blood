@@ -27,6 +27,7 @@ import {
     resolveMeleeAttackProfile,
     PROJECTILE_POISE_DAMAGE,
     resolveSpellConfig,
+    isDraggableWorldKind,
     getWorldSpawnDefinitions,
     getWorldSpawnDefinition,
     getInteractableDefinition,
@@ -68,6 +69,8 @@ const TEAM_NEUTRAL = TEAM_IDS.neutral;
 const IMPOSING_FLAME_SPELL_ID = 'imposing_flame';
 const GELID_CRADLE_SPELL_ID = 'gelid_cradle';
 const ARC_FLASH_SPELL_ID = 'arc_flash';
+const TRACTION_SPELL_ID = 'traction';
+const ACTIVE_EFFECT_TRACTION = 'traction';
 const ARC_FLASH_RAY_HIT_EPSILON = 0.5; // px tolerance to avoid endpoint precision misses
 const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
@@ -246,6 +249,8 @@ export class GameRoom {
         this.worldEntities = new Map(); // entityKey -> { entityKey, x, y, levelId, controllerSessionId }
         this.spawnStates = new Map(); // spawnKey -> { spawnKey, alive, entityKey }
         this.suppressedTags = new Set();
+        this.activeEffects = new Map(); // effectId -> authoritative ongoing effect state
+        this.activeEffectIdsByEntityKey = new Map(); // entityKey -> Set<effectId>
         this.projectiles = new Map(); // projectileId -> { id, shooterSessionId, projectileType, x, y, velocityX, velocityY, levelId, damage, remainingRange }
         this.pendingSpellEffects = new Map(); // effectId -> { id, spellId, sourceEntityKey, sourceTeamId, levelId, x, y, executeAtMs, damage, poiseDamage, radius }
         // levelId -> grid (2-D number array, cached)
@@ -377,7 +382,8 @@ export class GameRoom {
                         sprint: !incapacitated && !!data.sprint,
                         moveSpeedMultiplier: (Number.isFinite(data.moveSpeedMultiplier)
                             ? Math.max(0, Math.min(1, data.moveSpeedMultiplier))
-                            : 1) * this._resolveSpellWindupMoveMultiplier(player, Date.now()),
+                            : 1) * this._resolveSpellWindupMoveMultiplier(player, Date.now())
+                            * this._resolveActiveEffectMoveMultiplier(playerEntityKey),
                         attackPushVx: !incapacitated && Number.isFinite(data.attackPushVx)
                             ? Math.max(-800, Math.min(800, data.attackPushVx))
                             : 0,
@@ -786,12 +792,34 @@ export class GameRoom {
                 if (grid) ({ x, y } = resolveCollisions(x, y, grid));
 
                 if (movingPlayer) {
-                    this.players.set(sessionId, {
+                    const nextPlayer = {
                         ...player,
                         transform: { ...player.transform, levelId, x, y },
                         intent: { up: false, down: false, left: false, right: false, sprint: false },
                         motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-                    });
+                    };
+                    this.players.set(sessionId, nextPlayer);
+                    const traction = this._findTractionEffectBySource(movingEntityKey);
+                    if (traction) {
+                        const target = this.worldEntities.get(traction.targetEntityKey);
+                        const sourceCombatant = this._getCombatantByEntityKey(movingEntityKey);
+                        const nextTargetPos = target && sourceCombatant
+                            ? this._resolveTractionTargetPosition(traction, sourceCombatant, target, {
+                                levelId,
+                                preferredDirection: entryDirection,
+                            })
+                            : null;
+                        if (target && nextTargetPos) {
+                            this.worldEntities.set(traction.targetEntityKey, {
+                                ...target,
+                                levelId,
+                                x: nextTargetPos.x,
+                                y: nextTargetPos.y,
+                            });
+                        }
+                        traction.levelId = levelId;
+                        this.activeEffects.set(traction.id, traction);
+                    }
                     this.#broadcast({ type: MSG.LEVEL_CHANGE, sessionId, levelId }, ws);
                 } else if (movingWorldEntity) {
                     this.worldEntities.set(movingEntityKey, {
@@ -800,6 +828,27 @@ export class GameRoom {
                         x,
                         y,
                     });
+                    const traction = this._findTractionEffectBySource(movingEntityKey);
+                    if (traction) {
+                        const sourceCombatant = this._getCombatantByEntityKey(movingEntityKey);
+                        const target = this.worldEntities.get(traction.targetEntityKey);
+                        const nextTargetPos = target && sourceCombatant
+                            ? this._resolveTractionTargetPosition(traction, sourceCombatant, target, {
+                                levelId,
+                                preferredDirection: entryDirection,
+                            })
+                            : null;
+                        if (target && nextTargetPos) {
+                            this.worldEntities.set(traction.targetEntityKey, {
+                                ...target,
+                                levelId,
+                                x: nextTargetPos.x,
+                                y: nextTargetPos.y,
+                            });
+                        }
+                        traction.levelId = levelId;
+                        this.activeEffects.set(traction.id, traction);
+                    }
 
                 this.#broadcast({
                     type: MSG.ENTITY_STATE,
@@ -850,6 +899,11 @@ export class GameRoom {
 
     async webSocketClose(ws, code, reason) {
         const [sessionId] = this.state.getTags(ws);
+        const player = this.players.get(sessionId);
+        if (player?.controlledEntityKey) {
+            this._cancelActiveEffectsForEntity(player.controlledEntityKey, 'disconnect');
+        }
+        this._cancelActiveEffectsForEntity(`player:${sessionId}`, 'disconnect');
         this.players.delete(sessionId);
         this.entityEquips.delete(`player:${sessionId}`);
         for (const entry of this.worldEntities.values()) {
@@ -863,6 +917,11 @@ export class GameRoom {
 
     async webSocketError(ws) {
         const [sessionId] = this.state.getTags(ws);
+        const player = this.players.get(sessionId);
+        if (player?.controlledEntityKey) {
+            this._cancelActiveEffectsForEntity(player.controlledEntityKey, 'disconnect');
+        }
+        this._cancelActiveEffectsForEntity(`player:${sessionId}`, 'disconnect');
         this.players.delete(sessionId);
         this.entityEquips.delete(`player:${sessionId}`);
         for (const entry of this.worldEntities.values()) {
@@ -896,6 +955,7 @@ export class GameRoom {
         this._phasePhysicsTransform(locomotionPhase);
         this._phaseZombieAi();
         this._phaseZombieMovement();
+        this._phaseActiveEffects();
         this._phaseSpellCasts();
         this._phaseSpellEffects();
         this._phaseProjectiles();
@@ -925,6 +985,7 @@ export class GameRoom {
             if (entity?.kind !== 'corpse') continue;
             const expiresAtMs = entity.decay?.expiresAtMs ?? null;
             if (!Number.isFinite(expiresAtMs) || expiresAtMs > nowMs) continue;
+            this._cancelActiveEffectsForEntity(entityKey, 'corpse-decayed');
             this.worldEntities.delete(entityKey);
         }
     }
@@ -1148,6 +1209,276 @@ export class GameRoom {
         }
     }
 
+    _trackEffectEntity(effectId, entityKey) {
+        if (!effectId || typeof entityKey !== 'string') return;
+        const current = this.activeEffectIdsByEntityKey.get(entityKey) ?? new Set();
+        current.add(effectId);
+        this.activeEffectIdsByEntityKey.set(entityKey, current);
+    }
+
+    _untrackEffectEntity(effectId, entityKey) {
+        if (!effectId || typeof entityKey !== 'string') return;
+        const current = this.activeEffectIdsByEntityKey.get(entityKey);
+        if (!current) return;
+        current.delete(effectId);
+        if (current.size === 0) {
+            this.activeEffectIdsByEntityKey.delete(entityKey);
+            return;
+        }
+        this.activeEffectIdsByEntityKey.set(entityKey, current);
+    }
+
+    _registerActiveEffect(effect) {
+        if (!effect?.id || !effect.type) return null;
+        this.activeEffects.set(effect.id, effect);
+        if (typeof effect.sourceEntityKey === 'string') this._trackEffectEntity(effect.id, effect.sourceEntityKey);
+        if (typeof effect.targetEntityKey === 'string') this._trackEffectEntity(effect.id, effect.targetEntityKey);
+        return effect;
+    }
+
+    _removeActiveEffect(effectId, reason = 'removed') {
+        const effect = this.activeEffects.get(effectId);
+        if (!effect) return null;
+        this.activeEffects.delete(effectId);
+        if (typeof effect.sourceEntityKey === 'string') this._untrackEffectEntity(effectId, effect.sourceEntityKey);
+        if (typeof effect.targetEntityKey === 'string') this._untrackEffectEntity(effectId, effect.targetEntityKey);
+        if (effect.type === ACTIVE_EFFECT_TRACTION) {
+            const sourcePlayer = effect.sourceEntityKey?.startsWith('player:')
+                ? this.players.get(effect.sourceEntityKey.slice('player:'.length))
+                : null;
+            if (sourcePlayer?.spellState?.pendingCast?.spellId === TRACTION_SPELL_ID) {
+                const spellState = sourcePlayer.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+                spellState.pendingCast = null;
+                this.players.set(effect.sourceEntityKey.slice('player:'.length), {
+                    ...sourcePlayer,
+                    spellState,
+                });
+            }
+        }
+        return { ...effect, removedReason: reason };
+    }
+
+    _listActiveEffectsForEntity(entityKey, type = null) {
+        if (typeof entityKey !== 'string') return [];
+        const ids = this.activeEffectIdsByEntityKey.get(entityKey);
+        if (!ids || ids.size === 0) return [];
+        const effects = [];
+        for (const effectId of ids) {
+            const effect = this.activeEffects.get(effectId);
+            if (!effect) continue;
+            if (type && effect.type !== type) continue;
+            effects.push(effect);
+        }
+        return effects;
+    }
+
+    _findTractionEffectBySource(entityKey) {
+        return this._listActiveEffectsForEntity(entityKey, ACTIVE_EFFECT_TRACTION)
+            .find((effect) => effect.sourceEntityKey === entityKey) ?? null;
+    }
+
+    _findTractionEffectByTarget(entityKey) {
+        return this._listActiveEffectsForEntity(entityKey, ACTIVE_EFFECT_TRACTION)
+            .find((effect) => effect.targetEntityKey === entityKey) ?? null;
+    }
+
+    _findTractionEffectByOwnerSessionId(sessionId) {
+        if (typeof sessionId !== 'string') return null;
+        for (const effect of this.activeEffects.values()) {
+            if (effect?.type !== ACTIVE_EFFECT_TRACTION) continue;
+            if (effect.ownerSessionId === sessionId) return effect;
+        }
+        return null;
+    }
+
+    _cancelActiveEffectsForEntity(entityKey, reason = 'invalidated') {
+        if (typeof entityKey !== 'string') return;
+        const ids = Array.from(this.activeEffectIdsByEntityKey.get(entityKey) ?? []);
+        for (const effectId of ids) {
+            this._removeActiveEffect(effectId, reason);
+        }
+    }
+
+    _buildEffectSummariesForEntity(entityKey) {
+        if (typeof entityKey !== 'string') return [];
+        const summaries = [];
+        for (const effect of this._listActiveEffectsForEntity(entityKey)) {
+            if (effect.type !== ACTIVE_EFFECT_TRACTION) continue;
+            if (effect.sourceEntityKey === entityKey) {
+                summaries.push({
+                    id: effect.id,
+                    type: 'traction_source',
+                    spellId: TRACTION_SPELL_ID,
+                    targetEntityKey: effect.targetEntityKey ?? null,
+                });
+            } else if (effect.targetEntityKey === entityKey) {
+                summaries.push({
+                    id: effect.id,
+                    type: 'traction_target',
+                    spellId: TRACTION_SPELL_ID,
+                    sourceEntityKey: effect.sourceEntityKey ?? null,
+                });
+            }
+        }
+        return summaries;
+    }
+
+    _serializeDragStateForWorldEntity(entityKey) {
+        const traction = this._findTractionEffectByTarget(entityKey);
+        if (!traction) return null;
+        return {
+            sourceEntityKey: traction.sourceEntityKey ?? null,
+            targetEntityKey: traction.targetEntityKey ?? null,
+            startedAtMs: traction.startedAtMs ?? null,
+        };
+    }
+
+    _isValidTractionTarget(sourceCombatant, targetEntityKey, options = {}) {
+        if (!sourceCombatant || typeof targetEntityKey !== 'string' || !targetEntityKey.startsWith('world:')) return false;
+        const target = this.worldEntities.get(targetEntityKey);
+        if (!target) return false;
+        if (!isDraggableWorldKind(target.kind ?? null)) return false;
+        if ((sourceCombatant.levelId ?? null) !== (target.levelId ?? null)) return false;
+        if (target.controllerSessionId) return false;
+        const ignoreEffectId = typeof options.ignoreEffectId === 'string' ? options.ignoreEffectId : null;
+        const bySource = this._findTractionEffectBySource(sourceCombatant.entityKey);
+        if (bySource && bySource.id !== ignoreEffectId) return false;
+        const byTarget = this._findTractionEffectByTarget(targetEntityKey);
+        if (byTarget && byTarget.id !== ignoreEffectId) return false;
+        return true;
+    }
+
+    _resolveTractionDirection(effect, sourceCombatant, targetEntity = null, preferredDirection = null) {
+        if (preferredDirection) {
+            const normalized = sanitizeDirection(preferredDirection);
+            if (normalized === 'north') return { x: 0, y: -1 };
+            if (normalized === 'south') return { x: 0, y: 1 };
+            if (normalized === 'east') return { x: 1, y: 0 };
+            if (normalized === 'west') return { x: -1, y: 0 };
+        }
+
+        const sourcePlayer = sourceCombatant?.entityKey?.startsWith('player:')
+            ? this.players.get(sourceCombatant.entityKey.slice('player:'.length))
+            : null;
+        const intent = sourcePlayer?.intent ?? null;
+        let dirX = 0;
+        let dirY = 0;
+        if (intent) {
+            if (intent.left) dirX -= 1;
+            if (intent.right) dirX += 1;
+            if (intent.up) dirY -= 1;
+            if (intent.down) dirY += 1;
+        }
+        const len = Math.sqrt(dirX * dirX + dirY * dirY);
+        if (len > 0.001) {
+            return { x: dirX / len, y: dirY / len };
+        }
+
+        if (targetEntity && Number.isFinite(targetEntity.x) && Number.isFinite(targetEntity.y) &&
+            Number.isFinite(sourceCombatant?.x) && Number.isFinite(sourceCombatant?.y)) {
+            const dx = sourceCombatant.x - targetEntity.x;
+            const dy = sourceCombatant.y - targetEntity.y;
+            const gap = Math.sqrt(dx * dx + dy * dy);
+            if (gap > 0.001) {
+                return { x: dx / gap, y: dy / gap };
+            }
+        }
+
+        return { x: 0, y: 1 };
+    }
+
+    _resolveTractionTargetPosition(effect, sourceCombatant, targetEntity = null, options = {}) {
+        if (!effect || !sourceCombatant) return null;
+        const direction = this._resolveTractionDirection(
+            effect,
+            sourceCombatant,
+            targetEntity,
+            options.preferredDirection ?? null
+        );
+        const tractionCfg = effect.config ?? {};
+        const followDistance = Number.isFinite(tractionCfg.followDistance)
+            ? Math.max(0, tractionCfg.followDistance)
+            : 0;
+        let x = sourceCombatant.x - direction.x * followDistance;
+        let y = sourceCombatant.y - direction.y * followDistance;
+        const grid = this._getGrid(options.levelId ?? sourceCombatant.levelId ?? targetEntity?.levelId ?? 'town-square');
+        if (grid) ({ x, y } = resolveCollisions(x, y, grid));
+        return { x, y };
+    }
+
+    _applyTractionEffect(sessionId, pendingCast, spellCfg, nowMs = Date.now()) {
+        const source = this._resolveAttackSource(sessionId, pendingCast.requestedLevelId ?? null);
+        if (!source) return false;
+        if (!pendingCast.targetEntityKey) return false;
+        if (!this._isValidTractionTarget(source, pendingCast.targetEntityKey)) return false;
+
+        const target = this.worldEntities.get(pendingCast.targetEntityKey);
+        if (!target) return false;
+
+        const effectId = crypto.randomUUID();
+        const tractionCfg = spellCfg.traction ?? {};
+        const effect = this._registerActiveEffect({
+            id: effectId,
+            type: ACTIVE_EFFECT_TRACTION,
+            spellId: TRACTION_SPELL_ID,
+            sourceEntityKey: source.entityKey,
+            targetEntityKey: pendingCast.targetEntityKey,
+            ownerSessionId: sessionId,
+            levelId: source.levelId ?? pendingCast.requestedLevelId ?? null,
+            startedAtMs: nowMs,
+            config: {
+                dragMoveSpeedMultiplier: Number.isFinite(tractionCfg.dragMoveSpeedMultiplier)
+                    ? Math.max(0, Math.min(1, tractionCfg.dragMoveSpeedMultiplier))
+                    : 1,
+                followDistance: Number.isFinite(tractionCfg.followDistance)
+                    ? Math.max(0, tractionCfg.followDistance)
+                    : 0,
+            },
+        });
+        if (!effect) return false;
+
+        const nextPos = this._resolveTractionTargetPosition(effect, source, target, {
+            levelId: source.levelId ?? target.levelId ?? null,
+        });
+        if (nextPos) {
+            this.worldEntities.set(target.entityKey, {
+                ...target,
+                levelId: source.levelId ?? target.levelId ?? null,
+                x: nextPos.x,
+                y: nextPos.y,
+            });
+        }
+        return true;
+    }
+
+    _phaseActiveEffects() {
+        if (this.activeEffects.size === 0) return;
+        for (const effect of Array.from(this.activeEffects.values())) {
+            if (!effect) continue;
+            if (effect.type !== ACTIVE_EFFECT_TRACTION) continue;
+            const source = this._getCombatantByEntityKey(effect.sourceEntityKey);
+            const target = this.worldEntities.get(effect.targetEntityKey);
+            if (!source || !target) {
+                this._removeActiveEffect(effect.id, 'missing-endpoint');
+                continue;
+            }
+            if (!this._isValidTractionTarget(source, target.entityKey, { ignoreEffectId: effect.id })) {
+                this._removeActiveEffect(effect.id, 'invalid-target');
+                continue;
+            }
+            const nextPos = this._resolveTractionTargetPosition(effect, source, target, {
+                levelId: source.levelId ?? target.levelId ?? null,
+            });
+            if (!nextPos) continue;
+            this.worldEntities.set(target.entityKey, {
+                ...target,
+                levelId: source.levelId ?? target.levelId ?? null,
+                x: nextPos.x,
+                y: nextPos.y,
+            });
+        }
+    }
+
     _queueSpellCastForPlayer(sessionId, { spellId, targetX, targetY, targetEntityKey = null, levelId }) {
         const player = this.players.get(sessionId);
         if (!player) return;
@@ -1165,11 +1496,22 @@ export class GameRoom {
         if (nowMs < cooldownUntil) return;
         if (spellState.pendingCast) return;
 
+        if (spellId === TRACTION_SPELL_ID) {
+            const activeTraction = this._findTractionEffectByOwnerSessionId(sessionId);
+            if (activeTraction) {
+                this._removeActiveEffect(activeTraction.id, 'manual-cancel');
+                return;
+            }
+        }
+
         if (spellCfg.castMode === 'target_click') {
             if (!targetEntityKey) return;
             const source = this._resolveAttackSource(sessionId, levelId);
             if (!source) return;
-            if (!this._isValidSpellTarget(source, targetEntityKey)) return;
+            const valid = spellId === TRACTION_SPELL_ID
+                ? this._isValidTractionTarget(source, targetEntityKey)
+                : this._isValidSpellTarget(source, targetEntityKey);
+            if (!valid) return;
         } else if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) {
             return;
         }
@@ -1222,6 +1564,8 @@ export class GameRoom {
             didCast = this._castGelidCradle(sessionId, pendingCast, spellCfg, nowMs);
         } else if (pendingCast.spellId === ARC_FLASH_SPELL_ID) {
             didCast = this._castArcFlash(sessionId, pendingCast, spellCfg, nowMs);
+        } else if (pendingCast.spellId === TRACTION_SPELL_ID) {
+            didCast = this._applyTractionEffect(sessionId, pendingCast, spellCfg, nowMs);
         }
         if (!didCast) return;
 
@@ -1758,6 +2102,19 @@ export class GameRoom {
         return Math.max(0, Math.min(1, configured));
     }
 
+    _resolveActiveEffectMoveMultiplier(entityKey) {
+        if (typeof entityKey !== 'string') return 1;
+        let multiplier = 1;
+        for (const effect of this._listActiveEffectsForEntity(entityKey)) {
+            if (effect.type !== ACTIVE_EFFECT_TRACTION) continue;
+            const configured = Number.isFinite(effect.config?.dragMoveSpeedMultiplier)
+                ? effect.config.dragMoveSpeedMultiplier
+                : 1;
+            multiplier = Math.min(multiplier, Math.max(0, Math.min(1, configured)));
+        }
+        return multiplier;
+    }
+
     _despawnProjectile(projectileId, reason = 'unknown', x = null, y = null, projectileType = 'bullet') {
         const existed = this.projectiles.delete(projectileId);
         if (!existed) return;
@@ -1802,6 +2159,7 @@ export class GameRoom {
                     hpMax: PLAYER_HEALTH_MAX,
                     teamId: typeof selfPlayer.teamId === 'string' ? selfPlayer.teamId : null,
                     sightRadius: Number.isFinite(selfPlayer.sightRadius) ? selfPlayer.sightRadius : null,
+                    buffs: this._buildEffectSummariesForEntity(`player:${sessionId}`),
                 } : null,
                 worldEntities: Array.from(this.worldEntities.values())
                     .map((entry) => this._serializeWorldEntity(entry, now))
@@ -1832,6 +2190,10 @@ export class GameRoom {
 
         const controlledKey = player.controlledEntityKey;
         const fallbackKey = player.returnEntityKey ?? `player:${sessionId}`;
+        this._cancelActiveEffectsForEntity(`player:${sessionId}`, `${reason}:player`);
+        if (typeof controlledKey === 'string') {
+            this._cancelActiveEffectsForEntity(controlledKey, `${reason}:controlled`);
+        }
 
         if (controlledKey && controlledKey.startsWith('world:')) {
             const target = this.worldEntities.get(controlledKey);
@@ -2232,6 +2594,7 @@ export class GameRoom {
             levelId: entity.levelId ?? null,
         });
         if (died) {
+            this._cancelActiveEffectsForEntity(entityKey, 'death');
             if (typeof entity.spawnKey === 'string') {
                 this.spawnStates.set(entity.spawnKey, {
                     spawnKey: entity.spawnKey,
@@ -2254,6 +2617,10 @@ export class GameRoom {
 
         const latest = this.players.get(sessionId) ?? player;
         const controlledKey = latest.controlledEntityKey ?? `player:${sessionId}`;
+        this._cancelActiveEffectsForEntity(`player:${sessionId}`, 'death');
+        if (typeof controlledKey === 'string') {
+            this._cancelActiveEffectsForEntity(controlledKey, 'death');
+        }
         if (controlledKey.startsWith('world:')) {
             const target = this.worldEntities.get(controlledKey);
             if (target && target.controllerSessionId === sessionId) {
@@ -2450,6 +2817,7 @@ export class GameRoom {
 
     _cancelEntityActions(entityKey) {
         if (typeof entityKey !== 'string') return;
+        this._cancelActiveEffectsForEntity(entityKey, 'interrupt');
         if (entityKey.startsWith('player:')) {
             const sid = entityKey.slice('player:'.length);
             const player = this.players.get(sid);
@@ -2806,6 +3174,7 @@ export class GameRoom {
                 diedAtMs: entry.identity.diedAtMs ?? null,
                 killerEntityKey: entry.identity.killerEntityKey ?? null,
             } : null,
+            dragState: this._serializeDragStateForWorldEntity(entry.entityKey),
         };
     }
 

@@ -18,6 +18,7 @@ export class NetworkUiAdapter {
                 sessionId: self.sessionId ?? null,
                 hp: Number.isFinite(self.hp) ? self.hp : 0,
                 hpMax: Number.isFinite(self.hpMax) ? self.hpMax : 1,
+                buffs: Array.isArray(self.buffs) ? self.buffs : [],
             });
         });
 
