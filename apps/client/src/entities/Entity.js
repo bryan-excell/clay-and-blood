@@ -21,10 +21,23 @@ export class Entity {
         this.id = id || createEntityId();
         this.scene = scene;
         this.components = new Map();
-        this.type = 'entity'; // Base type, can be overridden by prefabs
+        this._type = 'entity'; // Base type, can be overridden by prefabs
 
         // Register with game state
         eventBus.emit('entity:created', { entity: this });
+    }
+
+    get type() {
+        return this._type;
+    }
+
+    set type(value) {
+        const nextType = typeof value === 'string' && value.length > 0 ? value : 'entity';
+        const previousType = this._type;
+        this._type = nextType;
+        if (this.scene?.entityManager?.reindexEntity && previousType !== nextType) {
+            this.scene.entityManager.reindexEntity(this, previousType);
+        }
     }
 
     /**

@@ -47,6 +47,7 @@ export class EntityManager {
     registerEntity(data) {
         const { entity } = data;
         this.entities[entity.id] = entity;
+        this.reindexEntity(entity);
     }
 
     /**
@@ -57,8 +58,42 @@ export class EntityManager {
         const { entityId } = data;
 
         if (this.entities[entityId]) {
+            const entity = this.entities[entityId];
+            const type = entity?.type ?? null;
+            if (type) {
+                const typed = this.entityTypes.get(type);
+                typed?.delete(entity);
+                if (typed && typed.size === 0) {
+                    this.entityTypes.delete(type);
+                }
+            }
             delete this.entities[entityId];
         }
+    }
+
+    reindexEntity(entity, previousType = null) {
+        if (!entity?.id) return;
+        const prevType = typeof previousType === 'string' ? previousType : null;
+        if (prevType) {
+            const prevSet = this.entityTypes.get(prevType);
+            prevSet?.delete(entity);
+            if (prevSet && prevSet.size === 0) {
+                this.entityTypes.delete(prevType);
+            }
+        } else {
+            for (const [type, entities] of this.entityTypes.entries()) {
+                if (!entities.delete(entity)) continue;
+                if (entities.size === 0) {
+                    this.entityTypes.delete(type);
+                }
+                break;
+            }
+        }
+
+        const nextType = entity.type ?? 'entity';
+        const typed = this.entityTypes.get(nextType) ?? new Set();
+        typed.add(entity);
+        this.entityTypes.set(nextType, typed);
     }
 
     /**
@@ -140,8 +175,6 @@ export class EntityManager {
      * @returns {Array} Entities of the specified type
      */
     getEntitiesByType(type) {
-        return Object.values(this.entities).filter(entity => 
-            entity.type === type
-        );
+        return Array.from(this.entityTypes.get(type) ?? []);
     }
 }

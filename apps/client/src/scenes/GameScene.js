@@ -15,6 +15,7 @@ import { actionManager } from '../core/ActionManager.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { NetworkUiAdapter } from '../core/NetworkUiAdapter.js';
+import { uiStateStore } from '../core/UiStateStore.js';
 import {
     GAME_FONT_FAMILY,
     PLAYER_RADIUS,
@@ -55,6 +56,11 @@ const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
 const DEBUG_GOLEM_KEY = 'world:golem_town_square';
 const DAMAGE_TEXT_RISE_PX = 24;
 const DAMAGE_TEXT_LIFETIME_MS = 460;
+const HOVER_SELECT_PADDING_PX = 14;
+const HOVER_SELECT_MIN_RADIUS_PX = 24;
+const HOVER_SWITCH_SCORE_MARGIN = 140;
+const HOVER_RESOLVE_INTERVAL_MS = 25;
+const HOVER_TARGETABLE_ENTITY_TYPES = Object.freeze(['golem', 'zombie', 'corpse']);
 
 /**
  * Main game scene, updated for entity-based levels
@@ -79,6 +85,9 @@ export class GameScene extends Phaser.Scene {
         this._nearestInteractable = null;
         this._worldResetFx = null;
         this._pendingWorldResetFxUntilMs = 0;
+        this._hoveredEntityTarget = null;
+        this._hoverTargetGfx = null;
+        this._lastHoverResolveAtMs = 0;
 
         // Track time for fixed updates
         this.lastUpdateTime = Date.now();
@@ -169,6 +178,7 @@ export class GameScene extends Phaser.Scene {
         }).setOrigin(0.5, 1).setDepth(110);
         this._interactLabelAlpha = 0;
         this._interactKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+        this._hoverTargetGfx = this.add.graphics().setDepth(214);
         this._refreshInteractablesForCurrentLevel();
         this.uiProjectionSystem.publishImmediate();
 
@@ -182,6 +192,8 @@ export class GameScene extends Phaser.Scene {
             this.scale.off('resize', this._syncWorldResetOverlayToViewport, this);
             this._worldResetFx?.flash?.stop?.();
             this._worldResetFlash?.destroy();
+            this._hoverTargetGfx?.destroy();
+            this._hoverTargetGfx = null;
         });
     }
 
@@ -335,7 +347,246 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
+    _isPointerInsideUiDrawer(pointer = this.input?.activePointer) {
+        if (!pointer || !uiStateStore.get('drawerOpen')) return false;
+        return pointer.x < (uiStateStore.get('drawerWidth') ?? 0);
+    }
+
+    _resolvePointerWorldPoint(pointer = this.input?.activePointer) {
+        if (!pointer || !this.cameras?.main) return null;
+        if (this._isPointerInsideUiDrawer(pointer)) return null;
+        const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        if (!Number.isFinite(world?.x) || !Number.isFinite(world?.y)) return null;
+        return world;
+    }
+
+    _getEquippedSpellIdForHover() {
+        const controlled = this.getLocallyControlledEntity?.();
+        const loadout = controlled?.getComponent?.('loadout');
+        return loadout?.equipped?.spellId ?? 'nothing';
+    }
+
+    _isEntityTargetSpellId(spellId) {
+        if (spellId === 'possess') return true;
+        const spellCfg = resolveSpellConfig(spellId);
+        return spellCfg?.castMode === 'target_click';
+    }
+
+    _isEntitySelectableForHover(entity) {
+        if (!entity || entity === this.getLocallyControlledEntity?.()) return false;
+        if (entity.id === this.player?.id) return false;
+        if (entity.type === 'exit') return false;
+        const transform = entity.getComponent?.('transform');
+        const levelId = transform?.levelId ?? gameState.currentLevelId ?? null;
+        if (levelId && levelId !== gameState.currentLevelId) return false;
+        const circleGo = entity.getComponent?.('circle')?.gameObject;
+        const rectGo = entity.getComponent?.('rectangle')?.gameObject;
+        if (circleGo && !circleGo.visible) return false;
+        if (rectGo && !rectGo.visible) return false;
+        return entity.type === 'golem' || entity.type === 'zombie' || entity.type === 'corpse';
+    }
+
+    _getHoverTargetShape(entity) {
+        const circle = entity?.getComponent?.('circle');
+        if (circle?.gameObject && Number.isFinite(circle.radius)) {
+            return {
+                kind: 'circle',
+                x: circle.gameObject.x,
+                y: circle.gameObject.y,
+                radius: circle.radius,
+            };
+        }
+
+        const rect = entity?.getComponent?.('rectangle');
+        if (rect?.gameObject && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
+            return {
+                kind: 'rect',
+                x: rect.gameObject.x,
+                y: rect.gameObject.y,
+                width: rect.width,
+                height: rect.height,
+            };
+        }
+
+        const transform = entity?.getComponent?.('transform');
+        if (!Number.isFinite(transform?.position?.x) || !Number.isFinite(transform?.position?.y)) return null;
+        return {
+            kind: 'circle',
+            x: transform.position.x,
+            y: transform.position.y,
+            radius: PLAYER_RADIUS,
+        };
+    }
+
+    _distanceScoreToHoverShape(shape, worldX, worldY) {
+        if (!shape || !Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+        if (shape.kind === 'circle') {
+            const dx = worldX - shape.x;
+            const dy = worldY - shape.y;
+            const distSq = dx * dx + dy * dy;
+            const selectRadius = Math.max(HOVER_SELECT_MIN_RADIUS_PX, shape.radius + HOVER_SELECT_PADDING_PX);
+            if (distSq > selectRadius * selectRadius) return null;
+            return {
+                insidePrimary: distSq <= shape.radius * shape.radius,
+                score: 1000 - distSq,
+            };
+        }
+
+        const halfW = shape.width / 2;
+        const halfH = shape.height / 2;
+        const nearX = Math.max(shape.x - halfW, Math.min(worldX, shape.x + halfW));
+        const nearY = Math.max(shape.y - halfH, Math.min(worldY, shape.y + halfH));
+        const dx = worldX - nearX;
+        const dy = worldY - nearY;
+        const distSq = dx * dx + dy * dy;
+        const selectRadius = HOVER_SELECT_PADDING_PX;
+        if (distSq > selectRadius * selectRadius) return null;
+        const insidePrimary = worldX >= shape.x - halfW && worldX <= shape.x + halfW &&
+            worldY >= shape.y - halfH && worldY <= shape.y + halfH;
+        return {
+            insidePrimary,
+            score: 1000 - distSq,
+        };
+    }
+
+    _canSpellTargetHoveredEntity(entity, spellId, entityKey = this._getNetworkEntityKey(entity)) {
+        if (!entity || typeof spellId !== 'string') return false;
+        if (!entityKey) return false;
+
+        if (spellId === 'possess') {
+            return entityKey.startsWith('world:') && entity.hasComponent?.('control');
+        }
+
+        if (spellId === 'traction') {
+            return entityKey.startsWith('world:') && entity.type === 'corpse';
+        }
+
+        if (spellId === 'arc_flash') {
+            return entityKey.startsWith('world:') && this._canLocalProjectileHitEntity(this._localTeamId, entity);
+        }
+
+        return false;
+    }
+
+    _resolveHoveredEntityTarget(pointerWorld = this._resolvePointerWorldPoint()) {
+        if (!pointerWorld) return null;
+
+        const spellId = this._getEquippedSpellIdForHover();
+        const previousKey = this._hoveredEntityTarget?.entityKey ?? null;
+        let best = null;
+        let previous = null;
+
+        for (const type of HOVER_TARGETABLE_ENTITY_TYPES) {
+            const entities = this.entityManager.getEntitiesByType(type);
+            for (const entity of entities) {
+                if (!this._isEntitySelectableForHover(entity)) continue;
+                const shape = this._getHoverTargetShape(entity);
+                const hit = this._distanceScoreToHoverShape(shape, pointerWorld.x, pointerWorld.y);
+                if (!hit) continue;
+
+                const entityKey = this._getNetworkEntityKey(entity);
+                if (!entityKey) continue;
+
+                let score = hit.score;
+                const validForSpell = this._canSpellTargetHoveredEntity(entity, spellId, entityKey);
+                if (hit.insidePrimary) score += 180;
+                if (validForSpell) score += 220;
+                if (entityKey === previousKey) score += 120;
+
+                const candidate = {
+                    entity,
+                    entityKey,
+                    spellId,
+                    shape,
+                    score,
+                    validForSpell,
+                };
+                if (entityKey === previousKey) previous = candidate;
+                if (!best || candidate.score > best.score) best = candidate;
+            }
+        }
+
+        if (!best) return null;
+        if (previous && best.entityKey !== previous.entityKey && previous.score + HOVER_SWITCH_SCORE_MARGIN >= best.score) {
+            return previous;
+        }
+        return best;
+    }
+
+    _getHoverHighlightStyle(target) {
+        const spellId = target?.spellId ?? this._getEquippedSpellIdForHover();
+        const entityTargetSpell = this._isEntityTargetSpellId(spellId);
+        if (target?.validForSpell && entityTargetSpell) {
+            return { color: 0x9be7ff, alpha: 0.95, width: 3 };
+        }
+        if (entityTargetSpell) {
+            return { color: 0xe8c27a, alpha: 0.75, width: 2 };
+        }
+        return { color: 0xf4e2b3, alpha: 0.65, width: 2 };
+    }
+
+    _renderHoveredEntityTarget(nowMs = performance.now()) {
+        const gfx = this._hoverTargetGfx;
+        if (!gfx) return;
+        gfx.clear();
+
+        const target = this._hoveredEntityTarget;
+        if (!target?.entity || !target?.shape) return;
+
+        const style = this._getHoverHighlightStyle(target);
+        const pulse = 0.82 + Math.sin(nowMs / 120) * 0.12;
+        gfx.lineStyle(style.width, style.color, Math.max(0.1, Math.min(1, style.alpha * pulse)));
+
+        if (target.shape.kind === 'circle') {
+            gfx.strokeCircle(target.shape.x, target.shape.y, target.shape.radius + 5);
+            return;
+        }
+
+        const halfW = target.shape.width / 2 + 4;
+        const halfH = target.shape.height / 2 + 4;
+        gfx.strokeRoundedRect(
+            target.shape.x - halfW,
+            target.shape.y - halfH,
+            halfW * 2,
+            halfH * 2,
+            8
+        );
+    }
+
+    _updateHoveredEntityTarget(nowMs = performance.now()) {
+        if (nowMs - this._lastHoverResolveAtMs >= HOVER_RESOLVE_INTERVAL_MS) {
+            this._hoveredEntityTarget = this._resolveHoveredEntityTarget();
+            this._lastHoverResolveAtMs = nowMs;
+        }
+        this._renderHoveredEntityTarget();
+    }
+
+    getHoveredSpellTarget(spellId = null) {
+        const target = this._hoveredEntityTarget;
+        if (!target) return null;
+        if (spellId && !this._canSpellTargetHoveredEntity(target.entity, spellId, target.entityKey)) {
+            return null;
+        }
+        return target;
+    }
+
     tryPossessAtWorldPoint(casterEntity, worldX, worldY) {
+        const hovered = this.getHoveredSpellTarget('possess');
+        if (hovered?.entity && hovered.entity !== casterEntity) {
+            const transform = hovered.entity.getComponent('transform');
+            const targetX = transform?.position?.x ?? worldX;
+            const targetY = transform?.position?.y ?? worldY;
+            if (hovered.entityKey?.startsWith('world:')) {
+                networkManager.sendPossessRequest(
+                    hovered.entityKey,
+                    targetX,
+                    targetY,
+                    gameState.currentLevelId ?? null
+                );
+                return true;
+            }
+        }
+
         const candidates = this.entityManager.getEntitiesWithComponent('control')
             .filter(e => e.id !== casterEntity?.id);
 
@@ -2118,6 +2369,7 @@ export class GameScene extends Phaser.Scene {
      */
     renderUpdate(delta) {
         this._refreshInteractablesForCurrentLevel();
+        this._updateHoveredEntityTarget(performance.now());
 
         // Smooth zoom toward target
         const cam = this.cameras.main;

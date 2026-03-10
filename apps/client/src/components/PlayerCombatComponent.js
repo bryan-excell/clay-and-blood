@@ -770,6 +770,16 @@ export class PlayerCombatComponent extends Component {
 
     _resolveClickableSpellTarget(worldX, worldY, spellCfg = null) {
         const scene = this.entity?.scene;
+        const hovered = typeof scene?.getHoveredSpellTarget === 'function'
+            ? scene.getHoveredSpellTarget(spellCfg?.id ?? null)
+            : null;
+        if (hovered?.entityKey) {
+            return {
+                entity: hovered.entity ?? null,
+                entityKey: hovered.entityKey,
+            };
+        }
+
         const manager = scene?.entityManager;
         if (!manager) return null;
 
