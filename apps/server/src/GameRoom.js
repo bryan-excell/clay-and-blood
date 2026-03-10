@@ -2369,6 +2369,7 @@ export class GameRoom {
         const distSq = (x - interactX) ** 2 + (y - interactY) ** 2;
         if (distSq > radius * radius) return;
 
+        this._restorePlayerToFullHealth(sessionId);
         this._resetRespawnableWorldEntities({
             source: 'warm_fire',
             sessionId,
@@ -2572,6 +2573,28 @@ export class GameRoom {
             payload.timestamp = timestamp;
         }
         this.#broadcastAll(payload);
+    }
+
+    _restorePlayerToFullHealth(sessionId) {
+        const player = this.players.get(sessionId);
+        if (!player) return;
+
+        const nextHp = Number.isFinite(player.stats?.hpMax) ? player.stats.hpMax : PLAYER_HEALTH_MAX;
+        if (player.stats?.hp === nextHp) return;
+
+        this.players.set(sessionId, {
+            ...player,
+            stats: { ...player.stats, hp: nextHp, hpMax: nextHp },
+        });
+
+        this.#broadcastAll({
+            type: MSG.PLAYER_DAMAGED,
+            sessionId,
+            attackerId: null,
+            damage: 0,
+            hp: nextHp,
+            died: false,
+        });
     }
 
     _applyDamageToWorldEntity(entityKey, damage, attackerEntityKey = null) {
