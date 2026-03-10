@@ -24,6 +24,7 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  *   network:levelChanged   { sessionId, levelId }
  *   network:entityEquip    { sessionId, entityKey, levelId, equipped }
  *   network:worldEntityDamaged { entityKey, damage, hp, died, x, y, levelId }
+ *   network:worldReset     { source, interactableId, triggeredBySessionId, respawnedCount }
  */
 class NetworkManager {
     constructor() {
@@ -253,6 +254,15 @@ class NetworkManager {
                     levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
                 });
                 break;
+
+            case MSG.WORLD_RESET:
+                eventBus.emit('network:worldReset', {
+                    source: typeof msg.source === 'string' ? msg.source : 'unknown',
+                    interactableId: typeof msg.interactableId === 'string' ? msg.interactableId : null,
+                    triggeredBySessionId: typeof msg.triggeredBySessionId === 'string' ? msg.triggeredBySessionId : null,
+                    respawnedCount: Number.isFinite(msg.respawnedCount) ? Math.max(0, Math.floor(msg.respawnedCount)) : 0,
+                });
+                break;
         }
     }
 
@@ -444,6 +454,13 @@ class NetworkManager {
         this.send({
             type: MSG.POSSESS_RELEASE,
             targetEntityKey,
+        });
+    }
+
+    sendInteract(interactableId) {
+        this.send({
+            type: MSG.INTERACT_REQUEST,
+            interactableId: typeof interactableId === 'string' ? interactableId : null,
         });
     }
 

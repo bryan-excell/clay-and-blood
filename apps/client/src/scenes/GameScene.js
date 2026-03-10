@@ -25,6 +25,7 @@ import {
     ARCHETYPE_CONFIG,
     TEAM_IDS,
     getExitDestination,
+    getInteractableDefinitionsForLevel,
     dashStateFromInput,
     stepPlayerKinematics,
     resolveMeleeAttackProfile,
@@ -51,6 +52,7 @@ const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
 const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility', 'decay', 'decayBar'];
 const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
+const DEBUG_GOLEM_KEY = 'world:golem_town_square';
 const DAMAGE_TEXT_RISE_PX = 24;
 const DAMAGE_TEXT_LIFETIME_MS = 460;
 
@@ -72,6 +74,11 @@ export class GameScene extends Phaser.Scene {
         this._replicationTracks = new Map(); // trackKey -> { stageId, snapshots: [{timeMs,tick,x,y,stageId}] }
         this._networkProjectiles = new Map(); // projectileId -> entityId
         this._staggerPulseState = new Map(); // entityKey -> { event, originalColor, originalAlpha }
+        this._interactableEntities = new Map(); // interactableId -> entity
+        this._renderedInteractableLevelId = null;
+        this._nearestInteractable = null;
+        this._worldResetFx = null;
+        this._pendingWorldResetFxUntilMs = 0;
 
         // Track time for fixed updates
         this.lastUpdateTime = Date.now();
@@ -131,6 +138,12 @@ export class GameScene extends Phaser.Scene {
         this._possessionEndAtMs = 0;
         this._possessionDurationMs = 8000;
         this._possessionBarGfx = this.add.graphics().setDepth(240);
+        this._worldResetFlash = this.add.rectangle(0, 0, this.scale.width, this.scale.height, 0xf0d8a0, 0)
+            .setOrigin(0, 0)
+            .setScrollFactor(0)
+            .setDepth(260);
+        this._syncWorldResetOverlayToViewport();
+        this.scale.on('resize', this._syncWorldResetOverlayToViewport, this);
 
         this._setupNetworkListeners();
         networkManager.connect();
@@ -145,6 +158,18 @@ export class GameScene extends Phaser.Scene {
             alpha: 0,
         }).setOrigin(0.5, 1).setDepth(100);
         this._exitLabelAlpha = 0; // current rendered alpha
+        this._interactLabel = this.add.text(0, 0, '', {
+            fontSize: '18px',
+            fontFamily: GAME_FONT_FAMILY,
+            color: '#ffd9a3',
+            stroke: '#2d1400',
+            strokeThickness: 5,
+            alpha: 0,
+            align: 'center',
+        }).setOrigin(0.5, 1).setDepth(110);
+        this._interactLabelAlpha = 0;
+        this._interactKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+        this._refreshInteractablesForCurrentLevel();
         this.uiProjectionSystem.publishImmediate();
 
         this.events.once('shutdown', () => {
@@ -152,6 +177,11 @@ export class GameScene extends Phaser.Scene {
             this.networkUiAdapter?.stop();
             this._possessionBarGfx?.destroy();
             this._possessionBarGfx = null;
+            this._interactLabel?.destroy();
+            this._interactLabel = null;
+            this.scale.off('resize', this._syncWorldResetOverlayToViewport, this);
+            this._worldResetFx?.flash?.stop?.();
+            this._worldResetFlash?.destroy();
         });
     }
 
@@ -447,13 +477,17 @@ export class GameScene extends Phaser.Scene {
             // Tick snapshots are continuous replication updates, not a hard resync.
             // Preserve interpolation buffers across ticks.
             this._applyNetworkWorldState(worldEntities, 'all', null, tick, 'stream');
+            if (this._pendingWorldResetFxUntilMs > performance.now()) {
+                this._pendingWorldResetFxUntilMs = 0;
+                this._playWorldResetShimmer();
+            }
             this._applyNetworkEntityEquips(entityEquips);
         });
 
         eventBus.on('network:worldState', ({ entities, scope, levelId }) => {
             if (DEBUG_WORLD_SYNC) {
                 const golem = Array.isArray(entities)
-                    ? entities.find((e) => e?.entityKey === 'world:golem')
+                    ? entities.find((e) => e?.entityKey === DEBUG_GOLEM_KEY)
                     : null;
                 console.log('[WorldSync] network:worldState', {
                     scope,
@@ -465,6 +499,10 @@ export class GameScene extends Phaser.Scene {
             }
             // WORLD_STATE is a scoped authoritative refresh and can invalidate stale buffers.
             this._applyNetworkWorldState(entities, scope, levelId, null, 'resync');
+            if (scope === 'all' && this._pendingWorldResetFxUntilMs > performance.now()) {
+                this._pendingWorldResetFxUntilMs = 0;
+                this._playWorldResetShimmer();
+            }
         });
 
         eventBus.on('network:entityState', ({
@@ -769,6 +807,12 @@ export class GameScene extends Phaser.Scene {
 
         // Inventory drawer equip actions — UIScene emits these, we route them to the
         // controlled entity's LoadoutComponent so the ECS stays as the source of truth.
+        eventBus.on('network:worldReset', ({ source }) => {
+            if (source !== 'warm_fire') return;
+            this._pendingWorldResetFxUntilMs = 0;
+            this._playWorldResetShimmer();
+        });
+
         eventBus.on('ui:equipWeapon', ({ id }) => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.equipWeapon(id);
         });
@@ -1231,8 +1275,8 @@ export class GameScene extends Phaser.Scene {
         if (kind === 'corpse') return 'corpse';
         if (kind === 'golem') return 'golem';
         if (kind === 'zombie') return 'zombie';
-        if (entityKey === 'world:golem') return 'golem';
-        if (entityKey === 'world:zombie_1') return 'zombie';
+        if (typeof entityKey === 'string' && entityKey.includes('golem')) return 'golem';
+        if (typeof entityKey === 'string' && entityKey.includes('zombie')) return 'zombie';
         return null;
     }
 
@@ -1345,7 +1389,7 @@ export class GameScene extends Phaser.Scene {
                 scope,
                 levelId,
                 cacheKeysAfter: Array.from(this._worldEntityStateCache.keys()),
-                golemCache: this._worldEntityStateCache.get('world:golem') ?? null,
+                golemCache: this._worldEntityStateCache.get(DEBUG_GOLEM_KEY) ?? null,
             });
         }
     }
@@ -1366,7 +1410,7 @@ export class GameScene extends Phaser.Scene {
     }) {
         if (!entityKey || !entityKey.startsWith('world:')) return;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+        if (DEBUG_WORLD_SYNC && entityKey === DEBUG_GOLEM_KEY) {
             console.log('[WorldSync] applyWorldEntityState:incoming golem', {
                 entityKey,
                 x,
@@ -1393,7 +1437,7 @@ export class GameScene extends Phaser.Scene {
 
         const entityId = entityKey.slice('world:'.length);
         let entity = this.entityManager.getEntityById(entityId);
-        if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+        if (DEBUG_WORLD_SYNC && entityKey === DEBUG_GOLEM_KEY) {
             const hasEntity = !!entity;
             const existingPos = entity?.getComponent('transform')?.position ?? null;
             console.log('[WorldSync] applyWorldEntityState:entity lookup golem', {
@@ -1458,7 +1502,7 @@ export class GameScene extends Phaser.Scene {
 
         if (!inThisLevel) {
             this._refreshWorldEntityLightSource(entityKey);
-            if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+            if (DEBUG_WORLD_SYNC && entityKey === DEBUG_GOLEM_KEY) {
                 console.log('[WorldSync] applyWorldEntityState:hidden golem (level mismatch)', {
                     entityLevel: levelId,
                     currentLevel: gameState.currentLevelId,
@@ -1481,7 +1525,7 @@ export class GameScene extends Phaser.Scene {
 
         this._pushReplicationTrack(entityKey, x, y, levelId ?? null, tick);
         this._refreshWorldEntityLightSource(entityKey, x, y);
-        if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+        if (DEBUG_WORLD_SYNC && entityKey === DEBUG_GOLEM_KEY) {
             console.log('[WorldSync] applyWorldEntityState:applied golem', {
                 x,
                 y,
@@ -2073,6 +2117,8 @@ export class GameScene extends Phaser.Scene {
      * @param {number} delta - ms since last frame
      */
     renderUpdate(delta) {
+        this._refreshInteractablesForCurrentLevel();
+
         // Smooth zoom toward target
         const cam = this.cameras.main;
         const zoomT = 1 - Math.pow(0.01, delta / 150);
@@ -2127,6 +2173,7 @@ export class GameScene extends Phaser.Scene {
         }
 
         this._updateExitLabel(delta);
+        this._updateInteractLabel(delta);
         this._updatePossessionBar();
     }
 
@@ -2185,5 +2232,108 @@ export class GameScene extends Phaser.Scene {
         }
 
         this._exitLabel.setAlpha(this._exitLabelAlpha);
+    }
+
+    _refreshInteractablesForCurrentLevel() {
+        const levelId = gameState.currentLevelId ?? null;
+        if (!levelId || this._renderedInteractableLevelId === levelId) return;
+
+        for (const entity of this._interactableEntities.values()) {
+            entity?.destroy?.();
+        }
+        this._interactableEntities.clear();
+        this._nearestInteractable = null;
+        this._renderedInteractableLevelId = levelId;
+
+        for (const definition of getInteractableDefinitionsForLevel(levelId)) {
+            if (definition.kind !== 'warm_fire') continue;
+            const x = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
+            const y = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
+            const entityId = definition.interactableId.replace(/[^a-z0-9_-]/gi, '_');
+            const entity = this.entityFactory.createFromPrefab('warm-fire', { id: entityId, x, y });
+            const circle = entity?.getComponent('circle');
+            if (circle?.gameObject) {
+                this.lightingRenderer?.maskGameObject(circle.gameObject);
+            }
+            if (entity) {
+                this._interactableEntities.set(definition.interactableId, entity);
+            }
+        }
+    }
+
+    _syncWorldResetOverlayToViewport() {
+        const width = this.scale.width;
+        const height = this.scale.height;
+        if (this._worldResetFlash) {
+            this._worldResetFlash.setPosition(0, 0);
+            this._worldResetFlash.setSize(width, height);
+        }
+    }
+
+    _playWorldResetShimmer() {
+        this._syncWorldResetOverlayToViewport();
+        this._worldResetFx?.flash?.stop?.();
+
+        if (!this._worldResetFlash) return;
+
+        this._worldResetFlash.setAlpha(0);
+        this.cameras.main.flash(220, 255, 244, 214, false);
+
+        const flash = this.tweens.add({
+            targets: this._worldResetFlash,
+            alpha: { from: 0, to: 0.22 },
+            duration: 120,
+            yoyo: true,
+            ease: 'Sine.easeOut',
+        });
+
+        this._worldResetFx = { flash };
+    }
+
+    _updateInteractLabel(delta) {
+        if (!this._interactLabel) return;
+
+        const localEntity = this.getLocallyControlledEntity();
+        const playerCircle = localEntity?.getComponent('circle');
+        if (!playerCircle?.gameObject) return;
+
+        const px = playerCircle.gameObject.x;
+        const py = playerCircle.gameObject.y;
+        let nearest = null;
+        let nearestDistSq = Infinity;
+
+        for (const definition of getInteractableDefinitionsForLevel(gameState.currentLevelId)) {
+            const x = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
+            const y = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
+            const radius = Number.isFinite(definition.interactionRadius) ? definition.interactionRadius : TILE_SIZE * 1.5;
+            const dx = x - px;
+            const dy = y - py;
+            const distSq = dx * dx + dy * dy;
+            if (distSq > radius * radius || distSq >= nearestDistSq) continue;
+            nearestDistSq = distSq;
+            nearest = { definition, x, y };
+        }
+
+        this._nearestInteractable = nearest;
+
+        const targetAlpha = nearest ? 1 : 0;
+        const fadeSpeed = 1 - Math.pow(0.001, delta / 200);
+        this._interactLabelAlpha = Phaser.Math.Linear(this._interactLabelAlpha, targetAlpha, fadeSpeed);
+
+        if (nearest) {
+            this._interactLabel.setText(`${nearest.definition.displayName}\n${nearest.definition.promptText}`);
+            this._interactLabel.setPosition(nearest.x, nearest.y - TILE_SIZE * 0.8);
+            if (Phaser.Input.Keyboard.JustDown(this._interactKey)) {
+                this._pendingWorldResetFxUntilMs = performance.now() + 2000;
+                networkManager.sendInteract(nearest.definition.interactableId);
+            }
+        }
+
+        if (this._interactLabelAlpha < 0.01) {
+            this._interactLabel.setAlpha(0);
+            return;
+        }
+
+        this._interactLabel.setAlpha(this._interactLabelAlpha);
     }
 }

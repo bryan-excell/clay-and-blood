@@ -7,6 +7,7 @@
 export { createPlayer } from './player.js';
 export { createGolem } from './golem.js';
 export { createZombie } from './zombie.js';
+export { createWarmFire } from './warmFire.js';
 
 // Interactive object prefabs
 export { createExit } from './exit.js';

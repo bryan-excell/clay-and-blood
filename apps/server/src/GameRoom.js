@@ -27,6 +27,9 @@ import {
     resolveMeleeAttackProfile,
     PROJECTILE_POISE_DAMAGE,
     resolveSpellConfig,
+    getWorldSpawnDefinitions,
+    getWorldSpawnDefinition,
+    getInteractableDefinition,
 } from '@clay-and-blood/shared';
 import {
     phaseInputIntent,
@@ -40,14 +43,7 @@ const TICK_MS = 50; // 20 Hz server tick
 const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
 const POSSESSION_DURATION_MS = 8000;
 const DEBUG_WORLD_SYNC = false;
-const PRACTICE_GOLEM_KEY = 'world:golem';
-const PRACTICE_GOLEM_STAGE = 'town-square';
-const PRACTICE_GOLEM_TILE_X = 24;
-const PRACTICE_GOLEM_TILE_Y = 20;
-const PRACTICE_ZOMBIE_KEY = 'world:zombie_1';
-const PRACTICE_ZOMBIE_STAGE = 'west-gate';
-const PRACTICE_ZOMBIE_TILE_X = 6;
-const PRACTICE_ZOMBIE_TILE_Y = 4;
+const DEBUG_GOLEM_KEY = 'world:golem_town_square';
 const ZOMBIE_DETECTION_RANGE = ARCHETYPE_CONFIG.zombie.ai.detectionRange;
 const ZOMBIE_LEASH_RANGE = ARCHETYPE_CONFIG.zombie.ai.leashRange;
 const ZOMBIE_ATTACK_RANGE = ARCHETYPE_CONFIG.zombie.ai.attackRange;
@@ -62,10 +58,6 @@ const ZOMBIE_SHAMBLE_WALK_MIN_MS = ARCHETYPE_CONFIG.zombie.ai.shambleWalkMinMs;
 const ZOMBIE_SHAMBLE_WALK_MAX_MS = ARCHETYPE_CONFIG.zombie.ai.shambleWalkMaxMs;
 const ZOMBIE_SHAMBLE_PAUSE_MIN_MS = ARCHETYPE_CONFIG.zombie.ai.shamblePauseMinMs;
 const ZOMBIE_SHAMBLE_PAUSE_MAX_MS = ARCHETYPE_CONFIG.zombie.ai.shamblePauseMaxMs;
-const ZOMBIE_HIT_RADIUS = ARCHETYPE_CONFIG.zombie.hitRadius;
-const ZOMBIE_HP_MAX = ARCHETYPE_CONFIG.zombie.hpMax;
-const GOLEM_HIT_RADIUS = ARCHETYPE_CONFIG.golem.hitRadius;
-const GOLEM_HP_MAX = ARCHETYPE_CONFIG.golem.hpMax;
 const CORPSE_DECAY_DURATION_MS = ARCHETYPE_CONFIG.corpse.decayDurationMs;
 const FLINCH_DURATION_MS = REACTION_CONFIG.flinchDurationMs;
 const STAGGER_DURATION_MS = REACTION_CONFIG.staggerDurationMs;
@@ -252,16 +244,18 @@ export class GameRoom {
         this.players = new Map();
         this.entityEquips = new Map(); // entityKey -> { entityKey, levelId, equipped, ownerSessionId }
         this.worldEntities = new Map(); // entityKey -> { entityKey, x, y, levelId, controllerSessionId }
+        this.spawnStates = new Map(); // spawnKey -> { spawnKey, alive, entityKey }
+        this.suppressedTags = new Set();
         this.projectiles = new Map(); // projectileId -> { id, shooterSessionId, projectileType, x, y, velocityX, velocityY, levelId, damage, remainingRange }
         this.pendingSpellEffects = new Map(); // effectId -> { id, spellId, sourceEntityKey, sourceTeamId, levelId, x, y, executeAtMs, damage, poiseDamage, radius }
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
         this.tickCount = 0;
-        this.practiceEntitiesInitialized = false;
         // Lag-compensation history: array of { tick, positions: Map<sessionId,{x,y,levelId}> }
 
     // Capped at LAG_COMP_HISTORY_SIZE entries (sliding window ~1 second).
         this.positionHistory = [];
+        this._initializeWorldSpawns();
     }
 
     // ── Durable Object entry ──────────────────────────────────────────────
@@ -288,11 +282,6 @@ export class GameRoom {
         switch (data.type) {
 
             case MSG.PLAYER_JOIN: {
-                if (!this.practiceEntitiesInitialized) {
-                    this._ensurePracticeGolem();
-                    this._ensurePracticeZombie();
-                    this.practiceEntitiesInitialized = true;
-                }
                 const spawn = resolveStageSpawnPosition('inn');
                 const spawnX = spawn?.x ?? (Math.floor(STAGE_WIDTH / 2) * TILE_SIZE + TILE_SIZE / 2);
                 const spawnY = spawn?.y ?? (Math.floor(STAGE_HEIGHT / 2) * TILE_SIZE + TILE_SIZE / 2);
@@ -348,6 +337,15 @@ export class GameRoom {
                 if (this.players.size === 1) {
                     await this.state.storage.setAlarm(Date.now() + TICK_MS);
                 }
+                break;
+            }
+
+            case MSG.INTERACT_REQUEST: {
+                const player = this.players.get(sessionId);
+                if (!player) break;
+                const interactableId = typeof data.interactableId === 'string' ? data.interactableId : null;
+                if (!interactableId) break;
+                this._handleInteractRequest(sessionId, player, interactableId);
                 break;
             }
 
@@ -472,20 +470,20 @@ export class GameRoom {
                         stats: this._defaultStatsForKind(kind),
                         poise: this._defaultPoiseForKind(kind),
                     };
-                    if (DEBUG_WORLD_SYNC && targetEntityKey === PRACTICE_GOLEM_KEY) {
+                    if (DEBUG_WORLD_SYNC && targetEntityKey === DEBUG_GOLEM_KEY) {
                         console.log('[WorldSync][Server] possess_request created missing golem from request', {
                             x,
                             y,
                             levelId,
                         });
                     }
-                } else if (DEBUG_WORLD_SYNC && targetEntityKey === PRACTICE_GOLEM_KEY) {
+                } else if (DEBUG_WORLD_SYNC && targetEntityKey === DEBUG_GOLEM_KEY) {
                     console.log('[WorldSync][Server] possess_request existing golem keeps authoritative pose', {
                         requested: { x, y, levelId },
                         authoritative: { x: target.x, y: target.y, levelId: target.levelId },
                     });
                 }
-                if (DEBUG_WORLD_SYNC && targetEntityKey === 'world:golem') {
+                if (DEBUG_WORLD_SYNC && targetEntityKey === DEBUG_GOLEM_KEY) {
                     console.log('[WorldSync][Server] possess_request golem', {
                         sessionId,
                         targetEntityKey,
@@ -601,7 +599,7 @@ export class GameRoom {
                     poise: prev?.poise ?? this._defaultPoiseForKind(kind),
                 };
                 this.worldEntities.set(entityKey, next);
-                if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
+                if (DEBUG_WORLD_SYNC && entityKey === DEBUG_GOLEM_KEY) {
                     console.log('[WorldSync][Server] entity_state golem', {
                         sessionId,
                         entityKey,
@@ -826,7 +824,7 @@ export class GameRoom {
                     .map((entry) => this._serializeWorldEntity(entry, Date.now()))
                     .filter(Boolean);
                 if (DEBUG_WORLD_SYNC) {
-                    const golem = this.worldEntities.get('world:golem') ?? null;
+                    const golem = this.worldEntities.get(DEBUG_GOLEM_KEY) ?? null;
                     console.log('[WorldSync][Server] level_change world_state push', {
                         sessionId,
                         movingEntityKey,
@@ -984,7 +982,7 @@ export class GameRoom {
                 entity.home = {
                     x: entity.x,
                     y: entity.y,
-                    levelId: entity.levelId ?? PRACTICE_ZOMBIE_STAGE,
+                    levelId: entity.levelId ?? 'west-gate',
                 };
             }
 
@@ -1125,7 +1123,7 @@ export class GameRoom {
         for (const [entityKey, entity] of this.worldEntities.entries()) {
             if (entity?.kind !== 'zombie') continue;
             if (entity.controllerSessionId) continue;
-            const grid = this._getGrid(entity.levelId ?? PRACTICE_ZOMBIE_STAGE);
+            const grid = this._getGrid(entity.levelId ?? 'west-gate');
             const stepped = stepPlayerKinematics(
                 {
                     x: entity.x,
@@ -1883,79 +1881,136 @@ export class GameRoom {
         });
     }
 
-    _ensurePracticeGolem() {
-        if (this.worldEntities.has(PRACTICE_GOLEM_KEY)) {
-            const existing = this.worldEntities.get(PRACTICE_GOLEM_KEY);
-            this.worldEntities.set(PRACTICE_GOLEM_KEY, {
-                ...existing,
-                kind: existing?.kind ?? 'golem',
-                teamId: existing?.teamId ?? TEAM_GOLEMS,
-                hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : GOLEM_HIT_RADIUS,
-                stats: existing?.stats ?? { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
-                poise: existing?.poise ?? this._defaultPoiseForKind('golem'),
-            });
-            return;
-        }
-        const x = PRACTICE_GOLEM_TILE_X * TILE_SIZE + TILE_SIZE / 2;
-        const y = PRACTICE_GOLEM_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
-        this.worldEntities.set(PRACTICE_GOLEM_KEY, {
-            entityKey: PRACTICE_GOLEM_KEY,
-            kind: 'golem',
-            x,
-            y,
-            levelId: PRACTICE_GOLEM_STAGE,
-            controllerSessionId: null,
-            possessionEndAtMs: null,
-            teamId: TEAM_GOLEMS,
-            hitRadius: GOLEM_HIT_RADIUS,
-            stats: { hp: GOLEM_HP_MAX, hpMax: GOLEM_HP_MAX },
-            poise: this._defaultPoiseForKind('golem'),
-        });
-        if (DEBUG_WORLD_SYNC) {
-            console.log('[WorldSync][Server] ensurePracticeGolem created', { x, y, levelId: PRACTICE_GOLEM_STAGE });
+    _initializeWorldSpawns() {
+        for (const definition of getWorldSpawnDefinitions()) {
+            this._spawnEntityFromDefinition(definition, { force: false });
         }
     }
 
-    _ensurePracticeZombie() {
-        if (this.worldEntities.has(PRACTICE_ZOMBIE_KEY)) {
-            const existing = this.worldEntities.get(PRACTICE_ZOMBIE_KEY);
-            this.worldEntities.set(PRACTICE_ZOMBIE_KEY, {
-                ...existing,
-                kind: existing?.kind ?? 'zombie',
-                teamId: existing?.teamId ?? TEAM_ZOMBIES,
-                hitRadius: Number.isFinite(existing?.hitRadius) ? existing.hitRadius : ZOMBIE_HIT_RADIUS,
-                stats: existing?.stats ?? { hp: ZOMBIE_HP_MAX, hpMax: ZOMBIE_HP_MAX },
-                poise: existing?.poise ?? this._defaultPoiseForKind('zombie'),
-            });
-            return;
-        }
-        const x = PRACTICE_ZOMBIE_TILE_X * TILE_SIZE + TILE_SIZE / 2;
-        const y = PRACTICE_ZOMBIE_TILE_Y * TILE_SIZE + TILE_SIZE / 2;
-        this.worldEntities.set(PRACTICE_ZOMBIE_KEY, {
-            entityKey: PRACTICE_ZOMBIE_KEY,
-            kind: 'zombie',
+    _defaultWorldEntityKeyForSpawn(definition) {
+        if (!definition?.spawnKey) return null;
+        return `world:${definition.spawnKey.slice('spawn:'.length)}`;
+    }
+
+    _buildWorldEntityFromSpawn(definition, entityKey) {
+        if (!definition || !entityKey) return null;
+        const x = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
+        const y = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
+        const base = {
+            entityKey,
+            spawnKey: definition.spawnKey,
+            kind: definition.kind,
             x,
             y,
-            levelId: PRACTICE_ZOMBIE_STAGE,
+            levelId: definition.levelId,
             controllerSessionId: null,
             possessionEndAtMs: null,
-            teamId: TEAM_ZOMBIES,
-            hitRadius: ZOMBIE_HIT_RADIUS,
-            intent: this._zombieIdleIntent(),
-            motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-            stats: { hp: ZOMBIE_HP_MAX, hpMax: ZOMBIE_HP_MAX },
-            poise: this._defaultPoiseForKind('zombie'),
-            home: { x, y, levelId: PRACTICE_ZOMBIE_STAGE },
-            ai: {
-                state: 'shamble_pause',
-                stateTimerMs: this._randZombiePauseMs(),
-                targetEntityKey: null,
-                shambleDirX: 1,
-                shambleDirY: 0,
-                attackDirX: 1,
-                attackDirY: 0,
-                distanceBudgetPx: 0,
-            },
+            teamId: this._defaultTeamForKind(definition.kind),
+            hitRadius: this._defaultHitRadiusForKind(definition.kind),
+            stats: this._defaultStatsForKind(definition.kind),
+            poise: this._defaultPoiseForKind(definition.kind),
+        };
+
+        if (definition.kind === 'zombie') {
+            return {
+                ...base,
+                intent: this._zombieIdleIntent(),
+                motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                home: { x, y, levelId: definition.levelId },
+                ai: {
+                    state: 'shamble_pause',
+                    stateTimerMs: this._randZombiePauseMs(),
+                    targetEntityKey: null,
+                    shambleDirX: 1,
+                    shambleDirY: 0,
+                    attackDirX: 1,
+                    attackDirY: 0,
+                    distanceBudgetPx: 0,
+                },
+            };
+        }
+
+        return base;
+    }
+
+    _spawnEntityFromDefinition(definition, { force = false } = {}) {
+        if (!definition?.spawnKey) return null;
+        const existingState = this.spawnStates.get(definition.spawnKey) ?? null;
+        if (!force && existingState?.alive && existingState.entityKey && this.worldEntities.has(existingState.entityKey)) {
+            return existingState.entityKey;
+        }
+
+        const entityKey = this._defaultWorldEntityKeyForSpawn(definition);
+        if (!entityKey) return null;
+        const entity = this._buildWorldEntityFromSpawn(definition, entityKey);
+        if (!entity) return null;
+
+        this.worldEntities.set(entityKey, entity);
+        this.spawnStates.set(definition.spawnKey, {
+            spawnKey: definition.spawnKey,
+            alive: true,
+            entityKey,
+        });
+        return entityKey;
+    }
+
+    _isSpawnSuppressed(definition) {
+        if (!definition) return false;
+        if (!Array.isArray(definition.tags) || definition.tags.length === 0) return false;
+        return definition.tags.some((tag) => this.suppressedTags.has(tag));
+    }
+
+    _resetRespawnableWorldEntities(context = {}) {
+        let respawned = 0;
+        for (const definition of getWorldSpawnDefinitions()) {
+            if (this._isSpawnSuppressed(definition)) continue;
+            const state = this.spawnStates.get(definition.spawnKey) ?? null;
+            if (state?.alive && state.entityKey && this.worldEntities.has(state.entityKey)) continue;
+            const spawnedKey = this._spawnEntityFromDefinition(definition, { force: true });
+            if (spawnedKey) respawned += 1;
+        }
+
+        if (respawned > 0) {
+            this.#broadcastAll({
+                type: MSG.WORLD_STATE,
+                scope: 'all',
+                entities: Array.from(this.worldEntities.values())
+                    .map((entry) => this._serializeWorldEntity(entry, Date.now()))
+                    .filter(Boolean),
+            });
+        }
+
+        this.#broadcastAll({
+            type: MSG.WORLD_RESET,
+            source: typeof context.source === 'string' ? context.source : 'unknown',
+            interactableId: typeof context.interactableId === 'string' ? context.interactableId : null,
+            triggeredBySessionId: typeof context.sessionId === 'string' ? context.sessionId : null,
+            respawnedCount: respawned,
+        });
+
+        return respawned;
+    }
+
+    _handleInteractRequest(sessionId, player, interactableId) {
+        const definition = getInteractableDefinition(interactableId);
+        if (!definition || definition.kind !== 'warm_fire') return;
+
+        const playerLevelId = player.transform?.levelId ?? null;
+        if (playerLevelId !== definition.levelId) return;
+        const x = player.transform?.x;
+        const y = player.transform?.y;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+        const interactX = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
+        const interactY = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
+        const radius = Number.isFinite(definition.interactionRadius) ? definition.interactionRadius : TILE_SIZE * 1.5;
+        const distSq = (x - interactX) ** 2 + (y - interactY) ** 2;
+        if (distSq > radius * radius) return;
+
+        this._resetRespawnableWorldEntities({
+            source: 'warm_fire',
+            sessionId,
+            interactableId,
         });
     }
 
@@ -2177,6 +2232,13 @@ export class GameRoom {
             levelId: entity.levelId ?? null,
         });
         if (died) {
+            if (typeof entity.spawnKey === 'string') {
+                this.spawnStates.set(entity.spawnKey, {
+                    spawnKey: entity.spawnKey,
+                    alive: false,
+                    entityKey: null,
+                });
+            }
             this._convertWorldEntityToCorpse(entityKey, entity, attackerEntityKey);
             this.worldEntities.delete(entityKey);
             return;
@@ -2514,8 +2576,10 @@ export class GameRoom {
     }
 
     _inferWorldKindFromEntityKey(entityKey) {
-        if (entityKey === PRACTICE_GOLEM_KEY) return 'golem';
-        if (entityKey === PRACTICE_ZOMBIE_KEY) return 'zombie';
+        if (typeof entityKey !== 'string' || !entityKey.startsWith('world:')) return null;
+        const spawnKey = `spawn:${entityKey.slice('world:'.length)}`;
+        const definition = getWorldSpawnDefinition(spawnKey);
+        if (definition?.kind) return definition.kind;
         return null;
     }
 

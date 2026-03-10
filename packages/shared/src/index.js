@@ -353,6 +353,7 @@ export const MSG = {
     PLAYER_LEAVE:   'player_leave',
     PLAYER_INPUT:   'player_input',
     PLAYER_EQUIP:   'player_equip',
+    INTERACT_REQUEST:'interact_request',
     POSSESS_REQUEST:'possess_request',
     POSSESS_RELEASE:'possess_release',
     FORCE_CONTROL:  'force_control',
@@ -371,6 +372,7 @@ export const MSG = {
     WORLD_ENTITY_DAMAGED: 'world_entity_damaged',
     ENTITY_FLINCHED: 'entity_flinched',
     ENTITY_STAGGERED: 'entity_staggered',
+    WORLD_RESET: 'world_reset',
 };
 
 const CARDINAL_DIRECTIONS = ['north', 'east', 'south', 'west'];
@@ -684,6 +686,8 @@ export function resolveExitTransition(fromLevelId, fromExitIndex) {
 }
 
 export * from './combatData.js';
+export * from './spawnDefinitions.js';
+export * from './interactableDefinitions.js';
 
 /**
  * Resolve a deterministic spawn position for arriving through an exit.

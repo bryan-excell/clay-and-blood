@@ -13,8 +13,8 @@ export class KeyboardInputComponent extends InputComponent {
             left: false,
             right: false,
             sprint: false,
-            dash: false,  // New dash input
-            attack: false, // Generic attack input (edge/down)
+            dash: false,
+            attack: false,
             attackHeld: false,
             attackUp: false
         };
@@ -33,8 +33,7 @@ export class KeyboardInputComponent extends InputComponent {
             left: Phaser.Input.Keyboard.KeyCodes.A,
             right: Phaser.Input.Keyboard.KeyCodes.D,
             sprint: Phaser.Input.Keyboard.KeyCodes.SHIFT,
-            dash: Phaser.Input.Keyboard.KeyCodes.SPACE, // Dash with spacebar
-            attack: Phaser.Input.Keyboard.KeyCodes.E    // Extra attack key (if needed)
+            dash: Phaser.Input.Keyboard.KeyCodes.SPACE
         });
 
         return true;
@@ -51,10 +50,10 @@ export class KeyboardInputComponent extends InputComponent {
         this.inputState.left = this.keys.left.isDown;
         this.inputState.right = this.keys.right.isDown;
         this.inputState.sprint = this.keys.sprint.isDown;
-        this.inputState.dash = Phaser.Input.Keyboard.JustDown(this.keys.dash); // Only trigger on key press, not hold
-        this.inputState.attack = Phaser.Input.Keyboard.JustDown(this.keys.attack);
-        this.inputState.attackHeld = this.keys.attack.isDown;
-        this.inputState.attackUp = Phaser.Input.Keyboard.JustUp(this.keys.attack);
+        this.inputState.dash = Phaser.Input.Keyboard.JustDown(this.keys.dash);
+        this.inputState.attack = false;
+        this.inputState.attackHeld = false;
+        this.inputState.attackUp = false;
 
         // Check if input has changed
         const inputChanged = (
