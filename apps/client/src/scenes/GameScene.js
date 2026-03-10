@@ -29,6 +29,7 @@ import {
     stepPlayerKinematics,
     resolveMeleeAttackProfile,
     resolveSpellConfig,
+    resolveStageSpawnPosition,
 } from '@clay-and-blood/shared';
 
 // ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
@@ -48,7 +49,7 @@ const PHASE_INPUT_COMPONENTS = ['input', 'keyboard'];
 const PHASE_PHYSICS = ['bullet', 'physics'];
 const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
-const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility'];
+const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility', 'decay', 'decayBar'];
 const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
 const DAMAGE_TEXT_RISE_PX = 24;
 const DAMAGE_TEXT_LIFETIME_MS = 460;
@@ -91,7 +92,7 @@ export class GameScene extends Phaser.Scene {
         });
 
         // Always start in the town square on fresh load
-        const initialLevelId = 'town-square';
+        const initialLevelId = 'inn';
         const initialLevel = this.levelManager.setupLevel(initialLevelId);
 
         // Create player at a safe spot
@@ -169,7 +170,7 @@ export class GameScene extends Phaser.Scene {
         });
         const transform = this.player?.getComponent('transform');
         if (transform) {
-            transform.levelId = level?.id ?? gameState.currentLevelId ?? 'town-square';
+            transform.levelId = level?.id ?? gameState.currentLevelId ?? 'inn';
         }
         
         console.log(`Player created at position (${safePosition.x}, ${safePosition.y})`);
@@ -183,8 +184,9 @@ export class GameScene extends Phaser.Scene {
     findSafePlayerPosition(level) {
         // Use the stage's declared spawn point if available; otherwise fall back
         // to the grid centre (procedural levels always carve a centre room).
-        const tileX = level.spawnPoint?.x ?? Math.floor(level.grid[0].length / 2);
-        const tileY = level.spawnPoint?.y ?? Math.floor(level.grid.length / 2);
+        const resolved = resolveStageSpawnPosition(level?.id ?? gameState.currentLevelId ?? 'inn');
+        const tileX = resolved?.tileX ?? level.spawnPoint?.x ?? Math.floor(level.grid[0].length / 2);
+        const tileY = resolved?.tileY ?? level.spawnPoint?.y ?? Math.floor(level.grid.length / 2);
         return {
             x: tileX * TILE_SIZE + TILE_SIZE / 2,
             y: tileY * TILE_SIZE + TILE_SIZE / 2,
@@ -387,7 +389,7 @@ export class GameScene extends Phaser.Scene {
                     p.sessionId,
                     p.x,
                     p.y,
-                    p.stageId || 'town-square',
+                    p.stageId || 'inn',
                     p.teamId ?? null,
                     p.sightRadius ?? null
                 );
@@ -396,7 +398,7 @@ export class GameScene extends Phaser.Scene {
 
         // Another player connected after us – assume same starting area
         eventBus.on('network:playerJoined', ({ sessionId }) => {
-            this._addRemotePlayer(sessionId, 0, 0, 'town-square');
+            this._addRemotePlayer(sessionId, 0, 0, 'inn');
         });
 
         // Authoritative state snapshot from the server physics tick
@@ -435,7 +437,7 @@ export class GameScene extends Phaser.Scene {
                         p.sessionId,
                         p.x,
                         p.y,
-                        p.levelId || 'town-square',
+                        p.levelId || 'inn',
                         tick,
                         p.teamId ?? null,
                         p.sightRadius ?? null
@@ -465,9 +467,35 @@ export class GameScene extends Phaser.Scene {
             this._applyNetworkWorldState(entities, scope, levelId, null, 'resync');
         });
 
-        eventBus.on('network:entityState', ({ sessionId, entityKey, kind, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining }) => {
+        eventBus.on('network:entityState', ({
+            sessionId,
+            entityKey,
+            kind,
+            x,
+            y,
+            levelId,
+            controllerSessionId,
+            teamId,
+            possessionMsRemaining,
+            hitRadius,
+            decayMsRemaining,
+            identity,
+        }) => {
             if (sessionId === networkManager.sessionId) return;
-            this._applyNetworkWorldEntityState({ entityKey, kind, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining, tick: null });
+            this._applyNetworkWorldEntityState({
+                entityKey,
+                kind,
+                x,
+                y,
+                levelId,
+                controllerSessionId,
+                teamId,
+                possessionMsRemaining,
+                hitRadius,
+                decayMsRemaining,
+                identity,
+                tick: null,
+            });
         });
 
         eventBus.on('network:forceControl', ({ controlledEntityKey, possessionMsRemaining, levelId, x, y }) => {
@@ -596,6 +624,7 @@ export class GameScene extends Phaser.Scene {
             velocityX,
             velocityY,
             levelId,
+            sourceTeamId,
             projectileType,
             projectileId,
             penetration,
@@ -609,6 +638,7 @@ export class GameScene extends Phaser.Scene {
                         velocityX,
                         velocityY,
                         penetration,
+                        sourceTeamId,
                     });
                 } else if (projectileType === 'imposing_flame') {
                     const spellCfg = resolveSpellConfig('imposing_flame');
@@ -1198,6 +1228,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     _resolveWorldPrefabName(entityKey, kind = null) {
+        if (kind === 'corpse') return 'corpse';
         if (kind === 'golem') return 'golem';
         if (kind === 'zombie') return 'zombie';
         if (entityKey === 'world:golem') return 'golem';
@@ -1207,7 +1238,7 @@ export class GameScene extends Phaser.Scene {
 
     _isReplicatedWorldActor(entity) {
         if (!entity) return false;
-        return entity.type === 'golem' || entity.type === 'zombie';
+        return entity.type === 'golem' || entity.type === 'zombie' || entity.type === 'corpse';
     }
 
     _applyNetworkEntityEquips(entityEquips) {
@@ -1319,7 +1350,20 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
-    _applyNetworkWorldEntityState({ entityKey, x, y, levelId, kind, controllerSessionId, teamId, possessionMsRemaining, tick = null }) {
+    _applyNetworkWorldEntityState({
+        entityKey,
+        x,
+        y,
+        levelId,
+        kind,
+        controllerSessionId,
+        teamId,
+        possessionMsRemaining,
+        decayMsRemaining,
+        hitRadius,
+        identity,
+        tick = null,
+    }) {
         if (!entityKey || !entityKey.startsWith('world:')) return;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         if (DEBUG_WORLD_SYNC && entityKey === 'world:golem') {
@@ -1339,9 +1383,12 @@ export class GameScene extends Phaser.Scene {
             x,
             y,
             levelId: levelId ?? null,
+            hitRadius: Number.isFinite(hitRadius) ? hitRadius : null,
             controllerSessionId: controllerSessionId ?? null,
             teamId: typeof teamId === 'string' ? teamId : null,
             possessionMsRemaining: Number.isFinite(possessionMsRemaining) ? possessionMsRemaining : null,
+            decayMsRemaining: Number.isFinite(decayMsRemaining) ? decayMsRemaining : null,
+            identity: identity ?? null,
         });
 
         const entityId = entityKey.slice('world:'.length);
@@ -1364,7 +1411,16 @@ export class GameScene extends Phaser.Scene {
             const isMe = controllerSessionId === (networkManager.sessionId ?? null);
             const spawnConfig = worldPrefab === 'golem'
                 ? { id: entityId, x, y, controlMode: isMe ? 'local' : 'remote' }
-                : { id: entityId, x, y };
+                : worldPrefab === 'corpse'
+                    ? {
+                        id: entityId,
+                        x,
+                        y,
+                        radius: Number.isFinite(hitRadius) ? hitRadius : undefined,
+                        identity: identity ?? null,
+                        decayMsRemaining,
+                    }
+                    : { id: entityId, x, y };
             entity = this.entityFactory.createFromPrefab(worldPrefab, spawnConfig);
             const circle = entity?.getComponent('circle');
             if (circle?.gameObject) {
@@ -1380,6 +1436,15 @@ export class GameScene extends Phaser.Scene {
         }
 
         if (!entity) return;
+
+        const decay = entity.getComponent('decay');
+        if (decay && Number.isFinite(decayMsRemaining)) {
+            decay.setTiming(decay.totalMs, decayMsRemaining);
+        }
+        const corpseIdentity = entity.getComponent('corpseIdentity');
+        if (corpseIdentity && identity) {
+            corpseIdentity.setIdentity(identity);
+        }
 
         // Phase 4A: explicitly show/hide based on whether the entity is in the
         // level we are currently rendering. Previously the function silently
@@ -1485,7 +1550,7 @@ export class GameScene extends Phaser.Scene {
         gfx.fillRect(x, y, Math.round(width * ratio), height);
     }
 
-    _addRemotePlayer(sessionId, x, y, stageId = 'town-square', teamId = null, sightRadius = null) {
+    _addRemotePlayer(sessionId, x, y, stageId = 'inn', teamId = null, sightRadius = null) {
         if (this.remotePlayers.has(sessionId)) return;
         const circle = this.add.circle(x, y, PLAYER_RADIUS, 0x6688cc, 0.9);
         circle.setStrokeStyle(3, 0x223355);
@@ -1602,6 +1667,32 @@ export class GameScene extends Phaser.Scene {
         const { polygon } = VisibilitySystem.compute(grid, sourceX, sourceY, sightRadius, 360);
         this.lightingRenderer?.addLightSource(lightSourceId);
         this.lightingRenderer?.setLightSourcePolygon(lightSourceId, polygon);
+    }
+
+    _resolveClientEntityTeamId(entity) {
+        if (!entity) return null;
+        if (entity.id === this.player?.id) {
+            return TEAM_IDS.players;
+        }
+
+        const entityKey = this._getNetworkEntityKey(entity);
+        if (entityKey?.startsWith('world:')) {
+            const cached = this._worldEntityStateCache.get(entityKey);
+            if (typeof cached?.teamId === 'string') return cached.teamId;
+        }
+
+        const kind = entity.type ?? this._resolveWorldPrefabName(entityKey ?? null, null);
+        return ARCHETYPE_CONFIG?.[kind]?.teamId ?? null;
+    }
+
+    _canLocalProjectileHitEntity(sourceTeamId, targetEntity) {
+        if (!targetEntity || targetEntity.id == null) return false;
+        const targetStats = targetEntity.getComponent?.('stats');
+        if (!Number.isFinite(targetStats?.hpMax) || targetStats.hpMax <= 0) return false;
+
+        const targetTeamId = this._resolveClientEntityTeamId(targetEntity);
+        if (!targetTeamId || !sourceTeamId) return false;
+        return sourceTeamId !== targetTeamId;
     }
 
     _sampleSnapshotBuffer(buffer, renderTick, renderTimeMs) {

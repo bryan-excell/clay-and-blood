@@ -7,6 +7,7 @@
 export { createPlayer } from './player.js';
 export { createGolem } from './golem.js';
 export { createZombie } from './zombie.js';
+export { createCorpse } from './corpse.js';
 
 // Projectile prefabs
 export { createBullet } from './bullet.js';

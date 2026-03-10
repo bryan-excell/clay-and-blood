@@ -18,7 +18,8 @@ export class BulletComponent extends Component {
      * @param {object} [options]
      * @param {number} [options.penetration=0] - Extra entities this projectile can pass through
      * @param {boolean} [options.collidesWithEntities=false]
-     * @param {string[]} [options.targetTypes=['zombie']]
+     * @param {string[] | null} [options.targetTypes=['zombie']]
+     * @param {(entity: object) => boolean} [options.entityFilter]
      */
     constructor(velocityX, velocityY, damage = 10, maxRange = 800, options = {}) {
         super('bullet');
@@ -32,7 +33,8 @@ export class BulletComponent extends Component {
         this.collidesWithEntities = !!options.collidesWithEntities;
         this.targetTypes = Array.isArray(options.targetTypes) && options.targetTypes.length > 0
             ? options.targetTypes
-            : ['zombie'];
+            : null;
+        this.entityFilter = typeof options.entityFilter === 'function' ? options.entityFilter : null;
         this._hitEntityIds = new Set();
 
         this.distanceTravelled = 0;
@@ -138,25 +140,26 @@ export class BulletComponent extends Component {
         if (!manager) return null;
 
         let nearest = null;
-        for (const type of this.targetTypes) {
-            const entities = manager.getEntitiesByType(type) ?? [];
-            for (const entity of entities) {
-                if (!entity || entity.id === this.entity.id) continue;
-                if (this._hitEntityIds.has(entity.id)) continue;
+        const entities = this.targetTypes
+            ? this.targetTypes.flatMap((type) => manager.getEntitiesByType(type) ?? [])
+            : Object.values(manager.entities ?? {});
+        for (const entity of entities) {
+            if (!entity || entity.id === this.entity.id) continue;
+            if (this._hitEntityIds.has(entity.id)) continue;
+            if (this.entityFilter && !this.entityFilter(entity)) continue;
 
-                const circle = entity.getComponent('circle');
-                const transform = entity.getComponent('transform');
-                const cx = circle?.gameObject?.x ?? transform?.position?.x;
-                const cy = circle?.gameObject?.y ?? transform?.position?.y;
-                const radius = circle?.radius ?? 16;
+            const circle = entity.getComponent('circle');
+            const transform = entity.getComponent('transform');
+            const cx = circle?.gameObject?.x ?? transform?.position?.x;
+            const cy = circle?.gameObject?.y ?? transform?.position?.y;
+            const radius = circle?.radius ?? 16;
 
-                if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
-                const t = this._rayHitDistance(ox, oy, vx, vy, cx, cy, radius, maxRange);
-                if (t === null) continue;
+            if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+            const t = this._rayHitDistance(ox, oy, vx, vy, cx, cy, radius, maxRange);
+            if (t === null) continue;
 
-                if (!nearest || t < nearest.distance) {
-                    nearest = { entity, distance: t };
-                }
+            if (!nearest || t < nearest.distance) {
+                nearest = { entity, distance: t };
             }
         }
 

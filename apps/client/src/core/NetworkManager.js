@@ -15,8 +15,8 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  *   network:disconnected   {}
  *   network:gameState      { players: [{ sessionId, x, y, stageId, teamId, sightRadius }] }
  *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq, teamId, sightRadius }], self?: { sessionId, hp, hpMax, teamId, sightRadius }, worldEntities?: [], entityEquips?: [] }
- *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId, teamId }] }
- *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining }
+ *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId, teamId, hitRadius, decayMsRemaining, identity }] }
+ *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining, hitRadius, decayMsRemaining, identity }
  *   network:forceControl   { controlledEntityKey, reason, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
  *   network:entityControl  { entityKey, controllerSessionId, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
  *   network:playerJoined   { sessionId }
@@ -119,6 +119,9 @@ class NetworkManager {
                     controllerSessionId: msg.controllerSessionId ?? null,
                     teamId: msg.teamId ?? null,
                     possessionMsRemaining: Number.isFinite(msg.possessionMsRemaining) ? msg.possessionMsRemaining : null,
+                    hitRadius: Number.isFinite(msg.hitRadius) ? msg.hitRadius : null,
+                    decayMsRemaining: Number.isFinite(msg.decayMsRemaining) ? msg.decayMsRemaining : null,
+                    identity: msg.identity ?? null,
                 });
                 break;
 
@@ -165,6 +168,7 @@ class NetworkManager {
                     velocityX: msg.velocityX,
                     velocityY: msg.velocityY,
                     levelId:   msg.levelId,
+                    sourceTeamId: typeof msg.sourceTeamId === 'string' ? msg.sourceTeamId : null,
                     projectileId: typeof msg.projectileId === 'string' ? msg.projectileId : null,
                     projectileType: msg.projectileType ?? 'bullet',
                     chargeRatio: Number.isFinite(msg.chargeRatio) ? msg.chargeRatio : 1,

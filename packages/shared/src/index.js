@@ -650,6 +650,12 @@ export const STATIC_EXIT_CONNECTIONS = {
     },
 };
 
+export const STATIC_STAGE_SPAWN_POINTS = Object.freeze({
+    'town-square': Object.freeze({ x: 20, y: 20 }),
+    'west-gate': Object.freeze({ x: 10, y: 4 }),
+    'inn': Object.freeze({ x: 3, y: 9 }),
+});
+
 /**
  * Resolve a transition from a source exit.
  * Static links take precedence; all other exits use deterministic wild links.
@@ -711,6 +717,22 @@ export function resolveExitSpawnPosition({ toLevelId, toExitIndex, entryDirectio
         tileX,
         tileY,
         entryDirection: resolvedDir,
+    };
+}
+
+export function resolveStageSpawnPosition(levelId) {
+    const { grid } = getStageData(levelId);
+    if (!grid || grid.length === 0 || !Array.isArray(grid[0])) return null;
+
+    const spawn = STATIC_STAGE_SPAWN_POINTS[levelId] ?? null;
+    const tileX = Number.isFinite(spawn?.x) ? spawn.x : Math.floor(grid[0].length / 2);
+    const tileY = Number.isFinite(spawn?.y) ? spawn.y : Math.floor(grid.length / 2);
+
+    return {
+        x: tileX * TILE_SIZE + TILE_SIZE / 2,
+        y: tileY * TILE_SIZE + TILE_SIZE / 2,
+        tileX,
+        tileY,
     };
 }
 

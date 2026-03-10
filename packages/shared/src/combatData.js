@@ -66,6 +66,19 @@ export const ARCHETYPE_CONFIG = Object.freeze({
             shamblePauseMaxMs: 1800,
         }),
     }),
+    corpse: Object.freeze({
+        teamId: TEAM_IDS.neutral,
+        hitRadius: 18,
+        sightRadius: 0,
+        hpMax: 0,
+        decayDurationMs: 120000,
+        poise: Object.freeze({
+            max: 0,
+            flinchThreshold: 0,
+            regenDelayMs: 0,
+            regenPerSec: 0,
+        }),
+    }),
 });
 
 export const MELEE_WEAPON_CONFIG = Object.freeze({

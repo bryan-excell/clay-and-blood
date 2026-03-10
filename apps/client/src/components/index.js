@@ -27,3 +27,6 @@ export { LoadoutComponent } from './LoadoutComponent.js';
 
 // Visibility / FOV
 export { VisibilityComponent } from './VisibilityComponent.js';
+export { CorpseIdentityComponent } from './CorpseIdentityComponent.js';
+export { DecayComponent } from './DecayComponent.js';
+export { DecayBarComponent } from './DecayBarComponent.js';

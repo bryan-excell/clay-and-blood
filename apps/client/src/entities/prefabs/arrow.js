@@ -28,6 +28,7 @@ export function createArrow(scene, config = {}) {
         damage = BULLET_DAMAGE,
         maxRange = ARROW_MAX_RANGE,
         penetration = ARROW_PENETRATION,
+        sourceTeamId = null,
     } = config;
 
     const arrow = scene.entityFactory.createEntity();
@@ -46,7 +47,7 @@ export function createArrow(scene, config = {}) {
     arrow.addComponent(new BulletComponent(velocityX, velocityY, damage, maxRange, {
         penetration,
         collidesWithEntities: true,
-        targetTypes: ['zombie'],
+        entityFilter: (entity) => scene._canLocalProjectileHitEntity?.(sourceTeamId, entity) ?? false,
     }));
 
     return arrow;

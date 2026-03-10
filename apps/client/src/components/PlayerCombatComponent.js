@@ -616,6 +616,7 @@ export class PlayerCombatComponent extends Component {
             velocityY: ny * speed,
             angle,
             penetration: ARROW_PENETRATION,
+            sourceTeamId: scene._resolveClientEntityTeamId?.(this.entity) ?? null,
         });
         const arrowGO = arrowEntity.getComponent('rectangle')?.gameObject;
         scene.lightingRenderer?.maskGameObject(arrowGO);

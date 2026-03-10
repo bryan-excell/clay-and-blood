@@ -4,6 +4,7 @@ import {
     getStageData,
     resolveExitTransition,
     resolveExitSpawnPosition,
+    resolveStageSpawnPosition,
     TILE_SIZE,
     STAGE_WIDTH,
     STAGE_HEIGHT,
@@ -65,6 +66,7 @@ const ZOMBIE_HIT_RADIUS = ARCHETYPE_CONFIG.zombie.hitRadius;
 const ZOMBIE_HP_MAX = ARCHETYPE_CONFIG.zombie.hpMax;
 const GOLEM_HIT_RADIUS = ARCHETYPE_CONFIG.golem.hitRadius;
 const GOLEM_HP_MAX = ARCHETYPE_CONFIG.golem.hpMax;
+const CORPSE_DECAY_DURATION_MS = ARCHETYPE_CONFIG.corpse.decayDurationMs;
 const FLINCH_DURATION_MS = REACTION_CONFIG.flinchDurationMs;
 const STAGGER_DURATION_MS = REACTION_CONFIG.staggerDurationMs;
 const TEAM_PLAYERS = TEAM_IDS.players;
@@ -255,6 +257,7 @@ export class GameRoom {
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
         this.tickCount = 0;
+        this.practiceEntitiesInitialized = false;
         // Lag-compensation history: array of { tick, positions: Map<sessionId,{x,y,levelId}> }
 
     // Capped at LAG_COMP_HISTORY_SIZE entries (sliding window ~1 second).
@@ -285,16 +288,17 @@ export class GameRoom {
         switch (data.type) {
 
             case MSG.PLAYER_JOIN: {
-                this._ensurePracticeGolem();
-                this._ensurePracticeZombie();
-                const startGrid = this._getGrid('town-square');
-                const startW = startGrid ? startGrid[0].length : STAGE_WIDTH;
-                const startH = startGrid ? startGrid.length   : STAGE_HEIGHT;
-                const spawnX = Math.floor(startW / 2) * TILE_SIZE + TILE_SIZE / 2;
-                const spawnY = Math.floor(startH / 2) * TILE_SIZE + TILE_SIZE / 2;
+                if (!this.practiceEntitiesInitialized) {
+                    this._ensurePracticeGolem();
+                    this._ensurePracticeZombie();
+                    this.practiceEntitiesInitialized = true;
+                }
+                const spawn = resolveStageSpawnPosition('inn');
+                const spawnX = spawn?.x ?? (Math.floor(STAGE_WIDTH / 2) * TILE_SIZE + TILE_SIZE / 2);
+                const spawnY = spawn?.y ?? (Math.floor(STAGE_HEIGHT / 2) * TILE_SIZE + TILE_SIZE / 2);
 
                 this.players.set(sessionId, {
-                    transform: { x: spawnX, y: spawnY, levelId: 'town-square' },
+                    transform: { x: spawnX, y: spawnY, levelId: 'inn' },
                     intent:    {
                         up: false, down: false, left: false, right: false, sprint: false,
                         moveSpeedMultiplier: 1, attackPushVx: 0, attackPushVy: 0,
@@ -332,7 +336,9 @@ export class GameRoom {
                 ws.send(JSON.stringify({
                     type: MSG.WORLD_STATE,
                     scope: 'all',
-                    entities: Array.from(this.worldEntities.values()).map((entry) => this._serializeWorldEntity(entry, Date.now())),
+                    entities: Array.from(this.worldEntities.values())
+                        .map((entry) => this._serializeWorldEntity(entry, Date.now()))
+                        .filter(Boolean),
                 }));
 
                 // Notify the others that someone new arrived
@@ -658,6 +664,7 @@ export class GameRoom {
                         x, y, velocityX, velocityY, levelId: projectileLevelId,
                         projectileId,
                         projectileType: normalizedType,
+                        sourceTeamId,
                         chargeRatio: ratio,
                         penetration: Number.isFinite(penetration)
                             ? Math.max(0, Math.floor(penetration))
@@ -698,6 +705,7 @@ export class GameRoom {
                         x, y, velocityX, velocityY, levelId: projectileLevelId,
                         projectileId: null,
                         projectileType: normalizedType,
+                        sourceTeamId,
                         chargeRatio: ratio,
                         penetration: 0,
                     }, ws);
@@ -815,7 +823,8 @@ export class GameRoom {
                 // immediately so entrants do not render stale/default local positions.
                 const destinationEntities = Array.from(this.worldEntities.values())
                     .filter((entry) => (entry.levelId ?? null) === levelId)
-                    .map((entry) => this._serializeWorldEntity(entry, Date.now()));
+                    .map((entry) => this._serializeWorldEntity(entry, Date.now()))
+                    .filter(Boolean);
                 if (DEBUG_WORLD_SYNC) {
                     const golem = this.worldEntities.get('world:golem') ?? null;
                     console.log('[WorldSync][Server] level_change world_state push', {
@@ -883,6 +892,7 @@ export class GameRoom {
     _runTick() {
         this._phaseExpirePossessions();
         this._phaseUpdatePoiseAndReactions();
+        this._phaseDecayCorpses();
         const inputPhase = this._phaseInputIntent();
         const locomotionPhase = this._phaseLocomotionDash(inputPhase);
         this._phasePhysicsTransform(locomotionPhase);
@@ -898,8 +908,6 @@ export class GameRoom {
     }
 
     _phaseExpirePossessions() {
-        this._ensurePracticeGolem();
-        this._ensurePracticeZombie();
         const now = Date.now();
         for (const [sessionId, player] of this.players.entries()) {
             const controlledKey = player.controlledEntityKey;
@@ -910,6 +918,16 @@ export class GameRoom {
             if (!Number.isFinite(target.possessionEndAtMs)) continue;
             if (target.possessionEndAtMs > now) continue;
             this._releaseControllerToReturn(sessionId, 'possess:expired');
+        }
+    }
+
+    _phaseDecayCorpses() {
+        const nowMs = Date.now();
+        for (const [entityKey, entity] of this.worldEntities.entries()) {
+            if (entity?.kind !== 'corpse') continue;
+            const expiresAtMs = entity.decay?.expiresAtMs ?? null;
+            if (!Number.isFinite(expiresAtMs) || expiresAtMs > nowMs) continue;
+            this.worldEntities.delete(entityKey);
         }
     }
 
@@ -1787,9 +1805,9 @@ export class GameRoom {
                     teamId: typeof selfPlayer.teamId === 'string' ? selfPlayer.teamId : null,
                     sightRadius: Number.isFinite(selfPlayer.sightRadius) ? selfPlayer.sightRadius : null,
                 } : null,
-                worldEntities: Array.from(this.worldEntities.values()).map((entry) => ({
-                    ...this._serializeWorldEntity(entry, now),
-                })),
+                worldEntities: Array.from(this.worldEntities.values())
+                    .map((entry) => this._serializeWorldEntity(entry, now))
+                    .filter(Boolean),
                 entityEquips: Array.from(this.entityEquips.values()).map(({ entityKey, levelId, equipped, ownerSessionId }) => ({
                     entityKey,
                     levelId,
@@ -2114,11 +2132,16 @@ export class GameRoom {
 
         const newHp = Math.max(0, victim.stats.hp - damage);
         const died = newHp === 0;
-        const nextHp = died ? PLAYER_HEALTH_MAX : newHp;
-        this.players.set(victimSessionId, {
+        let nextHp = newHp;
+        let nextPlayer = {
             ...victim,
             stats: { ...victim.stats, hp: nextHp },
-        });
+        };
+        if (died) {
+            nextPlayer = this._respawnPlayerToInn(victimSessionId, nextPlayer);
+            nextHp = nextPlayer.stats.hp;
+        }
+        this.players.set(victimSessionId, nextPlayer);
 
         const payload = {
             type: MSG.PLAYER_DAMAGED,
@@ -2134,7 +2157,7 @@ export class GameRoom {
         this.#broadcastAll(payload);
     }
 
-    _applyDamageToWorldEntity(entityKey, damage) {
+    _applyDamageToWorldEntity(entityKey, damage, attackerEntityKey = null) {
         const entity = this.worldEntities.get(entityKey);
         if (!entity) return;
         const defaultStats = this._defaultStatsForKind(entity.kind);
@@ -2154,6 +2177,7 @@ export class GameRoom {
             levelId: entity.levelId ?? null,
         });
         if (died) {
+            this._convertWorldEntityToCorpse(entityKey, entity, attackerEntityKey);
             this.worldEntities.delete(entityKey);
             return;
         }
@@ -2161,6 +2185,112 @@ export class GameRoom {
             ...entity,
             stats: { hp: nextHp, hpMax },
         });
+    }
+
+    _respawnPlayerToInn(sessionId, player) {
+        if (!player) return player;
+
+        const latest = this.players.get(sessionId) ?? player;
+        const controlledKey = latest.controlledEntityKey ?? `player:${sessionId}`;
+        if (controlledKey.startsWith('world:')) {
+            const target = this.worldEntities.get(controlledKey);
+            if (target && target.controllerSessionId === sessionId) {
+                target.controllerSessionId = null;
+                target.possessionEndAtMs = null;
+                target.teamId = this._defaultTeamForKind(target.kind);
+                this.worldEntities.set(controlledKey, target);
+                this.#broadcastAll({
+                    type: MSG.ENTITY_CONTROL,
+                    entityKey: controlledKey,
+                    controllerSessionId: null,
+                    previousControllerSessionId: sessionId,
+                    winnerSessionId: null,
+                    possessionMsRemaining: 0,
+                    reason: 'death:release',
+                });
+            }
+        }
+        const spawn = resolveStageSpawnPosition('inn');
+        const respawnX = spawn?.x ?? latest.transform?.x ?? 0;
+        const respawnY = spawn?.y ?? latest.transform?.y ?? 0;
+        this.#sendToSession(sessionId, {
+            type: MSG.FORCE_CONTROL,
+            controlledEntityKey: `player:${sessionId}`,
+            levelId: 'inn',
+            x: respawnX,
+            y: respawnY,
+            winnerSessionId: null,
+            previousControllerSessionId: controlledKey.startsWith('world:') ? sessionId : null,
+            possessionMsRemaining: 0,
+            reason: 'death:respawn',
+        });
+
+        return {
+            ...latest,
+            transform: {
+                ...latest.transform,
+                x: respawnX,
+                y: respawnY,
+                levelId: 'inn',
+            },
+            stats: {
+                ...latest.stats,
+                hp: PLAYER_HEALTH_MAX,
+            },
+            controlledEntityKey: `player:${sessionId}`,
+            returnEntityKey: `player:${sessionId}`,
+            motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+            intent: {
+                up: false, down: false, left: false, right: false, sprint: false,
+                moveSpeedMultiplier: 0, attackPushVx: 0, attackPushVy: 0,
+            },
+            poise: this._defaultPoiseForKind('player'),
+        };
+    }
+
+    _convertWorldEntityToCorpse(entityKey, entity, killerEntityKey = null) {
+        if (!entity) return null;
+        const equipSnapshot = this.entityEquips.get(entityKey)?.equipped ?? null;
+        this.entityEquips.delete(entityKey);
+
+        if (entity.controllerSessionId) {
+            this._releaseControllerToReturn(entity.controllerSessionId, 'death:controlled-entity', {
+                previousControllerSessionId: entity.controllerSessionId,
+            });
+        }
+
+        const nowMs = Date.now();
+        const corpseKey = `world:corpse_${crypto.randomUUID().replace(/-/g, '_')}`;
+        const corpse = {
+            entityKey: corpseKey,
+            kind: 'corpse',
+            teamId: TEAM_NEUTRAL,
+            x: Number.isFinite(entity.x) ? entity.x : 0,
+            y: Number.isFinite(entity.y) ? entity.y : 0,
+            levelId: entity.levelId ?? null,
+            hitRadius: Number.isFinite(entity.hitRadius)
+                ? entity.hitRadius
+                : this._getWorldEntityHitRadius(entity),
+            decay: {
+                startedAtMs: nowMs,
+                durationMs: CORPSE_DECAY_DURATION_MS,
+                expiresAtMs: nowMs + CORPSE_DECAY_DURATION_MS,
+            },
+            identity: {
+                originalEntityKey: entityKey,
+                originalKind: entity.kind ?? null,
+                displayName: entity.kind ?? 'corpse',
+                teamIdAtDeath: this._getWorldEntityTeamId(entity),
+                statsSnapshot: {
+                    hpMax: Number.isFinite(entity.stats?.hpMax) ? entity.stats.hpMax : null,
+                },
+                loadoutSnapshot: equipSnapshot,
+                diedAtMs: nowMs,
+                killerEntityKey: typeof killerEntityKey === 'string' ? killerEntityKey : null,
+            },
+        };
+        this.worldEntities.set(corpseKey, corpse);
+        return corpseKey;
     }
 
     _applyDamageToEntity(targetEntityKey, damage, attackerEntityKey = null, timestamp = null, poiseDamage = 0) {
@@ -2181,7 +2311,7 @@ export class GameRoom {
             return;
         }
         if (targetEntityKey.startsWith('world:')) {
-            this._applyDamageToWorldEntity(targetEntityKey, damage);
+            this._applyDamageToWorldEntity(targetEntityKey, damage, attackerEntityKey);
         }
     }
 
@@ -2594,10 +2724,24 @@ export class GameRoom {
             x: entry.x,
             y: entry.y,
             levelId: entry.levelId ?? null,
+            hitRadius: Number.isFinite(entry.hitRadius) ? entry.hitRadius : this._getWorldEntityHitRadius(entry),
             controllerSessionId: entry.controllerSessionId ?? null,
             possessionMsRemaining: Number.isFinite(entry.possessionEndAtMs)
                 ? Math.max(0, entry.possessionEndAtMs - nowMs)
                 : null,
+            decayMsRemaining: Number.isFinite(entry.decay?.expiresAtMs)
+                ? Math.max(0, entry.decay.expiresAtMs - nowMs)
+                : null,
+            identity: entry.identity ? {
+                originalEntityKey: entry.identity.originalEntityKey ?? null,
+                originalKind: entry.identity.originalKind ?? null,
+                displayName: entry.identity.displayName ?? null,
+                teamIdAtDeath: entry.identity.teamIdAtDeath ?? null,
+                statsSnapshot: entry.identity.statsSnapshot ?? null,
+                loadoutSnapshot: entry.identity.loadoutSnapshot ?? null,
+                diedAtMs: entry.identity.diedAtMs ?? null,
+                killerEntityKey: entry.identity.killerEntityKey ?? null,
+            } : null,
         };
     }
 
