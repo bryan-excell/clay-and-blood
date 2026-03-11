@@ -23,6 +23,8 @@ export function runUiStateStoreTests() {
     assert.equal(uiStateStore.get('controlledEntity').hp, 42);
     assert.equal(notifications, 1);
     assert.equal(keyNotifications, 1);
+    assert.equal(uiStateStore.get('pendingSlotAssignment'), null);
+    assert.equal(uiStateStore.get('quickRadialOpen'), false);
 
     unsubAll();
     unsubKey();

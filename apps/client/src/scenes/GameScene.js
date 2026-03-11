@@ -1084,6 +1084,24 @@ export class GameScene extends Phaser.Scene {
         eventBus.on('ui:equipAccessory', ({ id }) => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.equipAccessory(id);
         });
+        eventBus.on('ui:assignWeaponSlot', ({ slotIndex, id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.assignWeaponSlot(slotIndex, id);
+        });
+        eventBus.on('ui:assignSpellSlot', ({ slotIndex, id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.assignSpellSlot(slotIndex, id);
+        });
+        eventBus.on('ui:activateWeaponSlot', ({ slotIndex }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.activateWeaponSlot(slotIndex);
+        });
+        eventBus.on('ui:activateSpellSlot', ({ slotIndex }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.activateSpellSlot(slotIndex);
+        });
+        eventBus.on('ui:cycleWeaponSlot', () => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleWeaponSlot();
+        });
+        eventBus.on('ui:cycleSpellSlot', () => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleSpellSlot();
+        });
 
         // Replicate any equip change for the controlled entity to the server.
         // For now we replicate only the primary local player's loadout to the server.
@@ -1097,6 +1115,14 @@ export class GameScene extends Phaser.Scene {
             const entityKey = this._getNetworkEntityKey(entity);
             if (!entityKey) return;
             networkManager.sendEquip(entityKey, equipped, levelId);
+        });
+        eventBus.on('control:changed', ({ controlMode }) => {
+            if (controlMode !== 'local') return;
+            uiStateStore.patch({
+                pendingSlotAssignment: null,
+                quickRadialHover: null,
+                quickRadialOpen: false,
+            });
         });
 
         // A remote player disconnected

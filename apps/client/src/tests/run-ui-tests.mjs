@@ -8,6 +8,11 @@ import {
     runUiProjectionPossessionGuardTest,
     runUiProjectionImmediateControlChangedTest,
 } from '../world/ui-projection.test.mjs';
+import {
+    runLoadoutKitAssignmentTest,
+    runLoadoutKitActivationAndCyclingTest,
+    runLoadoutActiveSlotReassignTest,
+} from '../components/loadout-component.test.mjs';
 
 function run(name, fn) {
     fn();
@@ -21,3 +26,6 @@ run('UiProjection basic projection', runUiProjectionBasicProjectionTest);
 run('UiProjection network override', runUiProjectionNetworkOverrideTest);
 run('UiProjection possession guard', runUiProjectionPossessionGuardTest);
 run('UiProjection immediate control update', runUiProjectionImmediateControlChangedTest);
+run('Loadout kit assignment', runLoadoutKitAssignmentTest);
+run('Loadout kit activation and cycling', runLoadoutKitActivationAndCyclingTest);
+run('Loadout active slot reassignment', runLoadoutActiveSlotReassignTest);

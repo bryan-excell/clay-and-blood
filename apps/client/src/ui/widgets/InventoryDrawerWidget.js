@@ -19,6 +19,9 @@
 
 import Phaser from 'phaser';
 import { GAME_FONT_FAMILY } from '../../config.js';
+import { uiStateStore } from '../../core/UiStateStore.js';
+import { eventBus } from '../../core/EventBus.js';
+import { RadialKitWidget } from './RadialKitWidget.js';
 
 const RIBBON_W = 44;
 const PANEL_W  = 200;
@@ -77,6 +80,7 @@ export class InventoryDrawerWidget {
         this._rowsKey    = null;
         this._height     = height;
         this._activeTween = null;
+        this._radial = null;
 
         this._container   = null;
         this._ribbonBg    = null;
@@ -86,6 +90,7 @@ export class InventoryDrawerWidget {
         this._rows        = [];  // [{ bg, nameText, glyphText? }]
 
         this._build();
+        this._buildRadial();
     }
 
     // ------------------------------------------------------------------
@@ -101,12 +106,15 @@ export class InventoryDrawerWidget {
     open() {
         if (this._open) return;
         this._open = true;
+        this._radial?.show();
         this._tweenTo(0);
     }
 
     close() {
         if (!this._open) return;
         this._open = false;
+        this._radial?.hide();
+        uiStateStore.set('pendingSlotAssignment', null);
         this._tweenTo(-DRAWER_TOTAL_W);
     }
 
@@ -118,18 +126,25 @@ export class InventoryDrawerWidget {
      */
     update(loadout) {
         this._loadout = loadout;
+        const pendingSlotAssignment = uiStateStore.get('pendingSlotAssignment');
         // Only rebuild DOM-heavy rows when something actually changed.
         const key = loadout
             ? JSON.stringify(loadout.equipped)
+                + '|' + JSON.stringify(loadout.weaponSlots ?? [])
+                + '|' + JSON.stringify(loadout.spellSlots ?? [])
+                + '|' + (loadout.activeWeaponSlotIndex ?? -1)
+                + '|' + (loadout.activeSpellSlotIndex ?? -1)
                 + '|' + loadout.weapons.length
                 + '|' + loadout.spells.length
                 + '|' + loadout.accessories.length
                 + '|' + loadout.armorSets.length
                 + '|' + this._activeTab
+                + '|' + JSON.stringify(pendingSlotAssignment)
             : '';
         if (key === this._rowsKey) return;
         this._rowsKey = key;
         this._rebuildRows();
+        this._radial?.refresh(loadout, { selectedSlot: pendingSlotAssignment });
     }
 
     /** Called by UIScene on resize. */
@@ -137,10 +152,12 @@ export class InventoryDrawerWidget {
         this._height = height;
         this._ribbonBg?.setSize(RIBBON_W, height);
         this._panelBg?.setSize(PANEL_W, height);
+        this._positionRadial();
     }
 
     destroy() {
         this._destroyRows();
+        this._radial?.destroy();
         this._tabButtons.forEach(({ bg, label }) => { bg.destroy(); label.destroy(); });
         this._ribbonBg?.destroy();
         this._panelBg?.destroy();
@@ -212,6 +229,35 @@ export class InventoryDrawerWidget {
         this._refreshTabHighlights();
     }
 
+    _buildRadial() {
+        this._radial = new RadialKitWidget(
+            this.scene,
+            this.scene.scale.width / 2,
+            this.scene.scale.height / 2,
+            'config',
+            {
+                onSelectWeaponSlot: (slotIndex) => {
+                    uiStateStore.set('pendingSlotAssignment', { type: 'weapon', slotIndex });
+                    this._setTabById('weapons');
+                    this._radial?.refresh(this._loadout, { selectedSlot: { type: 'weapon', slotIndex } });
+                },
+                onSelectSpellSlot: (slotIndex) => {
+                    uiStateStore.set('pendingSlotAssignment', { type: 'spell', slotIndex });
+                    this._setTabById('spells');
+                    this._radial?.refresh(this._loadout, { selectedSlot: { type: 'spell', slotIndex } });
+                },
+            }
+        );
+        this._radial.hide();
+    }
+
+    _positionRadial() {
+        this._radial?.setPosition(
+            this.scene.scale.width / 2,
+            this.scene.scale.height / 2
+        );
+    }
+
     // ------------------------------------------------------------------
     // Tab management
     // ------------------------------------------------------------------
@@ -221,6 +267,12 @@ export class InventoryDrawerWidget {
         this._activeTab = index;
         this._refreshTabHighlights();
         this._rebuildRows();
+    }
+
+    _setTabById(tabId) {
+        const index = TABS.findIndex(tab => tab.id === tabId);
+        if (index === -1) return;
+        this._setTab(index);
     }
 
     _refreshTabHighlights() {
@@ -347,9 +399,20 @@ export class InventoryDrawerWidget {
     }
 
     _onItemClick(tabId, itemId) {
+        const pending = uiStateStore.get('pendingSlotAssignment');
         switch (tabId) {
-            case 'weapons':     this.onEquip.weapon?.(itemId);    break;
-            case 'spells':      this.onEquip.spell?.(itemId);     break;
+            case 'weapons':
+                if (pending?.type !== 'weapon') return;
+                eventBus.emit('ui:assignWeaponSlot', { slotIndex: pending.slotIndex, id: itemId });
+                uiStateStore.set('pendingSlotAssignment', null);
+                this._radial?.refresh(this._loadout, { selectedSlot: null });
+                break;
+            case 'spells':
+                if (pending?.type !== 'spell') return;
+                eventBus.emit('ui:assignSpellSlot', { slotIndex: pending.slotIndex, id: itemId });
+                uiStateStore.set('pendingSlotAssignment', null);
+                this._radial?.refresh(this._loadout, { selectedSlot: null });
+                break;
             case 'armor':       this.onEquip.armor?.(itemId);     break;
             case 'accessories': this.onEquip.accessory?.(itemId); break;
         }

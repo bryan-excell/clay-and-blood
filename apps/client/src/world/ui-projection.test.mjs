@@ -21,6 +21,10 @@ function makeLoadout(weapons, spells, accessories, equipped) {
         spells,
         armorSets: [],
         accessories,
+        weaponSlots: [equipped.weaponId ?? 'unarmed', 'unarmed', 'unarmed'],
+        spellSlots: [equipped.spellId ?? 'nothing', 'nothing', 'nothing'],
+        activeWeaponSlotIndex: 0,
+        activeSpellSlotIndex: 0,
         equipped,
     };
 }
@@ -68,6 +72,11 @@ export function runUiProjectionBasicProjectionTest() {
     assert.equal(state.loadout.weapons.length, 2);
     assert.equal(state.loadout.weapons[1].id, 'bow');
     assert.equal(state.loadout.spells[1].id, 'possess');
+    assert.equal(state.loadout.weaponSlots[0].id, 'bow');
+    assert.equal(state.loadout.weaponSlots[1].id, 'unarmed');
+    assert.equal(state.loadout.activeWeaponSlotIndex, 0);
+    assert.equal(state.loadout.spellSlots[0].id, 'possess');
+    assert.equal(state.loadout.activeSpellSlotIndex, 0);
 }
 
 export function runUiProjectionNetworkOverrideTest() {

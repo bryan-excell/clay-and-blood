@@ -27,5 +27,8 @@ export function createDefaultUiState() {
         drawerOpen: false,
         // Pixel width of the drawer when open — used for click-region guard.
         drawerWidth: 0,
+        pendingSlotAssignment: null,
+        quickRadialOpen: false,
+        quickRadialHover: null,
     };
 }

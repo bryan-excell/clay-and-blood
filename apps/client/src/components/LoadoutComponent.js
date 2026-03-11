@@ -43,6 +43,19 @@ export class LoadoutComponent extends Component {
             armorSetId:  equipped.armorSetId  ?? this._armorSets[0]   ?? null,
             accessoryId: equipped.accessoryId ?? this._accessories[0] ?? null,
         };
+
+        this._weaponSlots = [
+            this._equipped.weaponId ?? 'unarmed',
+            'unarmed',
+            'unarmed',
+        ];
+        this._spellSlots = [
+            this._equipped.spellId ?? 'nothing',
+            'nothing',
+            'nothing',
+        ];
+        this._activeWeaponSlotIndex = 0;
+        this._activeSpellSlotIndex = 0;
     }
 
     // ------------------------------------------------------------------
@@ -53,6 +66,10 @@ export class LoadoutComponent extends Component {
     get spells()      { return this._spells; }
     get armorSets()   { return this._armorSets; }
     get accessories() { return this._accessories; }
+    get weaponSlots() { return [...this._weaponSlots]; }
+    get spellSlots()  { return [...this._spellSlots]; }
+    get activeWeaponSlotIndex() { return this._activeWeaponSlotIndex; }
+    get activeSpellSlotIndex()  { return this._activeSpellSlotIndex; }
 
     /** Returns a shallow copy so callers cannot mutate internal state. */
     get equipped() { return { ...this._equipped }; }
@@ -150,6 +167,68 @@ export class LoadoutComponent extends Component {
         this._emitChanged();
     }
 
+    assignWeaponSlot(slotIndex, weaponId) {
+        if (!this._isValidKitSlotIndex(slotIndex)) return;
+        if (!this._weapons.includes(weaponId)) return;
+        if (this._weaponSlots[slotIndex] === weaponId) return;
+
+        this._weaponSlots[slotIndex] = weaponId;
+        if (slotIndex === this._activeWeaponSlotIndex) {
+            this.activateWeaponSlot(slotIndex);
+            return;
+        }
+
+        this._emitKitChanged();
+    }
+
+    assignSpellSlot(slotIndex, spellId) {
+        if (!this._isValidKitSlotIndex(slotIndex)) return;
+        if (!this._spells.includes(spellId)) return;
+        if (this._spellSlots[slotIndex] === spellId) return;
+
+        this._spellSlots[slotIndex] = spellId;
+        if (slotIndex === this._activeSpellSlotIndex) {
+            this.activateSpellSlot(slotIndex);
+            return;
+        }
+
+        this._emitKitChanged();
+    }
+
+    activateWeaponSlot(slotIndex) {
+        if (!this._isValidKitSlotIndex(slotIndex)) return;
+
+        const prevIndex = this._activeWeaponSlotIndex;
+        const nextWeaponId = this._weaponSlots[slotIndex] ?? 'unarmed';
+        this._activeWeaponSlotIndex = slotIndex;
+        this.equipWeapon(nextWeaponId);
+
+        if (prevIndex !== slotIndex || this._equipped.weaponId !== nextWeaponId) {
+            this._emitKitChanged();
+        }
+    }
+
+    activateSpellSlot(slotIndex) {
+        if (!this._isValidKitSlotIndex(slotIndex)) return;
+
+        const prevIndex = this._activeSpellSlotIndex;
+        const nextSpellId = this._spellSlots[slotIndex] ?? 'nothing';
+        this._activeSpellSlotIndex = slotIndex;
+        this.equipSpell(nextSpellId);
+
+        if (prevIndex !== slotIndex || this._equipped.spellId !== nextSpellId) {
+            this._emitKitChanged();
+        }
+    }
+
+    cycleWeaponSlot() {
+        this.activateWeaponSlot((this._activeWeaponSlotIndex + 1) % this._weaponSlots.length);
+    }
+
+    cycleSpellSlot() {
+        this.activateSpellSlot((this._activeSpellSlotIndex + 1) % this._spellSlots.length);
+    }
+
     addTemporarySpell(id) {
         if (!id || this._spells.includes(id)) return;
         this._spells.push(id);
@@ -195,5 +274,20 @@ export class LoadoutComponent extends Component {
             entityId: this.entity?.id,
             equipped: this.equipped,
         });
+    }
+
+    _emitKitChanged() {
+        eventBus.emit('loadout:kitChanged', {
+            entityId: this.entity?.id,
+            weaponSlots: this.weaponSlots,
+            spellSlots: this.spellSlots,
+            activeWeaponSlotIndex: this._activeWeaponSlotIndex,
+            activeSpellSlotIndex: this._activeSpellSlotIndex,
+            equipped: this.equipped,
+        });
+    }
+
+    _isValidKitSlotIndex(slotIndex) {
+        return Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3;
     }
 }

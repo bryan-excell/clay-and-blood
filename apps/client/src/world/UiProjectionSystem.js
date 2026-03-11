@@ -17,6 +17,7 @@ export class UiProjectionSystem {
         this.scene = scene;
         this._unsubscribeControlChanged = null;
         this._unsubscribeLoadoutChanged = null;
+        this._unsubscribeLoadoutKitChanged = null;
         this._started = false;
     }
 
@@ -35,6 +36,12 @@ export class UiProjectionSystem {
             if (controlled?.id !== entityId) return;
             this.publishImmediate();
         });
+
+        this._unsubscribeLoadoutKitChanged = eventBus.on('loadout:kitChanged', ({ entityId }) => {
+            const controlled = this.scene.getLocallyControlledEntity?.();
+            if (controlled?.id !== entityId) return;
+            this.publishImmediate();
+        });
     }
 
     stop() {
@@ -48,6 +55,10 @@ export class UiProjectionSystem {
         if (this._unsubscribeLoadoutChanged) {
             this._unsubscribeLoadoutChanged();
             this._unsubscribeLoadoutChanged = null;
+        }
+        if (this._unsubscribeLoadoutKitChanged) {
+            this._unsubscribeLoadoutKitChanged();
+            this._unsubscribeLoadoutKitChanged = null;
         }
     }
 
@@ -108,6 +119,10 @@ export class UiProjectionSystem {
                 spells:      resolveItems(loadout.spells,      SPELLS),
                 armorSets:   resolveItems(loadout.armorSets,   ARMOR_SETS),
                 accessories: resolveItems(loadout.accessories, ACCESSORIES),
+                weaponSlots: resolveItems(loadout.weaponSlots, WEAPONS),
+                spellSlots: resolveItems(loadout.spellSlots, SPELLS),
+                activeWeaponSlotIndex: loadout.activeWeaponSlotIndex,
+                activeSpellSlotIndex: loadout.activeSpellSlotIndex,
                 equipped:    loadout.equipped,
             } : null,
         };
