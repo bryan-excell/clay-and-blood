@@ -14,9 +14,9 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  *   network:connected      { sessionId }
  *   network:disconnected   {}
  *   network:gameState      { players: [{ sessionId, x, y, stageId, teamId, sightRadius }] }
- *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq, teamId, sightRadius }], self?: { sessionId, hp, hpMax, teamId, sightRadius }, worldEntities?: [], entityEquips?: [] }
- *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId, teamId, hitRadius, decayMsRemaining, identity }] }
- *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId, teamId, possessionMsRemaining, hitRadius, decayMsRemaining, identity }
+ *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq, teamId, sightRadius }], self?: { sessionId, controlledEntityKey, resources, teamId, sightRadius }, worldEntities?: [], entityEquips?: [] }
+ *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId, teamId, resources, hitRadius, decayMsRemaining, identity }] }
+ *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId, teamId, resources, possessionMsRemaining, hitRadius, decayMsRemaining, identity }
  *   network:forceControl   { controlledEntityKey, reason, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
  *   network:entityControl  { entityKey, controllerSessionId, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
  *   network:playerJoined   { sessionId }
@@ -117,6 +117,7 @@ class NetworkManager {
                     x: msg.x,
                     y: msg.y,
                     levelId: msg.levelId ?? null,
+                    resources: msg.resources ?? null,
                     controllerSessionId: msg.controllerSessionId ?? null,
                     teamId: msg.teamId ?? null,
                     possessionMsRemaining: Number.isFinite(msg.possessionMsRemaining) ? msg.possessionMsRemaining : null,

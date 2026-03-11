@@ -16,8 +16,8 @@ export class NetworkUiAdapter {
             if (!self) return;
             uiStateStore.set('networkSelf', {
                 sessionId: self.sessionId ?? null,
-                hp: Number.isFinite(self.hp) ? self.hp : 0,
-                hpMax: Number.isFinite(self.hpMax) ? self.hpMax : 1,
+                controlledEntityKey: typeof self.controlledEntityKey === 'string' ? self.controlledEntityKey : null,
+                resources: self.resources ?? null,
                 buffs: Array.isArray(self.buffs) ? self.buffs : [],
             });
         });

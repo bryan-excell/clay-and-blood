@@ -72,13 +72,20 @@ export class UiProjectionSystem {
         const loadout = controlled.getComponent('loadout');
 
         const networkSelf = uiStateStore.get('networkSelf');
-        const isPrimaryLocalPlayer = controlled.id === this.scene.player?.id;
+        const controlledEntityKey = typeof this.scene._getNetworkEntityKey === 'function'
+            ? this.scene._getNetworkEntityKey(controlled)
+            : null;
         const canApplyNetworkSelf  = !!networkSelf &&
-            isPrimaryLocalPlayer &&
-            networkSelf.sessionId === (networkManager.sessionId ?? null);
-
-        const hp    = canApplyNetworkSelf ? networkSelf.hp    : (stats?.hp    ?? 0);
-        const hpMax = canApplyNetworkSelf ? networkSelf.hpMax : (stats?.hpMax ?? 0);
+            networkSelf.sessionId === (networkManager.sessionId ?? null) &&
+            controlledEntityKey &&
+            controlledEntityKey === networkSelf.controlledEntityKey;
+        const networkResources = canApplyNetworkSelf ? networkSelf.resources : null;
+        const hp = Number.isFinite(networkResources?.hp?.current) ? networkResources.hp.current : (stats?.hp ?? 0);
+        const hpMax = Number.isFinite(networkResources?.hp?.max) ? networkResources.hp.max : (stats?.hpMax ?? 0);
+        const mana = Number.isFinite(networkResources?.mana?.current) ? networkResources.mana.current : (stats?.mana ?? 0);
+        const manaMax = Number.isFinite(networkResources?.mana?.max) ? networkResources.mana.max : (stats?.manaMax ?? 0);
+        const stamina = Number.isFinite(networkResources?.stamina?.current) ? networkResources.stamina.current : (stats?.stamina ?? 0);
+        const staminaMax = Number.isFinite(networkResources?.stamina?.max) ? networkResources.stamina.max : (stats?.staminaMax ?? 0);
         const buffs = canApplyNetworkSelf && Array.isArray(networkSelf?.buffs)
             ? networkSelf.buffs
             : EMPTY_BUFFS;
@@ -89,10 +96,10 @@ export class UiProjectionSystem {
             sessionId:  networkManager.sessionId ?? null,
             hp,
             hpMax,
-            mana:       stats?.mana       ?? 0,
-            manaMax:    stats?.manaMax    ?? 0,
-            stamina:    stats?.stamina    ?? 0,
-            staminaMax: stats?.staminaMax ?? 0,
+            mana,
+            manaMax,
+            stamina,
+            staminaMax,
             buffs,
             // Full item defs are resolved here so the UI layer doesn't need
             // to import ItemRegistry directly.

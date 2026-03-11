@@ -25,6 +25,17 @@ function makeLoadout(weapons, spells, accessories, equipped) {
     };
 }
 
+function attachNetworkKeyResolver(scene) {
+    scene._getNetworkEntityKey = (entity) => {
+        if (!entity) return null;
+        if (entity.id === scene.player?.id) {
+            return `player:${networkManager.sessionId ?? ''}`;
+        }
+        return `world:${entity.id}`;
+    };
+    return scene;
+}
+
 export function runUiProjectionBasicProjectionTest() {
     uiStateStore.reset();
     networkManager.sessionId = 's-1';
@@ -38,10 +49,10 @@ export function runUiProjectionBasicProjectionTest() {
             { weaponId: 'bow', spellId: 'possess', armorSetId: null, accessoryId: 'cape' }
         ),
     });
-    const scene = {
+    const scene = attachNetworkKeyResolver({
         player,
         getLocallyControlledEntity: () => player,
-    };
+    });
 
     const system = new UiProjectionSystem(scene);
     system.update();
@@ -66,12 +77,20 @@ export function runUiProjectionNetworkOverrideTest() {
     const player = makeEntity('player-2', 'player', {
         stats: { hp: 12, hpMax: 50, mana: 0, manaMax: 0, stamina: 0, staminaMax: 0 },
     });
-    uiStateStore.set('networkSelf', { sessionId: 's-2', hp: 88, hpMax: 120 });
+    uiStateStore.set('networkSelf', {
+        sessionId: 's-2',
+        controlledEntityKey: 'player:s-2',
+        resources: {
+            hp: { current: 88, max: 120 },
+            mana: { current: 9, max: 20 },
+            stamina: { current: 14, max: 60 },
+        },
+    });
 
-    const scene = {
+    const scene = attachNetworkKeyResolver({
         player,
         getLocallyControlledEntity: () => player,
-    };
+    });
 
     const system = new UiProjectionSystem(scene);
     system.update();
@@ -79,6 +98,8 @@ export function runUiProjectionNetworkOverrideTest() {
     const state = uiStateStore.get('controlledEntity');
     assert.equal(state.hp, 88);
     assert.equal(state.hpMax, 120);
+    assert.equal(state.mana, 9);
+    assert.equal(state.stamina, 14);
     assert.equal(state.loadout, null, 'no LoadoutComponent → loadout should be null');
 }
 
@@ -98,12 +119,20 @@ export function runUiProjectionPossessionGuardTest() {
             { weaponId: 'unarmed', spellId: 'nothing', armorSetId: null, accessoryId: null }
         ),
     });
-    uiStateStore.set('networkSelf', { sessionId: 's-3', hp: 20, hpMax: 100 });
+    uiStateStore.set('networkSelf', {
+        sessionId: 's-3',
+        controlledEntityKey: 'player:s-3',
+        resources: {
+            hp: { current: 20, max: 100 },
+            mana: { current: 5, max: 10 },
+            stamina: { current: 10, max: 50 },
+        },
+    });
 
-    const scene = {
+    const scene = attachNetworkKeyResolver({
         player,
         getLocallyControlledEntity: () => golem,
-    };
+    });
 
     const system = new UiProjectionSystem(scene);
     system.update();
@@ -130,10 +159,10 @@ export function runUiProjectionImmediateControlChangedTest() {
         stats: { hp: 150, hpMax: 160, mana: 0, manaMax: 0, stamina: 50, staminaMax: 80 },
     });
     let controlled = player;
-    const scene = {
+    const scene = attachNetworkKeyResolver({
         player,
         getLocallyControlledEntity: () => controlled,
-    };
+    });
 
     const system = new UiProjectionSystem(scene);
     system.start();

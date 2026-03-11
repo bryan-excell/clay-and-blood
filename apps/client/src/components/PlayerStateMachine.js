@@ -1,6 +1,7 @@
 import { Component } from './Component.js';
 import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
+import { uiStateStore } from '../core/UiStateStore.js';
 import { PLAYER_SPEED, PLAYER_SPRINT_MULTIPLIER } from '../config.js';
 
 /**
@@ -82,6 +83,7 @@ export class PlayerStateMachine extends Component {
 
     startDashFromIntent(intent) {
         if (this.currentMovementState === this.movementStates.STANDING) return;
+        if ((uiStateStore.get('controlledEntity')?.stamina ?? 0) <= 0) return;
 
         this.dashDirection = { x: intent.moveX, y: intent.moveY };
         if (this.dashDirection.x === 0 && this.dashDirection.y === 0) {
@@ -100,7 +102,7 @@ export class PlayerStateMachine extends Component {
 
         const keyboard = this.entity.getComponent('keyboard');
         const dashInput = keyboard?.inputState ?? this._intentToInputState(intent);
-        const dashSeq = this.entity.id === this.entity.scene.player?.id
+        const dashSeq = this.entity.getComponent('control')?.controlMode === 'local'
             ? networkManager.sendDash(dashInput)
             : -1;
 

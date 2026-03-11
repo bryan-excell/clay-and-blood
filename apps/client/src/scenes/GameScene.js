@@ -687,6 +687,12 @@ export class GameScene extends Phaser.Scene {
             if (typeof self?.teamId === 'string') {
                 this._localTeamId = self.teamId;
             }
+            if (self?.resources) {
+                const controlled = self?.controlledEntityKey
+                    ? this._resolveEntityByNetworkKey(self.controlledEntityKey)
+                    : this.getLocallyControlledEntity();
+                this._applyResourceSummaryToEntity(controlled, self.resources);
+            }
             if (Number.isFinite(tick)) {
                 if (tick > this._latestServerTick) {
                     this._latestServerTick = tick;
@@ -763,6 +769,7 @@ export class GameScene extends Phaser.Scene {
             x,
             y,
             levelId,
+            resources,
             controllerSessionId,
             teamId,
             possessionMsRemaining,
@@ -777,6 +784,7 @@ export class GameScene extends Phaser.Scene {
                 x,
                 y,
                 levelId,
+                resources,
                 controllerSessionId,
                 teamId,
                 possessionMsRemaining,
@@ -1651,6 +1659,7 @@ export class GameScene extends Phaser.Scene {
         y,
         levelId,
         kind,
+        resources,
         controllerSessionId,
         teamId,
         possessionMsRemaining,
@@ -1678,6 +1687,7 @@ export class GameScene extends Phaser.Scene {
             x,
             y,
             levelId: levelId ?? null,
+            resources: resources ?? null,
             hitRadius: Number.isFinite(hitRadius) ? hitRadius : null,
             controllerSessionId: controllerSessionId ?? null,
             teamId: typeof teamId === 'string' ? teamId : null,
@@ -1731,6 +1741,8 @@ export class GameScene extends Phaser.Scene {
         }
 
         if (!entity) return;
+
+        this._applyResourceSummaryToEntity(entity, resources ?? null);
 
         const decay = entity.getComponent('decay');
         if (decay && Number.isFinite(decayMsRemaining)) {
@@ -1813,6 +1825,13 @@ export class GameScene extends Phaser.Scene {
         if (!controlled) return;
         if (controlled.id === this.player?.id) return;
         controlled.getComponent('loadout')?.addTemporarySpell('release_possession');
+    }
+
+    _applyResourceSummaryToEntity(entity, resources) {
+        const stats = entity?.getComponent?.('stats');
+        if (!stats || !resources) return;
+        stats.applyResourceSummary(resources);
+        this.uiProjectionSystem?.publishImmediate();
     }
 
     _updatePossessionBar() {
@@ -2344,9 +2363,10 @@ export class GameScene extends Phaser.Scene {
 
         // Send current input state to the authoritative server.
         // If the message was actually sent (not throttled), buffer it for reconciliation.
-        if (this.player) {
-            const intent = this.player.getComponent('intent');
-            const combat = this.player.getComponent('playerCombat');
+        const locallyControlled = this.getLocallyControlledEntity();
+        if (locallyControlled) {
+            const intent = locallyControlled.getComponent('intent');
+            const combat = locallyControlled.getComponent('playerCombat');
             const movementInfluence = combat?.getMovementInfluence?.() ?? null;
             if (intent) {
                 networkManager.sendInput({

@@ -13,7 +13,6 @@ import {
     stepPlayerKinematics,
     dashStateFromInput,
     resolvePlayerCollisions,
-    PLAYER_HEALTH_MAX,
     BULLET_DAMAGE,
     BULLET_MAX_RANGE,
     ARROW_MIN_DAMAGE,
@@ -23,6 +22,9 @@ import {
     ARCHETYPE_CONFIG,
     TEAM_IDS,
     REACTION_CONFIG,
+    MOVEMENT_RESOURCE_CONFIG,
+    PROJECTILE_RESOURCE_COST,
+    RESOURCE_KINDS,
     resolveArchetypeConfig,
     resolveMeleeAttackProfile,
     PROJECTILE_POISE_DAMAGE,
@@ -31,12 +33,18 @@ import {
     getWorldSpawnDefinitions,
     getWorldSpawnDefinition,
     getInteractableDefinition,
+    createEntityResources,
+    tickResourceRegen,
+    canPayResourceCosts,
+    payResourceCosts,
+    fillResource,
+    damageHealth,
+    summarizeResources,
 } from '@clay-and-blood/shared';
 import {
     phaseInputIntent,
     phaseLocomotionDash,
     phasePhysicsTransform,
-    phaseBuildSnapshotPlayers,
     phaseBuildHistoryPositions,
 } from '@clay-and-blood/shared/server-tick';
 
@@ -76,6 +84,8 @@ const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
 const PROJECTILE_MIN_SPEED = 0.001;
+const SPRINT_STAMINA_DRAIN_PER_SEC = MOVEMENT_RESOURCE_CONFIG.sprint.staminaDrainPerSec;
+const DASH_STAMINA_COST = MOVEMENT_RESOURCE_CONFIG.dash.staminaCost;
 
 function sanitizeEquipId(value) {
     if (typeof value !== 'string') return null;
@@ -241,7 +251,7 @@ export class GameRoom {
         //   transform: { x, y, levelId },
         //   intent:    { up, down, left, right, sprint },
         //   motion:    { dashVx, dashVy, dashTimeLeftMs },
-        //   stats:     { hp },
+        //   resources: { hp, stamina, mana },
         //   net:       { lastSeq }
         // }
         this.players = new Map();
@@ -298,7 +308,7 @@ export class GameRoom {
                         moveSpeedMultiplier: 1, attackPushVx: 0, attackPushVy: 0,
                     },
                     motion:    { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-                    stats:     { hp: PLAYER_HEALTH_MAX },
+                    resources: createEntityResources('player'),
                     net:       { lastSeq: 0 },
                     equipped:  null, // populated on first PLAYER_EQUIP message
                     controlledEntityKey: `player:${sessionId}`,
@@ -357,7 +367,7 @@ export class GameRoom {
             case MSG.PLAYER_INPUT: {
                 const player = this.players.get(sessionId);
                 if (!player) break;
-                const playerEntityKey = `player:${sessionId}`;
+                const playerEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
                 const incapacitated = this._isEntityIncapacitated(playerEntityKey, Date.now());
 
                 // Preserve existing dash state unless a new dash is requested
@@ -365,15 +375,16 @@ export class GameRoom {
 
                 if (data.dash && dashTimeLeftMs <= 0) {
                     const dash = dashStateFromInput(data);
-                    if (dash) {
+                    if (dash && this._payEntityCosts(playerEntityKey, { stamina: DASH_STAMINA_COST, mana: 0 }, Date.now())) {
                         dashVx = dash.dashVx;
                         dashVy = dash.dashVy;
                         dashTimeLeftMs = dash.dashTimeLeftMs;
                     }
                 }
 
-                this.players.set(sessionId, {
-                    ...player,
+                const latestPlayer = this.players.get(sessionId) ?? player;
+                this._updatePlayer(sessionId, (currentPlayer) => ({
+                    ...currentPlayer,
                     intent: {
                         up:     !incapacitated && !!data.up,
                         down:   !incapacitated && !!data.down,
@@ -382,7 +393,7 @@ export class GameRoom {
                         sprint: !incapacitated && !!data.sprint,
                         moveSpeedMultiplier: (Number.isFinite(data.moveSpeedMultiplier)
                             ? Math.max(0, Math.min(1, data.moveSpeedMultiplier))
-                            : 1) * this._resolveSpellWindupMoveMultiplier(player, Date.now())
+                            : 1) * this._resolveSpellWindupMoveMultiplier(latestPlayer, Date.now())
                             * this._resolveActiveEffectMoveMultiplier(playerEntityKey),
                         attackPushVx: !incapacitated && Number.isFinite(data.attackPushVx)
                             ? Math.max(-800, Math.min(800, data.attackPushVx))
@@ -396,15 +407,15 @@ export class GameRoom {
                         dashVy,
                         dashTimeLeftMs,
                     },
-                    net: { ...player.net, lastSeq: data.seq ?? player.net.lastSeq },
-                });
+                    net: { ...currentPlayer.net, lastSeq: data.seq ?? currentPlayer.net.lastSeq },
+                }));
                 break;
             }
 
             case MSG.MELEE_ATTACK: {
                 const player = this.players.get(sessionId);
                 if (!player) break;
-                if (this._isEntityIncapacitated(`player:${sessionId}`, Date.now())) break;
+                if (this._isEntityIncapacitated(player.controlledEntityKey ?? `player:${sessionId}`, Date.now())) break;
                 const dirX = Number.isFinite(data.dirX) ? data.dirX : 1;
                 const dirY = Number.isFinite(data.dirY) ? data.dirY : 0;
                 const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
@@ -437,7 +448,7 @@ export class GameRoom {
                 if (!player || !entityKey || !sanitized) break;
                 const equipState = { entityKey, levelId, equipped: sanitized, ownerSessionId: sessionId };
                 this.entityEquips.set(entityKey, equipState);
-                this.players.set(sessionId, { ...player, equipped: sanitized });
+                this._updatePlayer(sessionId, (currentPlayer) => ({ ...currentPlayer, equipped: sanitized }));
                 this.#broadcast({
                     type: MSG.PLAYER_EQUIP,
                     sessionId,
@@ -473,7 +484,7 @@ export class GameRoom {
                         controllerSessionId: null,
                         teamId: this._defaultTeamForKind(kind),
                         hitRadius: this._defaultHitRadiusForKind(kind),
-                        stats: this._defaultStatsForKind(kind),
+                        resources: this._defaultResourcesForKind(kind),
                         poise: this._defaultPoiseForKind(kind),
                     };
                     if (DEBUG_WORLD_SYNC && targetEntityKey === DEBUG_GOLEM_KEY) {
@@ -501,8 +512,8 @@ export class GameRoom {
                 target.hitRadius = Number.isFinite(target.hitRadius)
                     ? target.hitRadius
                     : this._defaultHitRadiusForKind(target.kind);
-                if (!target.stats) {
-                    target.stats = this._defaultStatsForKind(target.kind);
+                if (!target.resources) {
+                    target.resources = this._defaultResourcesForKind(target.kind);
                 }
 
                 const previousControllerSessionId = target.controllerSessionId;
@@ -513,14 +524,21 @@ export class GameRoom {
                     levelId,
                 });
                 if (!canSteal) break;
+                const possessCfg = resolveSpellConfig('possess');
+                const requesterCurrentKey = player.controlledEntityKey ?? `player:${sessionId}`;
+                if (possessCfg && !this._payEntityCosts(requesterCurrentKey, {
+                    stamina: possessCfg.staminaCost ?? 0,
+                    mana: possessCfg.manaCost ?? 0,
+                }, Date.now())) {
+                    break;
+                }
 
-                const requesterPreviousKey = player.controlledEntityKey ?? `player:${sessionId}`;
-                const updatedRequester = {
-                    ...player,
+                const requesterPreviousKey = requesterCurrentKey;
+                this._updatePlayer(sessionId, (latestPlayer) => ({
+                    ...latestPlayer,
                     controlledEntityKey: targetEntityKey,
                     returnEntityKey: requesterPreviousKey,
-                };
-                this.players.set(sessionId, updatedRequester);
+                }));
 
                 // Do not snap an existing authoritative entity to requester-provided
                 // coordinates. Request payload coordinates are only a hint for first
@@ -574,6 +592,13 @@ export class GameRoom {
                 const targetEntityKey = sanitizeEntityKey(data.targetEntityKey);
                 if (!targetEntityKey || !targetEntityKey.startsWith('world:')) break;
                 if (player.controlledEntityKey !== targetEntityKey) break;
+                const releaseCfg = resolveSpellConfig('release_possession');
+                if (releaseCfg && !this._payEntityCosts(targetEntityKey, {
+                    stamina: releaseCfg.staminaCost ?? 0,
+                    mana: releaseCfg.manaCost ?? 0,
+                }, Date.now())) {
+                    break;
+                }
                 this._releaseControllerToReturn(sessionId, 'possess:released');
                 break;
             }
@@ -601,7 +626,7 @@ export class GameRoom {
                     hitRadius: Number.isFinite(prev?.hitRadius)
                         ? prev.hitRadius
                         : this._defaultHitRadiusForKind(kind),
-                    stats: prev?.stats ?? this._defaultStatsForKind(kind),
+                    resources: prev?.resources ?? this._defaultResourcesForKind(kind),
                     poise: prev?.poise ?? this._defaultPoiseForKind(kind),
                 };
                 this.worldEntities.set(entityKey, next);
@@ -624,7 +649,8 @@ export class GameRoom {
             }
 
             case MSG.BULLET_FIRED: {
-                if (this._isEntityIncapacitated(`player:${sessionId}`, Date.now())) break;
+                const player = this.players.get(sessionId);
+                if (this._isEntityIncapacitated(player?.controlledEntityKey ?? `player:${sessionId}`, Date.now())) break;
                 const { x, y, velocityX, velocityY, levelId,
                         projectileType, chargeRatio, penetration } = data;
                 const source = this._resolveAttackSource(sessionId, levelId);
@@ -635,6 +661,13 @@ export class GameRoom {
                     : (source?.levelId ?? null);
 
                 const normalizedType = projectileType === 'arrow' ? 'arrow' : 'bullet';
+                const projectileCost = PROJECTILE_RESOURCE_COST[normalizedType] ?? PROJECTILE_RESOURCE_COST.bullet;
+                if (!this._payEntityCosts(sourceEntityKey, {
+                    stamina: projectileCost.staminaCost ?? 0,
+                    mana: projectileCost.manaCost ?? 0,
+                }, Date.now())) {
+                    break;
+                }
                 const ratio = Math.max(0, Math.min(1, chargeRatio ?? 0));
                 const damage = normalizedType === 'arrow'
                     ? Math.round(ARROW_MIN_DAMAGE + (ARROW_MAX_DAMAGE - ARROW_MIN_DAMAGE) * ratio)
@@ -717,7 +750,8 @@ export class GameRoom {
                 break;
             }
             case MSG.SPELL_CAST: {
-                if (this._isEntityIncapacitated(`player:${sessionId}`, Date.now())) break;
+                const player = this.players.get(sessionId);
+                if (this._isEntityIncapacitated(player?.controlledEntityKey ?? `player:${sessionId}`, Date.now())) break;
                 const spellId = sanitizeEquipId(data.spellId);
                 if (!spellId) break;
                 const targetX = Number.isFinite(data.targetX) ? data.targetX : 0;
@@ -792,13 +826,12 @@ export class GameRoom {
                 if (grid) ({ x, y } = resolveCollisions(x, y, grid));
 
                 if (movingPlayer) {
-                    const nextPlayer = {
-                        ...player,
-                        transform: { ...player.transform, levelId, x, y },
+                    this._updatePlayer(sessionId, (latestPlayer) => ({
+                        ...latestPlayer,
+                        transform: { ...latestPlayer.transform, levelId, x, y },
                         intent: { up: false, down: false, left: false, right: false, sprint: false },
                         motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-                    };
-                    this.players.set(sessionId, nextPlayer);
+                    }));
                     const traction = this._findTractionEffectBySource(movingEntityKey);
                     if (traction) {
                         const target = this.worldEntities.get(traction.targetEntityKey);
@@ -948,6 +981,7 @@ export class GameRoom {
 
     _runTick() {
         this._phaseExpirePossessions();
+        this._phaseUpdateResources();
         this._phaseUpdatePoiseAndReactions();
         this._phaseDecayCorpses();
         const inputPhase = this._phaseInputIntent();
@@ -963,6 +997,46 @@ export class GameRoom {
         const snapshotPlayers = this._phaseBuildSnapshotPlayers();
         this._phaseRecordLagCompHistory();
         this._phaseBroadcastSnapshot(snapshotPlayers);
+    }
+
+    _phaseUpdateResources() {
+        const nowMs = Date.now();
+        for (const [sessionId, player] of this.players.entries()) {
+            const resources = tickResourceRegen(player.resources, TICK_MS, nowMs);
+            this._updatePlayer(sessionId, (currentPlayer) => ({ ...currentPlayer, resources }));
+        }
+
+        for (const [entityKey, world] of this.worldEntities.entries()) {
+            const kind = world?.kind ?? null;
+            const resources = tickResourceRegen(world?.resources ?? this._defaultResourcesForKind(kind), TICK_MS, nowMs);
+            this._updateWorldEntity(entityKey, (currentWorld) => ({ ...currentWorld, resources }));
+        }
+
+        for (const [sessionId, player] of this.players.entries()) {
+            const controlledEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
+            const isMoving = !!(player?.intent?.up || player?.intent?.down || player?.intent?.left || player?.intent?.right);
+            const wantsSprint = !!player?.intent?.sprint;
+            if (wantsSprint && isMoving) {
+                const controlledResources = this._getEntityResources(controlledEntityKey);
+                const drained = this._drainEntityResourcePool(
+                    controlledResources,
+                    RESOURCE_KINDS.stamina,
+                    SPRINT_STAMINA_DRAIN_PER_SEC * (TICK_MS / 1000),
+                    nowMs
+                );
+                if (drained && drained !== controlledResources) {
+                    this._setEntityResources(controlledEntityKey, drained);
+                }
+            }
+
+            const staminaCurrent = this._getEntityResources(controlledEntityKey)?.stamina?.current ?? 0;
+            if (wantsSprint && staminaCurrent <= 0) {
+                this._updatePlayer(sessionId, (currentPlayer) => ({
+                    ...currentPlayer,
+                    intent: { ...currentPlayer.intent, sprint: false },
+            }));
+            }
+        }
     }
 
     _phaseExpirePossessions() {
@@ -1017,13 +1091,19 @@ export class GameRoom {
      * Phase 5: build snapshot payload from authoritative state.
      */
     _phaseBuildSnapshotPlayers() {
+        const snapshotPlayers = [];
         for (const [sessionId, player] of this.players.entries()) {
-            this.players.set(sessionId, {
-                ...player,
+            snapshotPlayers.push({
+                sessionId,
+                x: player.transform.x,
+                y: player.transform.y,
+                levelId: player.transform.levelId,
+                seq: player.net.lastSeq,
+                teamId: typeof player.teamId === 'string' ? player.teamId : null,
                 sightRadius: this._resolveSightRadiusForPlayer(sessionId),
             });
         }
-        return phaseBuildSnapshotPlayers(this.players);
+        return snapshotPlayers;
     }
 
     _phaseZombieAi() {
@@ -1247,11 +1327,23 @@ export class GameRoom {
                 ? this.players.get(effect.sourceEntityKey.slice('player:'.length))
                 : null;
             if (sourcePlayer?.spellState?.pendingCast?.spellId === TRACTION_SPELL_ID) {
-                const spellState = sourcePlayer.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
-                spellState.pendingCast = null;
-                this.players.set(effect.sourceEntityKey.slice('player:'.length), {
-                    ...sourcePlayer,
-                    spellState,
+                const sid = effect.sourceEntityKey.slice('player:'.length);
+                this._updatePlayer(sid, (currentPlayer) => {
+                    if (currentPlayer?.spellState?.pendingCast?.spellId !== TRACTION_SPELL_ID) return currentPlayer;
+                    const spellState = currentPlayer.spellState ?? {
+                        pendingCast: null,
+                        cooldownUntilBySpellId: {},
+                    };
+                    return {
+                        ...currentPlayer,
+                        spellState: {
+                            ...spellState,
+                            pendingCast: null,
+                            cooldownUntilBySpellId: {
+                                ...(spellState.cooldownUntilBySpellId ?? {}),
+                            },
+                        },
+                    };
                 });
             }
         }
@@ -1489,7 +1581,10 @@ export class GameRoom {
         if (equippedSpellId !== spellId) return;
 
         const nowMs = Date.now();
-        const spellState = player.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+        const spellState = {
+            pendingCast: player.spellState?.pendingCast ?? null,
+            cooldownUntilBySpellId: { ...(player.spellState?.cooldownUntilBySpellId ?? {}) },
+        };
         const cooldownUntil = Number.isFinite(spellState.cooldownUntilBySpellId?.[spellId])
             ? spellState.cooldownUntilBySpellId[spellId]
             : 0;
@@ -1516,6 +1611,15 @@ export class GameRoom {
             return;
         }
 
+        const source = this._resolveAttackSource(sessionId, levelId);
+        if (!source) return;
+        if (!this._payEntityCosts(source.entityKey, {
+            stamina: spellCfg.staminaCost ?? 0,
+            mana: spellCfg.manaCost ?? 0,
+        }, nowMs)) {
+            return;
+        }
+
         const windupMs = Number.isFinite(spellCfg.windupMs) ? Math.max(0, spellCfg.windupMs) : 0;
         spellState.pendingCast = {
             spellId,
@@ -1527,31 +1631,34 @@ export class GameRoom {
             executeAtMs: nowMs + windupMs,
         };
 
-        this.players.set(sessionId, {
-            ...player,
+        this._updatePlayer(sessionId, (latestPlayer) => ({
+            ...latestPlayer,
             spellState,
-        });
+        }));
     }
 
     _phaseSpellCasts() {
         const nowMs = Date.now();
         for (const [sessionId, player] of this.players.entries()) {
-            const spellState = player.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+            const spellState = {
+                pendingCast: player.spellState?.pendingCast ?? null,
+                cooldownUntilBySpellId: { ...(player.spellState?.cooldownUntilBySpellId ?? {}) },
+            };
             const pending = spellState.pendingCast;
             if (!pending) continue;
             if (!Number.isFinite(pending.executeAtMs) || pending.executeAtMs > nowMs) continue;
 
             spellState.pendingCast = null;
-            this.players.set(sessionId, { ...player, spellState });
+            this._updatePlayer(sessionId, (latestPlayer) => ({ ...latestPlayer, spellState }));
             this._executeSpellCast(sessionId, pending, nowMs);
         }
     }
 
     _executeSpellCast(sessionId, pendingCast, nowMs = Date.now()) {
         if (!pendingCast?.spellId) return;
-        if (this._isEntityIncapacitated(`player:${sessionId}`, nowMs)) return;
         const player = this.players.get(sessionId);
         if (!player) return;
+        if (this._isEntityIncapacitated(player.controlledEntityKey ?? `player:${sessionId}`, nowMs)) return;
         if ((player.equipped?.spellId ?? 'nothing') !== pendingCast.spellId) return;
 
         const spellCfg = resolveSpellConfig(pendingCast.spellId);
@@ -1575,17 +1682,23 @@ export class GameRoom {
 
         const nextPlayer = this.players.get(sessionId);
         if (!nextPlayer) return;
-        const nextSpellState = nextPlayer.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+        const nextSpellState = {
+            pendingCast: nextPlayer.spellState?.pendingCast ?? null,
+            cooldownUntilBySpellId: { ...(nextPlayer.spellState?.cooldownUntilBySpellId ?? {}) },
+        };
         nextSpellState.cooldownUntilBySpellId[pendingCast.spellId] = nowMs + Math.max(0, spellCfg.cooldownMs ?? 0);
-        this.players.set(sessionId, { ...nextPlayer, spellState: nextSpellState });
+        this._updatePlayer(sessionId, (latestPlayer) => ({ ...latestPlayer, spellState: nextSpellState }));
     }
 
     _setPlayerSpellCooldown(sessionId, spellId, cooldownMs, nowMs = Date.now()) {
         const player = this.players.get(sessionId);
         if (!player || !spellId) return;
-        const spellState = player.spellState ?? { pendingCast: null, cooldownUntilBySpellId: {} };
+        const spellState = {
+            pendingCast: player.spellState?.pendingCast ?? null,
+            cooldownUntilBySpellId: { ...(player.spellState?.cooldownUntilBySpellId ?? {}) },
+        };
         spellState.cooldownUntilBySpellId[spellId] = nowMs + Math.max(0, cooldownMs ?? 0);
-        this.players.set(sessionId, { ...player, spellState });
+        this._updatePlayer(sessionId, (latestPlayer) => ({ ...latestPlayer, spellState }));
     }
 
     _castImposingFlame(sessionId, pendingCast, spellCfg) {
@@ -2153,14 +2266,7 @@ export class GameRoom {
                 type: MSG.STATE_SNAPSHOT,
                 tick,
                 players,
-                self: selfPlayer ? {
-                    sessionId,
-                    hp: selfPlayer.stats.hp,
-                    hpMax: PLAYER_HEALTH_MAX,
-                    teamId: typeof selfPlayer.teamId === 'string' ? selfPlayer.teamId : null,
-                    sightRadius: Number.isFinite(selfPlayer.sightRadius) ? selfPlayer.sightRadius : null,
-                    buffs: this._buildEffectSummariesForEntity(`player:${sessionId}`),
-                } : null,
+                self: selfPlayer ? this._buildSelfSnapshotForSession(sessionId, selfPlayer) : null,
                 worldEntities: Array.from(this.worldEntities.values())
                     .map((entry) => this._serializeWorldEntity(entry, now))
                     .filter(Boolean),
@@ -2219,17 +2325,17 @@ export class GameRoom {
         const returnY = player.transform.y;
         const returnLevelId = player.transform.levelId;
 
-        this.players.set(sessionId, {
-            ...player,
+        this._updatePlayer(sessionId, (currentPlayer) => ({
+            ...currentPlayer,
             transform: {
-                ...player.transform,
+                ...currentPlayer.transform,
                 x: returnX,
                 y: returnY,
                 levelId: returnLevelId,
             },
             controlledEntityKey: fallbackKey,
             returnEntityKey: fallbackKey,
-        });
+        }));
         this.#sendToSession(sessionId, {
             type: MSG.FORCE_CONTROL,
             controlledEntityKey: fallbackKey,
@@ -2269,7 +2375,7 @@ export class GameRoom {
             possessionEndAtMs: null,
             teamId: this._defaultTeamForKind(definition.kind),
             hitRadius: this._defaultHitRadiusForKind(definition.kind),
-            stats: this._defaultStatsForKind(definition.kind),
+            resources: this._defaultResourcesForKind(definition.kind),
             poise: this._defaultPoiseForKind(definition.kind),
         };
 
@@ -2432,6 +2538,13 @@ export class GameRoom {
         const originY = source.y;
         const sourceLevelId = source.levelId ?? levelId;
         if (!Number.isFinite(originX) || !Number.isFinite(originY)) return;
+        const profile = this._resolveMeleeProfile(weaponId, phaseIndex);
+        if (!this._payEntityCosts(source.entityKey, {
+            stamina: profile?.staminaCost ?? 0,
+            mana: 0,
+        }, Date.now())) {
+            return;
+        }
 
         this._broadcastMeleeAttack({
             sessionId,
@@ -2445,7 +2558,6 @@ export class GameRoom {
             dirY,
         });
 
-        const profile = this._resolveMeleeProfile(weaponId, phaseIndex);
         if ((profile.hyperArmorMs ?? 0) > 0) {
             this._setEntityHyperArmor(source.entityKey, profile.hyperArmorMs);
         }
@@ -2548,18 +2660,19 @@ export class GameRoom {
         if (!victim) return;
         if (!this._canDamage(attackerTeamId, this._getPlayerTeamId(victimSessionId))) return;
 
-        const newHp = Math.max(0, victim.stats.hp - damage);
+        const nextResources = damageHealth(victim.resources, damage, Date.now());
+        const newHp = nextResources.hp.current;
         const died = newHp === 0;
         let nextHp = newHp;
         let nextPlayer = {
             ...victim,
-            stats: { ...victim.stats, hp: nextHp },
+            resources: nextResources,
         };
         if (died) {
             nextPlayer = this._respawnPlayerToInn(victimSessionId, nextPlayer);
-            nextHp = nextPlayer.stats.hp;
+            nextHp = nextPlayer.resources?.hp?.current ?? 0;
         }
-        this.players.set(victimSessionId, nextPlayer);
+        this._updatePlayer(victimSessionId, () => nextPlayer);
 
         const payload = {
             type: MSG.PLAYER_DAMAGED,
@@ -2579,13 +2692,19 @@ export class GameRoom {
         const player = this.players.get(sessionId);
         if (!player) return;
 
-        const nextHp = Number.isFinite(player.stats?.hpMax) ? player.stats.hpMax : PLAYER_HEALTH_MAX;
-        if (player.stats?.hp === nextHp) return;
+        let resources = player.resources ?? this._defaultResourcesForKind('player');
+        resources = fillResource(resources, RESOURCE_KINDS.hp);
+        resources = fillResource(resources, RESOURCE_KINDS.stamina);
+        resources = fillResource(resources, RESOURCE_KINDS.mana);
+        const nextHp = resources.hp.current;
+        if ((player.resources?.hp?.current ?? 0) === nextHp &&
+            (player.resources?.stamina?.current ?? 0) === resources.stamina.current &&
+            (player.resources?.mana?.current ?? 0) === resources.mana.current) return;
 
-        this.players.set(sessionId, {
-            ...player,
-            stats: { ...player.stats, hp: nextHp, hpMax: nextHp },
-        });
+        this._updatePlayer(sessionId, (currentPlayer) => ({
+            ...currentPlayer,
+            resources,
+        }));
 
         this.#broadcastAll({
             type: MSG.PLAYER_DAMAGED,
@@ -2600,10 +2719,8 @@ export class GameRoom {
     _applyDamageToWorldEntity(entityKey, damage, attackerEntityKey = null) {
         const entity = this.worldEntities.get(entityKey);
         if (!entity) return;
-        const defaultStats = this._defaultStatsForKind(entity.kind);
-        const hpMax = Number.isFinite(entity.stats?.hpMax) ? entity.stats.hpMax : defaultStats.hpMax;
-        const hp = Number.isFinite(entity.stats?.hp) ? entity.stats.hp : hpMax;
-        const nextHp = Math.max(0, hp - damage);
+        const nextResources = damageHealth(entity.resources, damage, Date.now());
+        const nextHp = nextResources.hp.current;
         const died = nextHp <= 0;
 
         this.#broadcastAll({
@@ -2631,7 +2748,7 @@ export class GameRoom {
         }
         this.worldEntities.set(entityKey, {
             ...entity,
-            stats: { hp: nextHp, hpMax },
+            resources: nextResources,
         });
     }
 
@@ -2685,10 +2802,7 @@ export class GameRoom {
                 y: respawnY,
                 levelId: 'inn',
             },
-            stats: {
-                ...latest.stats,
-                hp: PLAYER_HEALTH_MAX,
-            },
+            resources: this._defaultResourcesForKind('player'),
             controlledEntityKey: `player:${sessionId}`,
             returnEntityKey: `player:${sessionId}`,
             motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
@@ -2734,7 +2848,7 @@ export class GameRoom {
                 displayName: entity.kind ?? 'corpse',
                 teamIdAtDeath: this._getWorldEntityTeamId(entity),
                 statsSnapshot: {
-                    hpMax: Number.isFinite(entity.stats?.hpMax) ? entity.stats.hpMax : null,
+                    resources: summarizeResources(entity.resources),
                 },
                 loadoutSnapshot: equipSnapshot,
                 diedAtMs: nowMs,
@@ -2799,15 +2913,11 @@ export class GameRoom {
         if (!poise || typeof entityKey !== 'string') return;
         if (entityKey.startsWith('player:')) {
             const sid = entityKey.slice('player:'.length);
-            const player = this.players.get(sid);
-            if (!player) return;
-            this.players.set(sid, { ...player, poise });
+            this._updatePlayer(sid, (player) => ({ ...player, poise }));
             return;
         }
         if (entityKey.startsWith('world:')) {
-            const world = this.worldEntities.get(entityKey);
-            if (!world) return;
-            this.worldEntities.set(entityKey, { ...world, poise });
+            this._updateWorldEntity(entityKey, (world) => ({ ...world, poise }));
         }
     }
 
@@ -2845,14 +2955,14 @@ export class GameRoom {
             const sid = entityKey.slice('player:'.length);
             const player = this.players.get(sid);
             if (!player) return;
-            this.players.set(sid, {
-                ...player,
+            this._updatePlayer(sid, (currentPlayer) => ({
+                ...currentPlayer,
                 intent: {
                     up: false, down: false, left: false, right: false, sprint: false,
                     moveSpeedMultiplier: 0, attackPushVx: 0, attackPushVy: 0,
                 },
                 motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
-            });
+            }));
             return;
         }
         if (entityKey.startsWith('world:')) {
@@ -2929,7 +3039,7 @@ export class GameRoom {
                 poise.current < poise.max) {
                 poise.current = Math.min(poise.max, poise.current + (poise.regenPerSec * (TICK_MS / 1000)));
             }
-            this.players.set(sid, { ...player, poise });
+            this._updatePlayer(sid, (currentPlayer) => ({ ...currentPlayer, poise }));
         }
 
         for (const [entityKey, world] of this.worldEntities.entries()) {
@@ -2944,8 +3054,92 @@ export class GameRoom {
                 poise.current < poise.max) {
                 poise.current = Math.min(poise.max, poise.current + (poise.regenPerSec * (TICK_MS / 1000)));
             }
-            this.worldEntities.set(entityKey, { ...world, poise });
+            this._updateWorldEntity(entityKey, (currentWorld) => ({ ...currentWorld, poise }));
         }
+    }
+
+    _buildSelfSnapshotForSession(sessionId, player) {
+        const controlledEntityKey = player?.controlledEntityKey ?? `player:${sessionId}`;
+        const resources = this._getEntityResources(controlledEntityKey) ?? this._getEntityResources(`player:${sessionId}`);
+        return {
+            sessionId,
+            controlledEntityKey,
+            resources: summarizeResources(resources),
+            teamId: typeof this._getEntityTeamId(controlledEntityKey) === 'string'
+                ? this._getEntityTeamId(controlledEntityKey)
+                : null,
+            sightRadius: this._resolveSightRadiusForPlayer(sessionId),
+            buffs: this._buildEffectSummariesForEntity(controlledEntityKey),
+        };
+    }
+
+    _updatePlayer(sessionId, updater) {
+        if (typeof updater !== 'function') return null;
+        const current = this.players.get(sessionId);
+        if (!current) return null;
+        const next = updater(current);
+        if (!next) return null;
+        this.players.set(sessionId, next);
+        return next;
+    }
+
+    _updateWorldEntity(entityKey, updater) {
+        if (typeof updater !== 'function') return null;
+        const current = this.worldEntities.get(entityKey);
+        if (!current) return null;
+        const next = updater(current);
+        if (!next) return null;
+        this.worldEntities.set(entityKey, next);
+        return next;
+    }
+
+    _getEntityResources(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            return this.players.get(sid)?.resources ?? null;
+        }
+        if (entityKey.startsWith('world:')) {
+            return this.worldEntities.get(entityKey)?.resources ?? null;
+        }
+        return null;
+    }
+
+    _setEntityResources(entityKey, resources) {
+        if (!resources || typeof entityKey !== 'string') return;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            this._updatePlayer(sid, (player) => ({ ...player, resources }));
+            return;
+        }
+        if (entityKey.startsWith('world:')) {
+            this._updateWorldEntity(entityKey, (world) => ({ ...world, resources }));
+        }
+    }
+
+    _canEntityPayCosts(entityKey, costs) {
+        const resources = this._getEntityResources(entityKey);
+        if (!resources) return false;
+        return canPayResourceCosts(resources, costs);
+    }
+
+    _payEntityCosts(entityKey, costs, nowMs = Date.now()) {
+        const resources = this._getEntityResources(entityKey);
+        if (!resources) return false;
+        const nextResources = payResourceCosts(resources, costs, nowMs);
+        if (nextResources === resources) return false;
+        this._setEntityResources(entityKey, nextResources);
+        return true;
+    }
+
+    _drainEntityResourcePool(resources, kind, amount, nowMs = Date.now()) {
+        if (!resources) return resources;
+        const current = resources?.[kind]?.current ?? 0;
+        if (!Number.isFinite(amount) || amount <= 0 || current <= 0) return resources;
+        return payResourceCosts(resources, {
+            stamina: kind === RESOURCE_KINDS.stamina ? amount : 0,
+            mana: kind === RESOURCE_KINDS.mana ? amount : 0,
+        }, nowMs);
     }
 
     _defaultTeamForKind(kind) {
@@ -2958,12 +3152,8 @@ export class GameRoom {
         return Number.isFinite(archetype?.hitRadius) ? archetype.hitRadius : PLAYER_RADIUS;
     }
 
-    _defaultStatsForKind(kind) {
-        const archetype = resolveArchetypeConfig(kind);
-        if (Number.isFinite(archetype?.hpMax) && archetype.hpMax > 0) {
-            return { hp: archetype.hpMax, hpMax: archetype.hpMax };
-        }
-        return { hp: 0, hpMax: 0 };
+    _defaultResourcesForKind(kind) {
+        return createEntityResources(kind);
     }
 
     _inferWorldKindFromEntityKey(entityKey) {
@@ -3049,8 +3239,8 @@ export class GameRoom {
                 x,
                 y,
                 hitRadius: PLAYER_RADIUS,
-                hp: player?.stats?.hp ?? null,
-                hpMax: PLAYER_HEALTH_MAX,
+                hp: player?.resources?.hp?.current ?? null,
+                hpMax: player?.resources?.hp?.max ?? null,
                 controllerSessionId: sessionId,
             };
         }
@@ -3059,7 +3249,6 @@ export class GameRoom {
             const entity = this.worldEntities.get(entityKey);
             if (!entity) return null;
             if (!Number.isFinite(entity.x) || !Number.isFinite(entity.y)) return null;
-            const defaultStats = this._defaultStatsForKind(entity.kind);
             return {
                 entityKey,
                 domain: 'world',
@@ -3069,8 +3258,8 @@ export class GameRoom {
                 x: entity.x,
                 y: entity.y,
                 hitRadius: this._getWorldEntityHitRadius(entity),
-                hp: Number.isFinite(entity?.stats?.hp) ? entity.stats.hp : defaultStats.hp,
-                hpMax: Number.isFinite(entity?.stats?.hpMax) ? entity.stats.hpMax : defaultStats.hpMax,
+                hp: entity?.resources?.hp?.current ?? null,
+                hpMax: entity?.resources?.hp?.max ?? null,
                 controllerSessionId: entity.controllerSessionId ?? null,
             };
         }
@@ -3130,8 +3319,8 @@ export class GameRoom {
             x: player.transform.x,
             y: player.transform.y,
             hitRadius: PLAYER_RADIUS,
-            hp: player?.stats?.hp ?? null,
-            hpMax: PLAYER_HEALTH_MAX,
+            hp: player?.resources?.hp?.current ?? null,
+            hpMax: player?.resources?.hp?.max ?? null,
             controllerSessionId: sessionId,
         };
     }
@@ -3197,6 +3386,7 @@ export class GameRoom {
                 diedAtMs: entry.identity.diedAtMs ?? null,
                 killerEntityKey: entry.identity.killerEntityKey ?? null,
             } : null,
+            resources: summarizeResources(entry.resources),
             dragState: this._serializeDragStateForWorldEntity(entry.entityKey),
         };
     }

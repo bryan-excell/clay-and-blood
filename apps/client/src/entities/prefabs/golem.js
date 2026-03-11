@@ -36,7 +36,14 @@ export function createGolem(scene, config = {}) {
     golem.addComponent(new ControlComponent({ controlMode, controllerId }));
     golem.addComponent(new AuthorityComponent({ authority, ownerId }));
     golem.addComponent(new IntentComponent());
-    golem.addComponent(new StatsComponent({ hp: 160, hpMax: 160, stamina: 80, staminaMax: 80 }));
+    golem.addComponent(new StatsComponent({
+        hp: ARCHETYPE_CONFIG.golem.resources.hp.max,
+        hpMax: ARCHETYPE_CONFIG.golem.resources.hp.max,
+        mana: ARCHETYPE_CONFIG.golem.resources.mana.max,
+        manaMax: ARCHETYPE_CONFIG.golem.resources.mana.max,
+        stamina: ARCHETYPE_CONFIG.golem.resources.stamina.max,
+        staminaMax: ARCHETYPE_CONFIG.golem.resources.stamina.max,
+    }));
     golem.addComponent(new ExitTraversalComponent({ canUseExits: true }));
     golem.addComponent(new LoadoutComponent({
         weapons:     ['unarmed', 'bow', 'sword'],

@@ -22,7 +22,14 @@ export function createZombie(scene, config = {}) {
 
     zombie.addComponent(new TransformComponent(x, y));
     zombie.addComponent(new CircleComponent(radius, color, 1, strokeColor, 4));
-    zombie.addComponent(new StatsComponent({ hp: 50, hpMax: 50, stamina: 0, staminaMax: 0 }));
+    zombie.addComponent(new StatsComponent({
+        hp: ARCHETYPE_CONFIG.zombie.resources.hp.max,
+        hpMax: ARCHETYPE_CONFIG.zombie.resources.hp.max,
+        mana: ARCHETYPE_CONFIG.zombie.resources.mana.max,
+        manaMax: ARCHETYPE_CONFIG.zombie.resources.mana.max,
+        stamina: ARCHETYPE_CONFIG.zombie.resources.stamina.max,
+        staminaMax: ARCHETYPE_CONFIG.zombie.resources.stamina.max,
+    }));
     zombie.addComponent(new VisibilityComponent(ARCHETYPE_CONFIG.zombie.sightRadius, { updateInterval: 200, rayCount: 120 }));
 
     return zombie;

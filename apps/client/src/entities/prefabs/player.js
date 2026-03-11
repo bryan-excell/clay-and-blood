@@ -11,7 +11,7 @@ import { StatsComponent } from '../../components/StatsComponent.js';
 import { LoadoutComponent } from '../../components/LoadoutComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
 import { PLAYER_RADIUS, COLOR_PLAYER } from '../../config.js';
-import { ARCHETYPE_CONFIG, PLAYER_HEALTH_MAX } from '@clay-and-blood/shared';
+import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 /**
  * Creates a player entity with the updated component architecture
@@ -47,7 +47,14 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new ControlComponent({ controlMode, controllerId }));
     player.addComponent(new AuthorityComponent({ authority, ownerId }));
     player.addComponent(new IntentComponent());
-    player.addComponent(new StatsComponent({ hp: PLAYER_HEALTH_MAX, hpMax: PLAYER_HEALTH_MAX }));
+    player.addComponent(new StatsComponent({
+        hp: ARCHETYPE_CONFIG.player.resources.hp.max,
+        hpMax: ARCHETYPE_CONFIG.player.resources.hp.max,
+        mana: ARCHETYPE_CONFIG.player.resources.mana.max,
+        manaMax: ARCHETYPE_CONFIG.player.resources.mana.max,
+        stamina: ARCHETYPE_CONFIG.player.resources.stamina.max,
+        staminaMax: ARCHETYPE_CONFIG.player.resources.stamina.max,
+    }));
     player.addComponent(new ExitTraversalComponent({ canUseExits: true }));
     player.addComponent(new LoadoutComponent({
         weapons:     ['unarmed', 'bow', 'sword'],

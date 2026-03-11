@@ -4,7 +4,7 @@ import { networkManager } from '../core/NetworkManager.js';
 import { gameState } from '../core/GameState.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { WEAPONS, SPELLS } from '../data/ItemRegistry.js';
-import { resolveMeleeWeaponConfig, resolveSpellConfig } from '@clay-and-blood/shared';
+import { PROJECTILE_RESOURCE_COST, resolveMeleeWeaponConfig, resolveSpellConfig } from '@clay-and-blood/shared';
 import {
     PLAYER_RADIUS,
     ARROW_MIN_SPEED,
@@ -390,6 +390,10 @@ export class PlayerCombatComponent extends Component {
     handlePrimaryInput({ down, held, up, targetX, targetY }) {
         this._refreshActiveWeapon();
         const weaponMachine = this._getActiveWeaponStateMachine();
+        if (down && weaponMachine instanceof ComboWeaponStateMachine &&
+            (uiStateStore.get('controlledEntity')?.stamina ?? 0) <= 0) {
+            return;
+        }
         weaponMachine?.handlePrimary({ down, held, up, targetX, targetY });
     }
 
@@ -405,6 +409,18 @@ export class PlayerCombatComponent extends Component {
 
         const spell = loadout?.getEquippedSpell() ?? SPELLS.nothing;
         const spellCfg = resolveSpellConfig(spell.id);
+        if (spell.id === 'possess') {
+            if (!down) return;
+            if (!this._canAffordSpellLocally(spellCfg)) return;
+            this.castPossess(targetX, targetY);
+            return;
+        }
+        if (spell.id === 'release_possession') {
+            if (!down) return;
+            if (!this._canAffordSpellLocally(spellCfg)) return;
+            this.entity.scene?.requestReleasePossession?.(this.entity);
+            return;
+        }
         if (spellCfg?.castMode === 'hold_release') {
             const liveTarget = this._resolveLivePointerTarget(targetX, targetY);
             const canStartHold = this._isSpellReady(spellCfg);
@@ -602,6 +618,10 @@ export class PlayerCombatComponent extends Component {
     }
 
     _releaseArrow(targetX, targetY, chargeMs) {
+        if ((uiStateStore.get('controlledEntity')?.stamina ?? 0) <= 0 &&
+            (PROJECTILE_RESOURCE_COST.arrow?.staminaCost ?? 0) > 0) {
+            return;
+        }
         const transform = this.entity.getComponent('transform');
         if (!transform) return;
 
@@ -725,6 +745,7 @@ export class PlayerCombatComponent extends Component {
         const isCancellation = !!options.isCancellation;
         const now = performance.now();
         if (!isCancellation && !this._isSpellReady(spellCfg, now)) return;
+        if (!isCancellation && !this._canAffordSpellLocally(spellCfg)) return;
 
         if (!isCancellation) {
             const cooldownMs = Number.isFinite(spellCfg.cooldownMs) ? Math.max(0, spellCfg.cooldownMs) : 0;
@@ -754,6 +775,16 @@ export class PlayerCombatComponent extends Component {
         if (!spellCfg?.id) return false;
         const cooldownUntilMs = this._spellCooldownUntilMs.get(spellCfg.id) ?? 0;
         return now >= cooldownUntilMs;
+    }
+
+    _canAffordSpellLocally(spellCfg) {
+        const controlled = uiStateStore.get('controlledEntity');
+        if (!controlled || !spellCfg) return true;
+        const manaCost = Number.isFinite(spellCfg.manaCost) ? spellCfg.manaCost : 0;
+        const staminaCost = Number.isFinite(spellCfg.staminaCost) ? spellCfg.staminaCost : 0;
+        if (manaCost > 0 && (controlled.mana ?? 0) < manaCost) return false;
+        if (staminaCost > 0 && (controlled.stamina ?? 0) <= 0) return false;
+        return true;
     }
 
     _resolveLivePointerTarget(fallbackX, fallbackY) {

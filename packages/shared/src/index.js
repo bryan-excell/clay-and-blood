@@ -686,6 +686,7 @@ export function resolveExitTransition(fromLevelId, fromExitIndex) {
 }
 
 export * from './combatData.js';
+export * from './resources.js';
 export * from './spawnDefinitions.js';
 export * from './interactableDefinitions.js';
 

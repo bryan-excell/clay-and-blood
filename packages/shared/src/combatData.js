@@ -17,12 +17,45 @@ export const REACTION_CONFIG = Object.freeze({
     staggerDurationMs: 1000,
 });
 
+export const RESOURCE_KINDS = Object.freeze({
+    hp: 'hp',
+    stamina: 'stamina',
+    mana: 'mana',
+});
+
+export const MOVEMENT_RESOURCE_CONFIG = Object.freeze({
+    sprint: Object.freeze({
+        staminaDrainPerSec: 18,
+    }),
+    dash: Object.freeze({
+        staminaCost: 26,
+    }),
+});
+
 export const ARCHETYPE_CONFIG = Object.freeze({
     player: Object.freeze({
         teamId: TEAM_IDS.players,
         hitRadius: 16,
         sightRadius: 320,
         hpMax: 100,
+        resources: Object.freeze({
+            hp: Object.freeze({
+                max: 100,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+            stamina: Object.freeze({
+                max: 100,
+                regenPerSec: 55,
+                regenDelayMs: 850,
+                exhaustedRegenDelayMs: 1350,
+            }),
+            mana: Object.freeze({
+                max: 100,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+        }),
         poise: Object.freeze({
             max: 10,
             flinchThreshold: 2,
@@ -35,6 +68,24 @@ export const ARCHETYPE_CONFIG = Object.freeze({
         hitRadius: 20,
         sightRadius: 260,
         hpMax: 160,
+        resources: Object.freeze({
+            hp: Object.freeze({
+                max: 160,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+            stamina: Object.freeze({
+                max: 80,
+                regenPerSec: 40,
+                regenDelayMs: 950,
+                exhaustedRegenDelayMs: 1450,
+            }),
+            mana: Object.freeze({
+                max: 0,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+        }),
         poise: Object.freeze({
             max: 18,
             flinchThreshold: 4,
@@ -47,6 +98,24 @@ export const ARCHETYPE_CONFIG = Object.freeze({
         hitRadius: 18,
         sightRadius: 140,
         hpMax: 50,
+        resources: Object.freeze({
+            hp: Object.freeze({
+                max: 50,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+            stamina: Object.freeze({
+                max: 60,
+                regenPerSec: 38,
+                regenDelayMs: 1000,
+                exhaustedRegenDelayMs: 1500,
+            }),
+            mana: Object.freeze({
+                max: 0,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+        }),
         poise: Object.freeze({
             max: 6,
             flinchThreshold: 1,
@@ -76,6 +145,24 @@ export const ARCHETYPE_CONFIG = Object.freeze({
         sightRadius: 0,
         hpMax: 0,
         decayDurationMs: 120000,
+        resources: Object.freeze({
+            hp: Object.freeze({
+                max: 0,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+            stamina: Object.freeze({
+                max: 0,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+                exhaustedRegenDelayMs: 0,
+            }),
+            mana: Object.freeze({
+                max: 0,
+                regenPerSec: 0,
+                regenDelayMs: 0,
+            }),
+        }),
         poise: Object.freeze({
             max: 0,
             flinchThreshold: 0,
@@ -96,6 +183,7 @@ export const MELEE_WEAPON_CONFIG = Object.freeze({
                 finishLockoutMs: 0,
                 damage: 4,
                 poiseDamage: 2,
+                staminaCost: 12,
                 radius: 66,
                 arc: Math.PI * 0.56,
                 hyperArmorMs: 0,
@@ -113,6 +201,7 @@ export const MELEE_WEAPON_CONFIG = Object.freeze({
                 finishLockoutMs: 0,
                 damage: 6,
                 poiseDamage: 3,
+                staminaCost: 16,
                 radius: 58,
                 arc: Math.PI * 0.62,
                 hyperArmorMs: 0,
@@ -125,6 +214,7 @@ export const MELEE_WEAPON_CONFIG = Object.freeze({
                 finishLockoutMs: 0,
                 damage: 6,
                 poiseDamage: 4,
+                staminaCost: 18,
                 radius: 74,
                 arc: Math.PI * 0.72,
                 hyperArmorMs: 0,
@@ -137,6 +227,7 @@ export const MELEE_WEAPON_CONFIG = Object.freeze({
                 finishLockoutMs: 140,
                 damage: 10,
                 poiseDamage: 5,
+                staminaCost: 24,
                 radius: 102,
                 arc: Math.PI * 0.88,
                 hyperArmorMs: 420,
@@ -154,6 +245,7 @@ export const MELEE_WEAPON_CONFIG = Object.freeze({
                 finishLockoutMs: 0,
                 damage: 6,
                 poiseDamage: 2,
+                staminaCost: 14,
                 radius: 52,
                 arc: Math.PI * 0.5,
                 hyperArmorMs: 0,
@@ -174,13 +266,44 @@ export const PROJECTILE_POISE_DAMAGE = Object.freeze({
     arrow: 1,
 });
 
+export const PROJECTILE_RESOURCE_COST = Object.freeze({
+    bullet: Object.freeze({
+        staminaCost: 0,
+        manaCost: 0,
+    }),
+    arrow: Object.freeze({
+        staminaCost: 16,
+        manaCost: 0,
+    }),
+});
+
 export const SPELL_CONFIG = Object.freeze({
+    possess: Object.freeze({
+        id: 'possess',
+        castMode: 'target_click',
+        windupMs: 0,
+        windupMoveSpeedMultiplier: 1,
+        cooldownMs: 0,
+        manaCost: 12,
+        staminaCost: 0,
+    }),
+    release_possession: Object.freeze({
+        id: 'release_possession',
+        castMode: 'click',
+        windupMs: 0,
+        windupMoveSpeedMultiplier: 1,
+        cooldownMs: 0,
+        manaCost: 4,
+        staminaCost: 0,
+    }),
     imposing_flame: Object.freeze({
         id: 'imposing_flame',
         castMode: 'click',
         windupMs: 200,
         windupMoveSpeedMultiplier: 0.5,
         cooldownMs: 1000,
+        manaCost: 18,
+        staminaCost: 0,
         projectile: Object.freeze({
             speed: 220,
             maxRange: 520,
@@ -200,6 +323,8 @@ export const SPELL_CONFIG = Object.freeze({
         manifestDelayMs: 500,
         windupMoveSpeedMultiplier: 0.5,
         cooldownMs: 1500,
+        manaCost: 24,
+        staminaCost: 0,
         burst: Object.freeze({
             damage: 15,
             poiseDamage: 10,
@@ -222,6 +347,8 @@ export const SPELL_CONFIG = Object.freeze({
         windupMoveSpeedMultiplier: 0.5,
         cooldownMs: 1000,
         cooldownStartsAt: 'resolution',
+        manaCost: 30,
+        staminaCost: 0,
         strike: Object.freeze({
             damage: 30,
             poiseDamage: 5,
@@ -233,6 +360,8 @@ export const SPELL_CONFIG = Object.freeze({
         windupMs: 800,
         windupMoveSpeedMultiplier: 0.5,
         cooldownMs: 0,
+        manaCost: 10,
+        staminaCost: 0,
         traction: Object.freeze({
             dragMoveSpeedMultiplier: 0.75,
             followDistance: 28,

@@ -16,7 +16,24 @@ export class UIScene extends Phaser.Scene {
 
     create() {
         // HP bar — upper-right. x is the right edge; _layout sets the exact value.
-        this._hpBar = new HpBarWidget(this, this.scale.width - 16, 16);
+        this._hpBar = new HpBarWidget(this, 244, 24, {
+            label: 'HP',
+            baseColor: 0x44aa66,
+            midColor: 0xd6a83a,
+            lowColor: 0xcc4444,
+        });
+        this._staminaBar = new HpBarWidget(this, 244, 52, {
+            label: 'ST',
+            baseColor: 0x8ebc4d,
+            midColor: 0xd1b44a,
+            lowColor: 0xb56a2e,
+        });
+        this._manaBar = new HpBarWidget(this, 244, 80, {
+            label: 'MP',
+            baseColor: 0x4689d6,
+            midColor: 0x4f67cc,
+            lowColor: 0x6a4cb5,
+        });
 
         // Inventory drawer — equip actions are emitted over the event bus so
         // GameScene can route them to the controlled entity's LoadoutComponent.
@@ -70,6 +87,9 @@ export class UIScene extends Phaser.Scene {
                 this.input.keyboard.off('keydown-ESC', this._onEscKeyDown);
                 this._onEscKeyDown = null;
             }
+            this._hpBar?.destroy();
+            this._staminaBar?.destroy();
+            this._manaBar?.destroy();
             // Clean up drawer state in the store.
             uiStateStore.set('drawerOpen', false);
             uiStateStore.set('drawerWidth', 0);
@@ -81,8 +101,13 @@ export class UIScene extends Phaser.Scene {
     // ------------------------------------------------------------------
 
     _layout(width, height) {
-        // HP bar: right edge 16px from the right.
-        this._hpBar?.setPosition(width - 16, 16);
+        const leftPadding = 24;
+        const topPadding = 24;
+        const barWidth = this._hpBar?.width ?? 200;
+        const rightEdge = leftPadding + barWidth + 20;
+        this._hpBar?.setPosition(rightEdge, topPadding);
+        this._staminaBar?.setPosition(rightEdge, topPadding + 28);
+        this._manaBar?.setPosition(rightEdge, topPadding + 56);
         // Drawer height tracks the scene.
         this._drawer?.setHeight(height);
     }
@@ -109,10 +134,14 @@ export class UIScene extends Phaser.Scene {
         const hasEntity  = !!controlled?.entityId;
 
         this._hpBar?.setVisible(hasEntity);
+        this._staminaBar?.setVisible(hasEntity);
+        this._manaBar?.setVisible(hasEntity);
 
         if (!hasEntity) return;
 
         this._hpBar?.update(controlled.hp, controlled.hpMax);
+        this._staminaBar?.update(controlled.stamina, controlled.staminaMax);
+        this._manaBar?.update(controlled.mana, controlled.manaMax);
         this._drawer?.update(controlled.loadout ?? null);
     }
 }
