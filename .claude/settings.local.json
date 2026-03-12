@@ -6,7 +6,10 @@
       "Bash(npm run dev)",
       "WebFetch(domain:www.gabrielgambetta.com)",
       "Bash(node apps/client/src/tests/run-ui-tests.mjs)",
-      "Bash(grep -E \"\\\\.js$\")"
+      "Bash(grep -E \"\\\\.js$\")",
+      "Bash(xargs grep -l \"PHASE_INPUT\\\\|input.*component\\\\|keyboard.*component\\\\|movement.*system\\\\|InputSystem\\\\|MovementSystem\")",
+      "Bash(xargs grep -l \"keyboard\\\\|KeyboardComponent\\\\|KeyboardInput\")",
+      "Bash(xargs grep -l \"phaseInputIntent\\\\|phaseLocomotionDash\\\\|phasePhysicsTransform\")"
     ]
   }
 }

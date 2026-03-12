@@ -2388,11 +2388,13 @@ export class GameScene extends Phaser.Scene {
         this._syncControlledWorldEntityState(nowMs);
 
         // Send current input state to the authoritative server.
-        // If the message was actually sent (not throttled), buffer it for reconciliation.
-        const locallyControlled = this.getLocallyControlledEntity();
-        if (locallyControlled) {
-            const intent = locallyControlled.getComponent('intent');
-            const combat = locallyControlled.getComponent('playerCombat');
+        // Always use the player body's intent, not the locally controlled entity's.
+        // During possession the locally controlled entity is the golem — sending its
+        // movement intent as PLAYER_INPUT would cause the server to move the player
+        // body in lockstep with the possessed entity.
+        if (this.player) {
+            const intent = this.player.getComponent('intent');
+            const combat = this.player.getComponent('playerCombat');
             const movementInfluence = combat?.getMovementInfluence?.() ?? null;
             if (intent) {
                 networkManager.sendInput({
