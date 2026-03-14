@@ -353,6 +353,8 @@ export const MSG = {
     PLAYER_LEAVE:   'player_leave',
     PLAYER_INPUT:   'player_input',
     PLAYER_EQUIP:   'player_equip',
+    DROP_ENTRY:     'drop_entry',
+    SELL_ENTRY:     'sell_entry',
     USE_CONSUMABLE: 'use_consumable',
     INTERACT_REQUEST:'interact_request',
     POSSESS_REQUEST:'possess_request',

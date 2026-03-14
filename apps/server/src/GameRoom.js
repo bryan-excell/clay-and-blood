@@ -101,15 +101,15 @@ const STARTER_SPELLS = Object.freeze([
     { spellId: 'traction', upgradeLevel: 0 },
 ]);
 const ITEM_DEFINITIONS = Object.freeze({
-    bow: Object.freeze({ id: 'bow', name: 'Bow', category: INVENTORY_CATEGORY_WEAPON, baseSellable: true, baseDroppable: true }),
-    longsword: Object.freeze({ id: 'longsword', name: 'Longsword', category: INVENTORY_CATEGORY_WEAPON, baseSellable: true, baseDroppable: true }),
-    leather_armor: Object.freeze({ id: 'leather_armor', name: 'Leather Armor', category: INVENTORY_CATEGORY_ARMOR, baseSellable: true, baseDroppable: true }),
-    cape: Object.freeze({ id: 'cape', name: 'Cape', category: INVENTORY_CATEGORY_ACCESSORY, baseSellable: true, baseDroppable: true }),
-    gold_pouch: Object.freeze({ id: 'gold_pouch', name: 'Gold Pouch', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, effectType: 'grant_gold', goldAmount: 100 }),
-    healing_gem: Object.freeze({ id: 'healing_gem', name: 'Healing Gem', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, effectType: ACTIVE_EFFECT_HEALING_GEM, durationMs: 5000, tickIntervalMs: 1000, magnitude: 8 }),
-    magic_dew: Object.freeze({ id: 'magic_dew', name: 'Magic Dew', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, effectType: ACTIVE_EFFECT_MAGIC_DEW, durationMs: 5000, tickIntervalMs: 1000, magnitude: 6 }),
-    weapon_upgrade_material: Object.freeze({ id: 'weapon_upgrade_material', name: 'Weapon Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true }),
-    spell_upgrade_material: Object.freeze({ id: 'spell_upgrade_material', name: 'Spell Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true }),
+    bow: Object.freeze({ id: 'bow', name: 'Bow', category: INVENTORY_CATEGORY_WEAPON, baseSellable: true, baseDroppable: true, sellPrice: 75, buyPrice: 150 }),
+    longsword: Object.freeze({ id: 'longsword', name: 'Longsword', category: INVENTORY_CATEGORY_WEAPON, baseSellable: true, baseDroppable: true, sellPrice: 75, buyPrice: 150 }),
+    leather_armor: Object.freeze({ id: 'leather_armor', name: 'Leather Armor', category: INVENTORY_CATEGORY_ARMOR, baseSellable: true, baseDroppable: true, sellPrice: 60, buyPrice: 120 }),
+    cape: Object.freeze({ id: 'cape', name: 'Cape', category: INVENTORY_CATEGORY_ACCESSORY, baseSellable: true, baseDroppable: true, sellPrice: 40, buyPrice: 90 }),
+    gold_pouch: Object.freeze({ id: 'gold_pouch', name: 'Gold Pouch', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, sellPrice: 25, buyPrice: 50, effectType: 'grant_gold', goldAmount: 100 }),
+    healing_gem: Object.freeze({ id: 'healing_gem', name: 'Healing Gem', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, sellPrice: 20, buyPrice: 40, effectType: ACTIVE_EFFECT_HEALING_GEM, durationMs: 5000, tickIntervalMs: 1000, magnitude: 8 }),
+    magic_dew: Object.freeze({ id: 'magic_dew', name: 'Magic Dew', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, sellPrice: 20, buyPrice: 40, effectType: ACTIVE_EFFECT_MAGIC_DEW, durationMs: 5000, tickIntervalMs: 1000, magnitude: 6 }),
+    weapon_upgrade_material: Object.freeze({ id: 'weapon_upgrade_material', name: 'Weapon Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true, sellPrice: 10, buyPrice: 20 }),
+    spell_upgrade_material: Object.freeze({ id: 'spell_upgrade_material', name: 'Spell Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true, sellPrice: 10, buyPrice: 20 }),
 });
 const SEEDED_WORLD_DROPS = Object.freeze([
     // Spread the test loot across the walkable base of the inn so each pickup is easy to see.
@@ -154,6 +154,23 @@ function sanitizeEquippedPayload(equipped) {
         spellId: sanitizeEquipId(equipped.spellId),
         armorSetId: sanitizeEquipId(equipped.armorSetId),
         accessoryId: sanitizeEquipId(equipped.accessoryId),
+    };
+}
+
+function sanitizeLoadoutSnapshot(loadout) {
+    if (!loadout || typeof loadout !== 'object') return null;
+    const sanitizeSlotArray = (value) => (
+        Array.isArray(value)
+            ? value.slice(0, 3).map((entry) => sanitizeEquipId(entry)).filter(Boolean)
+            : []
+    );
+    return {
+        weaponSlots: sanitizeSlotArray(loadout.weaponSlots),
+        spellSlots: sanitizeSlotArray(loadout.spellSlots),
+        consumableSlots: sanitizeSlotArray(loadout.consumableSlots),
+        activeWeaponSlotIndex: Number.isFinite(loadout.activeWeaponSlotIndex) ? Math.max(0, Math.floor(loadout.activeWeaponSlotIndex)) : 0,
+        activeSpellSlotIndex: Number.isFinite(loadout.activeSpellSlotIndex) ? Math.max(0, Math.floor(loadout.activeSpellSlotIndex)) : 0,
+        activeConsumableSlotIndex: Number.isFinite(loadout.activeConsumableSlotIndex) ? Math.max(0, Math.floor(loadout.activeConsumableSlotIndex)) : 0,
     };
 }
 
@@ -365,6 +382,7 @@ export class GameRoom {
                     resources: createEntityResources('player'),
                     net:       { lastSeq: 0 },
                     equipped:  null, // populated on first PLAYER_EQUIP message
+                    loadoutSnapshot: null,
                     controlledEntityKey: `player:${sessionId}`,
                     returnEntityKey: `player:${sessionId}`,
                     teamId: TEAM_PLAYERS,
@@ -413,6 +431,22 @@ export class GameRoom {
 
             case MSG.USE_CONSUMABLE: {
                 this._useConsumableForPlayer(sessionId, sanitizeEquipId(data.definitionId));
+                break;
+            }
+
+            case MSG.DROP_ENTRY: {
+                const entryId = typeof data.entryId === 'string' ? data.entryId : null;
+                const mode = data.mode === 'all' ? 'all' : 'one';
+                if (!entryId) break;
+                this._dropInventoryEntry(sessionId, entryId, mode);
+                break;
+            }
+
+            case MSG.SELL_ENTRY: {
+                const entryId = typeof data.entryId === 'string' ? data.entryId : null;
+                const mode = data.mode === 'all' ? 'all' : 'one';
+                if (!entryId) break;
+                this._sellInventoryEntry(sessionId, entryId, mode);
                 break;
             }
 
@@ -505,11 +539,16 @@ export class GameRoom {
                 const player = this.players.get(sessionId);
                 const entityKey = sanitizeEntityKey(data.entityKey);
                 const sanitized = sanitizeEquippedPayload(data.equipped);
+                const loadoutSnapshot = sanitizeLoadoutSnapshot(data.loadoutSnapshot);
                 const levelId = typeof data.levelId === 'string' ? data.levelId : null;
                 if (!player || !entityKey || !sanitized) break;
-                const equipState = { entityKey, levelId, equipped: sanitized, ownerSessionId: sessionId };
+                const equipState = { entityKey, levelId, equipped: sanitized, ownerSessionId: sessionId, loadoutSnapshot };
                 this.entityEquips.set(entityKey, equipState);
-                this._updatePlayer(sessionId, (currentPlayer) => ({ ...currentPlayer, equipped: sanitized }));
+                this._updatePlayer(sessionId, (currentPlayer) => ({
+                    ...currentPlayer,
+                    equipped: sanitized,
+                    loadoutSnapshot: loadoutSnapshot ?? currentPlayer.loadoutSnapshot ?? null,
+                }));
                 this.#broadcast({
                     type: MSG.PLAYER_EQUIP,
                     sessionId,
@@ -3268,6 +3307,23 @@ export class GameRoom {
         return consumed;
     }
 
+    _findInventoryEntry(sessionId, entryId) {
+        const player = this.players.get(sessionId);
+        if (!player || typeof entryId !== 'string') return null;
+        return this._inventoryEntries(player.inventory).find((entry) => entry.entryId === entryId) ?? null;
+    }
+
+    _isDefinitionAssignedForDrop(player, definitionId, category) {
+        if (!player || typeof definitionId !== 'string') return false;
+        const loadoutSnapshot = player.loadoutSnapshot ?? null;
+        if (category === INVENTORY_CATEGORY_WEAPON && loadoutSnapshot?.weaponSlots?.includes(definitionId)) return true;
+        if (category === INVENTORY_CATEGORY_CONSUMABLE && loadoutSnapshot?.consumableSlots?.includes(definitionId)) return true;
+        if (category === INVENTORY_CATEGORY_ARMOR && player.equipped?.armorSetId === definitionId) return true;
+        if (category === INVENTORY_CATEGORY_ACCESSORY && player.equipped?.accessoryId === definitionId) return true;
+        if (player.equipped?.weaponId === definitionId) return true;
+        return false;
+    }
+
     _addGold(sessionId, amount) {
         if (!Number.isFinite(amount) || amount <= 0) return;
         this._updatePlayer(sessionId, (player) => {
@@ -3280,6 +3336,118 @@ export class GameRoom {
                 },
             };
         });
+    }
+
+    _dropInventoryEntry(sessionId, entryId, mode = 'one') {
+        const player = this.players.get(sessionId);
+        if (!player) return false;
+
+        const entry = this._findInventoryEntry(sessionId, entryId);
+        if (!entry || !Number.isFinite(entry.quantity) || entry.quantity <= 0) return false;
+
+        const definition = getItemDefinition(entry.definitionId);
+        if (!definition?.baseDroppable) {
+            this._enqueueToast(sessionId, 'That item cannot be dropped', 1400);
+            return false;
+        }
+        if (this._isDefinitionAssignedForDrop(player, entry.definitionId, entry.category)) {
+            this._enqueueToast(sessionId, 'Assigned items cannot be dropped', 1400);
+            return false;
+        }
+
+        const dropQuantity = mode === 'all' ? entry.quantity : 1;
+        const scatterX = (Math.random() - 0.5) * 44;
+        const scatterY = (Math.random() - 0.5) * 44;
+        const sourceEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
+        const sourceX = this._getEntityX(sourceEntityKey) ?? player.transform?.x ?? 0;
+        const sourceY = this._getEntityY(sourceEntityKey) ?? player.transform?.y ?? 0;
+        const sourceLevelId = this._getEntityLevelId(sourceEntityKey) ?? player.transform?.levelId ?? 'inn';
+
+        let removed = false;
+        this._updatePlayer(sessionId, (currentPlayer) => {
+            const inventory = currentPlayer.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            const entries = this._inventoryEntries(inventory).map((candidate) => ({ ...candidate }));
+            const target = entries.find((candidate) => candidate.entryId === entryId);
+            if (!target || target.quantity < dropQuantity) return currentPlayer;
+            target.quantity -= dropQuantity;
+            removed = true;
+            return {
+                ...currentPlayer,
+                inventory: {
+                    gold: inventory.gold ?? 0,
+                    nextEntryId: inventory.nextEntryId ?? 1,
+                    entries: entries.filter((candidate) => candidate.quantity > 0),
+                },
+            };
+        });
+        if (!removed) return false;
+
+        const worldDropKey = `world:loot_drop_${crypto.randomUUID().replace(/-/g, '_')}`;
+        this.worldEntities.set(worldDropKey, {
+            entityKey: worldDropKey,
+            kind: 'loot',
+            x: sourceX + scatterX,
+            y: sourceY + scatterY,
+            levelId: sourceLevelId,
+            teamId: TEAM_NEUTRAL,
+            hitRadius: 14,
+            resources: null,
+            loot: {
+                definitionId: entry.definitionId,
+                quantity: dropQuantity,
+                upgradeLevel: entry.upgradeLevel ?? 0,
+                category: entry.category,
+            },
+        });
+
+        const quantityText = dropQuantity > 1 ? ` x${dropQuantity}` : '';
+        this._enqueueToast(sessionId, `Dropped: ${definition.name}${quantityText}`, 1400);
+        return true;
+    }
+
+    _sellInventoryEntry(sessionId, entryId, mode = 'one') {
+        const player = this.players.get(sessionId);
+        if (!player) return false;
+
+        const entry = this._findInventoryEntry(sessionId, entryId);
+        if (!entry || !Number.isFinite(entry.quantity) || entry.quantity <= 0) return false;
+
+        const definition = getItemDefinition(entry.definitionId);
+        if (!definition?.baseSellable) {
+            this._enqueueToast(sessionId, 'That item cannot be sold', 1400);
+            return false;
+        }
+        if (this._isDefinitionAssignedForDrop(player, entry.definitionId, entry.category)) {
+            this._enqueueToast(sessionId, 'Assigned items cannot be sold', 1400);
+            return false;
+        }
+
+        const sellQuantity = mode === 'all' ? entry.quantity : 1;
+        const unitSellPrice = Math.max(0, Math.floor(definition.sellPrice ?? 0));
+        const goldAward = unitSellPrice * sellQuantity;
+        let removed = false;
+        this._updatePlayer(sessionId, (currentPlayer) => {
+            const inventory = currentPlayer.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            const entries = this._inventoryEntries(inventory).map((candidate) => ({ ...candidate }));
+            const target = entries.find((candidate) => candidate.entryId === entryId);
+            if (!target || target.quantity < sellQuantity) return currentPlayer;
+            target.quantity -= sellQuantity;
+            removed = true;
+            return {
+                ...currentPlayer,
+                inventory: {
+                    gold: Math.max(0, Math.floor(inventory.gold ?? 0) + goldAward),
+                    nextEntryId: inventory.nextEntryId ?? 1,
+                    entries: entries.filter((candidate) => candidate.quantity > 0),
+                },
+            };
+        });
+        if (!removed) return false;
+
+        const quantityText = sellQuantity > 1 ? ` x${sellQuantity}` : '';
+        const goldText = goldAward > 0 ? ` (+${goldAward} gold)` : '';
+        this._enqueueToast(sessionId, `Sold: ${definition.name}${quantityText}${goldText}`, 1400);
+        return true;
     }
 
     _enqueueToast(sessionId, message, durationMs = 1800) {
@@ -3415,6 +3583,42 @@ export class GameRoom {
         }
         if (entityKey.startsWith('world:')) {
             return this.worldEntities.get(entityKey)?.resources ?? null;
+        }
+        return null;
+    }
+
+    _getEntityX(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            return this.players.get(sid)?.transform?.x ?? null;
+        }
+        if (entityKey.startsWith('world:')) {
+            return this.worldEntities.get(entityKey)?.x ?? null;
+        }
+        return null;
+    }
+
+    _getEntityY(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            return this.players.get(sid)?.transform?.y ?? null;
+        }
+        if (entityKey.startsWith('world:')) {
+            return this.worldEntities.get(entityKey)?.y ?? null;
+        }
+        return null;
+    }
+
+    _getEntityLevelId(entityKey) {
+        if (typeof entityKey !== 'string') return null;
+        if (entityKey.startsWith('player:')) {
+            const sid = entityKey.slice('player:'.length);
+            return this.players.get(sid)?.transform?.levelId ?? null;
+        }
+        if (entityKey.startsWith('world:')) {
+            return this.worldEntities.get(entityKey)?.levelId ?? null;
         }
         return null;
     }

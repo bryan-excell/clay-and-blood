@@ -65,6 +65,12 @@ export class InventoryDrawerWidget {
         this._height = height;
         this._activeTween = null;
         this._radial = null;
+        this._contextMenu = [];
+        this._contextMenuItem = null;
+        this._handleScenePointerDown = (pointer) => {
+            const rightClick = pointer?.rightButtonDown?.() || pointer?.button === 2;
+            if (!rightClick) this._hideContextMenu();
+        };
 
         this._container = null;
         this._ribbonBg = null;
@@ -76,6 +82,7 @@ export class InventoryDrawerWidget {
 
         this._build();
         this._buildRadial();
+        this.scene.input.on('pointerdown', this._handleScenePointerDown);
     }
 
     toggle() {
@@ -125,7 +132,9 @@ export class InventoryDrawerWidget {
 
     destroy() {
         this._destroyRows();
+        this._hideContextMenu();
         this._radial?.destroy();
+        this.scene.input.off('pointerdown', this._handleScenePointerDown);
         this._tabButtons.forEach(({ bg, label }) => { bg.destroy(); label.destroy(); });
         this._goldText?.destroy();
         this._ribbonBg?.destroy();
@@ -221,6 +230,7 @@ export class InventoryDrawerWidget {
     _setTab(index) {
         if (this._activeTab === index) return;
         this._activeTab = index;
+        this._hideContextMenu();
         this._refreshTabHighlights();
         this._rebuildRows();
     }
@@ -242,6 +252,7 @@ export class InventoryDrawerWidget {
 
     _rebuildRows() {
         this._destroyRows();
+        this._hideContextMenu();
         const controlled = this._controlledState;
         const tab = TABS[this._activeTab];
         if (!controlled || !tab) {
@@ -308,7 +319,7 @@ export class InventoryDrawerWidget {
             bg.on('pointerout', () => {
                 if (!equipped) bg.setFillStyle(C.rowInactive, 1);
             });
-            bg.on('pointerdown', () => this._onItemClick(tab.id, itemId));
+            bg.on('pointerdown', (pointer) => this._onRowPointerDown(pointer, tab.id, item));
 
             this._container.add(bg);
             this._container.add(nameText);
@@ -347,6 +358,82 @@ export class InventoryDrawerWidget {
             if (glyphText) this._container.remove(glyphText, true);
         });
         this._rows = [];
+    }
+
+    _onRowPointerDown(pointer, tabId, item) {
+        const itemId = item?.definitionId ?? item?.spellId ?? item?.id ?? null;
+        const rightClick = pointer?.rightButtonDown?.() || pointer?.button === 2;
+        if (rightClick) {
+            if (item?.canDrop || item?.canSell) this._showContextMenu(tabId, item, pointer);
+            else this._hideContextMenu();
+            return;
+        }
+        this._hideContextMenu();
+        this._onItemClick(tabId, itemId);
+    }
+
+    _showContextMenu(tabId, item, pointer) {
+        this._hideContextMenu();
+        if ((!item?.canDrop && !item?.canSell) || typeof item?.entryId !== 'string') return;
+
+        const options = [];
+        if (item.canDrop) {
+            options.push(
+                { label: 'Drop 1', action: 'drop', mode: 'one' },
+                { label: 'Drop All', action: 'drop', mode: 'all' },
+            );
+        }
+        if (item.canSell) {
+            options.push(
+                { label: 'Sell 1', action: 'sell', mode: 'one' },
+                { label: 'Sell All', action: 'sell', mode: 'all' },
+            );
+        }
+        if (options.length === 0) return;
+        const menuX = Phaser.Math.Clamp(
+            pointer.worldX + 12 - this._container.x,
+            RIBBON_W + 8,
+            RIBBON_W + PANEL_W - 92
+        );
+        const menuY = Phaser.Math.Clamp(
+            pointer.worldY - 6,
+            HEADER_H + GOLD_H,
+            this._height - Math.max(72, options.length * 28 + 8)
+        );
+
+        this._contextMenuItem = item;
+        this._contextMenu = options.flatMap((option, index) => {
+            const y = menuY + index * 28;
+            const bg = this.scene.add.rectangle(menuX, y, 84, 24, 0x101926, 0.98)
+                .setOrigin(0, 0)
+                .setStrokeStyle(1, 0x4671a4, 1)
+                .setInteractive({ useHandCursor: true });
+            const label = this.scene.add.text(menuX + 42, y + 12, option.label, {
+                fontSize: '11px',
+                fontFamily: GAME_FONT_FAMILY,
+                color: '#d8eeff',
+            }).setOrigin(0.5, 0.5);
+            bg.on('pointerover', () => bg.setFillStyle(0x1f2f48, 1));
+            bg.on('pointerout', () => bg.setFillStyle(0x101926, 0.98));
+            bg.on('pointerdown', () => {
+                if (option.action === 'sell') {
+                    eventBus.emit('ui:sellEntry', { entryId: item.entryId, mode: option.mode, tabId });
+                } else {
+                    eventBus.emit('ui:dropEntry', { entryId: item.entryId, mode: option.mode, tabId });
+                }
+                this._hideContextMenu();
+            });
+            this._container.add(bg);
+            this._container.add(label);
+            return [bg, label];
+        });
+    }
+
+    _hideContextMenu() {
+        if (this._contextMenu.length === 0) return;
+        this._contextMenu.forEach((node) => this._container.remove(node, true));
+        this._contextMenu = [];
+        this._contextMenuItem = null;
     }
 
     _onItemClick(tabId, itemId) {

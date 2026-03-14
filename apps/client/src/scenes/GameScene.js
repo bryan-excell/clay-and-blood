@@ -1126,6 +1126,14 @@ export class GameScene extends Phaser.Scene {
             }
             networkManager.sendUseConsumable(definitionId);
         });
+        eventBus.on('ui:dropEntry', ({ entryId, mode }) => {
+            if (typeof entryId !== 'string' || !entryId) return;
+            networkManager.sendDropEntry(entryId, mode === 'all' ? 'all' : 'one');
+        });
+        eventBus.on('ui:sellEntry', ({ entryId, mode }) => {
+            if (typeof entryId !== 'string' || !entryId) return;
+            networkManager.sendSellEntry(entryId, mode === 'all' ? 'all' : 'one');
+        });
 
         // Replicate any equip change for the controlled entity to the server.
         // For now we replicate only the primary local player's loadout to the server.
@@ -1137,8 +1145,21 @@ export class GameScene extends Phaser.Scene {
             const transform = entity.getComponent('transform');
             const levelId = transform?.levelId ?? gameState.currentLevelId ?? null;
             const entityKey = this._getNetworkEntityKey(entity);
+            const loadoutSnapshot = this._buildServerLoadoutSnapshot(entity.getComponent('loadout'));
             if (!entityKey) return;
-            networkManager.sendEquip(entityKey, equipped, levelId);
+            networkManager.sendEquip(entityKey, equipped, levelId, loadoutSnapshot);
+        });
+        eventBus.on('loadout:kitChanged', ({ entityId }) => {
+            const entity = this.entityManager.getEntityById(entityId);
+            if (!entity) return;
+
+            const transform = entity.getComponent('transform');
+            const levelId = transform?.levelId ?? gameState.currentLevelId ?? null;
+            const entityKey = this._getNetworkEntityKey(entity);
+            const loadout = entity.getComponent('loadout');
+            const loadoutSnapshot = this._buildServerLoadoutSnapshot(loadout);
+            if (!entityKey || !loadoutSnapshot) return;
+            networkManager.sendEquip(entityKey, loadout.equipped, levelId, loadoutSnapshot);
         });
         eventBus.on('control:changed', ({ controlMode }) => {
             if (controlMode !== 'local') return;
@@ -1201,6 +1222,19 @@ export class GameScene extends Phaser.Scene {
                 pulse?.event?.remove?.(false);
             }
             this._staggerPulseState.clear();
+
+            const controlled = this.getLocallyControlledEntity?.();
+            const loadout = controlled?.getComponent?.('loadout');
+            const transform = controlled?.getComponent?.('transform');
+            const entityKey = this._getNetworkEntityKey(controlled);
+            if (loadout && entityKey) {
+                networkManager.sendEquip(
+                    entityKey,
+                    loadout.equipped,
+                    transform?.levelId ?? gameState.currentLevelId ?? null,
+                    this._buildServerLoadoutSnapshot(loadout)
+                );
+            }
         });
     }
 
@@ -1564,6 +1598,18 @@ export class GameScene extends Phaser.Scene {
             return `player:${networkManager.sessionId ?? 'local'}`;
         }
         return `world:${entity.id}`;
+    }
+
+    _buildServerLoadoutSnapshot(loadout) {
+        if (!loadout) return null;
+        return {
+            weaponSlots: Array.isArray(loadout.weaponSlots) ? loadout.weaponSlots.slice(0, 3) : [],
+            spellSlots: Array.isArray(loadout.spellSlots) ? loadout.spellSlots.slice(0, 3) : [],
+            consumableSlots: Array.isArray(loadout.consumableSlots) ? loadout.consumableSlots.slice(0, 3) : [],
+            activeWeaponSlotIndex: Number.isFinite(loadout.activeWeaponSlotIndex) ? Math.max(0, Math.floor(loadout.activeWeaponSlotIndex)) : 0,
+            activeSpellSlotIndex: Number.isFinite(loadout.activeSpellSlotIndex) ? Math.max(0, Math.floor(loadout.activeSpellSlotIndex)) : 0,
+            activeConsumableSlotIndex: Number.isFinite(loadout.activeConsumableSlotIndex) ? Math.max(0, Math.floor(loadout.activeConsumableSlotIndex)) : 0,
+        };
     }
 
     _resolveEntityByNetworkKey(entityKey) {

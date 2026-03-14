@@ -421,9 +421,36 @@ class NetworkManager {
      * @param {string} entityKey
      * @param {object} equipped - { weaponId, spellId, armorSetId, accessoryId }
      * @param {string|null} levelId
+     * @param {object|null} loadoutSnapshot
      */
-    sendEquip(entityKey, equipped, levelId = null) {
-        this.send({ type: MSG.PLAYER_EQUIP, entityKey, equipped, levelId });
+    sendEquip(entityKey, equipped, levelId = null, loadoutSnapshot = null) {
+        this.send({ type: MSG.PLAYER_EQUIP, entityKey, equipped, levelId, loadoutSnapshot });
+    }
+
+    /**
+     * Request an inventory entry drop.
+     * @param {string} entryId
+     * @param {'one'|'all'} mode
+     */
+    sendDropEntry(entryId, mode = 'one') {
+        this.send({
+            type: MSG.DROP_ENTRY,
+            entryId: typeof entryId === 'string' ? entryId : null,
+            mode: mode === 'all' ? 'all' : 'one',
+        });
+    }
+
+    /**
+     * Request an inventory entry sale.
+     * @param {string} entryId
+     * @param {'one'|'all'} mode
+     */
+    sendSellEntry(entryId, mode = 'one') {
+        this.send({
+            type: MSG.SELL_ENTRY,
+            entryId: typeof entryId === 'string' ? entryId : null,
+            mode: mode === 'all' ? 'all' : 'one',
+        });
     }
 
     /**
