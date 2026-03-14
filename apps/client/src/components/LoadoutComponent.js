@@ -1,6 +1,6 @@
 import { Component } from './Component.js';
 import { eventBus } from '../core/EventBus.js';
-import { WEAPONS, SPELLS, ACCESSORIES, ARMOR_SETS } from '../data/ItemRegistry.js';
+import { WEAPONS, SPELLS, ACCESSORIES, ARMOR_SETS, CONSUMABLES } from '../data/ItemRegistry.js';
 
 /**
  * Declares what items an entity has available and which are currently equipped.
@@ -25,6 +25,7 @@ export class LoadoutComponent extends Component {
     constructor({
         weapons     = [],
         spells      = [],
+        consumables = [],
         armorSets   = [],
         accessories = [],
         equipped    = {},
@@ -34,6 +35,7 @@ export class LoadoutComponent extends Component {
         // Implicit fallbacks are always at the front.
         this._weapons     = weapons.includes('unarmed') ? [...weapons] : ['unarmed', ...weapons];
         this._spells      = spells.includes('nothing')  ? [...spells]  : ['nothing', ...spells];
+        this._consumables = consumables.includes('nothing') ? [...consumables] : ['nothing', ...consumables];
         this._armorSets   = [...armorSets];
         this._accessories = [...accessories];
 
@@ -56,6 +58,8 @@ export class LoadoutComponent extends Component {
         ];
         this._activeWeaponSlotIndex = 0;
         this._activeSpellSlotIndex = 0;
+        this._consumableSlots = ['nothing', 'nothing', 'nothing'];
+        this._activeConsumableSlotIndex = 0;
     }
 
     // ------------------------------------------------------------------
@@ -66,10 +70,13 @@ export class LoadoutComponent extends Component {
     get spells()      { return this._spells; }
     get armorSets()   { return this._armorSets; }
     get accessories() { return this._accessories; }
+    get consumables() { return this._consumables; }
     get weaponSlots() { return [...this._weaponSlots]; }
     get spellSlots()  { return [...this._spellSlots]; }
+    get consumableSlots() { return [...this._consumableSlots]; }
     get activeWeaponSlotIndex() { return this._activeWeaponSlotIndex; }
     get activeSpellSlotIndex()  { return this._activeSpellSlotIndex; }
+    get activeConsumableSlotIndex() { return this._activeConsumableSlotIndex; }
 
     /** Returns a shallow copy so callers cannot mutate internal state. */
     get equipped() { return { ...this._equipped }; }
@@ -78,6 +85,7 @@ export class LoadoutComponent extends Component {
     getEquippedSpell()     { return SPELLS[this._equipped.spellId]          ?? SPELLS.nothing;  }
     getEquippedArmor()     { return ARMOR_SETS[this._equipped.armorSetId]   ?? null; }
     getEquippedAccessory() { return ACCESSORIES[this._equipped.accessoryId] ?? null; }
+    getSelectedConsumable() { return CONSUMABLES[this._consumableSlots[this._activeConsumableSlotIndex]] ?? CONSUMABLES.nothing ?? null; }
 
     /**
      * True if any equipped accessory defines the given spacebar action.
@@ -229,6 +237,31 @@ export class LoadoutComponent extends Component {
         this.activateSpellSlot((this._activeSpellSlotIndex + 1) % this._spellSlots.length);
     }
 
+    assignConsumableSlot(slotIndex, definitionId) {
+        if (!this._isValidKitSlotIndex(slotIndex)) return;
+        if (!this._consumables.includes(definitionId)) return;
+        if (this._consumableSlots[slotIndex] === definitionId) return;
+        this._consumableSlots[slotIndex] = definitionId;
+        if (slotIndex === this._activeConsumableSlotIndex) {
+            this.activateConsumableSlot(slotIndex);
+            return;
+        }
+        this._emitKitChanged();
+    }
+
+    activateConsumableSlot(slotIndex) {
+        if (!this._isValidKitSlotIndex(slotIndex)) return;
+        const prevIndex = this._activeConsumableSlotIndex;
+        this._activeConsumableSlotIndex = slotIndex;
+        if (prevIndex !== slotIndex) {
+            this._emitKitChanged();
+        }
+    }
+
+    cycleConsumableSlot() {
+        this.activateConsumableSlot((this._activeConsumableSlotIndex + 1) % this._consumableSlots.length);
+    }
+
     addTemporarySpell(id) {
         if (!id || this._spells.includes(id)) return;
         this._spells.push(id);
@@ -281,8 +314,10 @@ export class LoadoutComponent extends Component {
             entityId: this.entity?.id,
             weaponSlots: this.weaponSlots,
             spellSlots: this.spellSlots,
+            consumableSlots: this.consumableSlots,
             activeWeaponSlotIndex: this._activeWeaponSlotIndex,
             activeSpellSlotIndex: this._activeSpellSlotIndex,
+            activeConsumableSlotIndex: this._activeConsumableSlotIndex,
             equipped: this.equipped,
         });
     }

@@ -208,17 +208,17 @@ export class PlayerCombatComponent extends Component {
 
         this.chargeBarGfx = null;
         this.activeWeaponId = null;
-        const swordCfg = resolveMeleeWeaponConfig('sword');
-        const sword1 = swordCfg.phases[0];
-        const sword2 = swordCfg.phases[1];
-        const sword3 = swordCfg.phases[2];
+        const longswordCfg = resolveMeleeWeaponConfig('longsword');
+        const sword1 = longswordCfg.phases[0];
+        const sword2 = longswordCfg.phases[1];
+        const sword3 = longswordCfg.phases[2];
         const unarmedCfg = resolveMeleeWeaponConfig('unarmed');
         const fists = unarmedCfg.phases[0];
         const zombieCfg = resolveMeleeWeaponConfig('zombie_strike');
         const zombieStrike = zombieCfg.phases[0];
         this.weaponStateMachines = {
             bow: new BowWeaponStateMachine(this),
-            sword: new ComboWeaponStateMachine(this, [
+            longsword: new ComboWeaponStateMachine(this, [
                 {
                     windupMs: sword1.windupMs,
                     activeMs: sword1.activeMs,
@@ -241,7 +241,7 @@ export class PlayerCombatComponent extends Component {
                     damage: sword3.damage,
                     attackSpec: { radius: sword3.radius, arc: sword3.arc, color: sword3.visual.color, alpha: sword3.visual.alpha },
                 },
-            ], swordCfg.queueGraceMs, 'sword'),
+            ], longswordCfg.queueGraceMs, 'longsword'),
             unarmed: new ComboWeaponStateMachine(this, [
                 {
                     windupMs: fists.windupMs,
@@ -261,6 +261,7 @@ export class PlayerCombatComponent extends Component {
                 },
             ], zombieCfg.queueGraceMs, 'zombie_strike'),
         };
+        this.weaponStateMachines.sword = this.weaponStateMachines.longsword;
 
         this._unsubscribeControlChanged = null;
         this._unsubscribeLoadoutChanged = null;

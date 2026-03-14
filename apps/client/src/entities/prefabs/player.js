@@ -9,6 +9,8 @@ import { AuthorityComponent } from '../../components/AuthorityComponent.js';
 import { IntentComponent } from '../../components/IntentComponent.js';
 import { StatsComponent } from '../../components/StatsComponent.js';
 import { LoadoutComponent } from '../../components/LoadoutComponent.js';
+import { InventoryComponent } from '../../components/InventoryComponent.js';
+import { SpellbookComponent } from '../../components/SpellbookComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
 import { PLAYER_RADIUS, COLOR_PLAYER } from '../../config.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
@@ -56,12 +58,26 @@ export function createPlayer(scene, config = {}) {
         staminaMax: ARCHETYPE_CONFIG.player.resources.stamina.max,
     }));
     player.addComponent(new ExitTraversalComponent({ canUseExits: true }));
+    player.addComponent(new InventoryComponent({
+        gold: 0,
+        entries: [],
+    }));
+    player.addComponent(new SpellbookComponent({
+        knownSpells: [
+            { spellId: 'possess', upgradeLevel: 0 },
+            { spellId: 'imposing_flame', upgradeLevel: 0 },
+            { spellId: 'gelid_cradle', upgradeLevel: 0 },
+            { spellId: 'arc_flash', upgradeLevel: 0 },
+            { spellId: 'traction', upgradeLevel: 0 },
+        ],
+    }));
     player.addComponent(new LoadoutComponent({
-        weapons:     ['unarmed', 'bow', 'sword'],
+        weapons:     ['unarmed', 'bow', 'longsword'],
         spells:      ['nothing', 'possess', 'imposing_flame', 'gelid_cradle', 'arc_flash', 'traction'],
-        armorSets:   [],
+        consumables: ['nothing', 'gold_pouch', 'healing_gem', 'magic_dew'],
+        armorSets:   ['leather_armor'],
         accessories: ['cape'],
-        equipped: { weaponId: 'bow', spellId: 'possess', armorSetId: null, accessoryId: 'cape' },
+        equipped: { weaponId: 'unarmed', spellId: 'possess', armorSetId: null, accessoryId: null },
     }));
 
     // 4. Add input handling

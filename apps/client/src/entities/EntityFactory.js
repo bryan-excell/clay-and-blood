@@ -1,6 +1,7 @@
 import { Entity } from './Entity.js';
 import { createExit } from './prefabs/exit.js';
 import { createPlayer } from './prefabs/player.js';
+import { createGolem, createZombie, createCorpse, createWarmFire, createLoot } from './prefabs/index.js';
 import { createWallStone, createFloorDirt, createFloorGrass } from './prefabs/environment/index.js';
 
 /**
@@ -21,6 +22,11 @@ export class EntityFactory {
     registerDefaultPrefabs() {
         // Character prefabs
         this.registerPrefab('player', createPlayer);
+        this.registerPrefab('golem', createGolem);
+        this.registerPrefab('zombie', createZombie);
+        this.registerPrefab('corpse', createCorpse);
+        this.registerPrefab('warm-fire', createWarmFire);
+        this.registerPrefab('loot', createLoot);
         
         // Interactive object prefabs
         this.registerPrefab('exit', createExit);

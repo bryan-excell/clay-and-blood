@@ -25,6 +25,7 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
  *   network:entityEquip    { sessionId, entityKey, levelId, equipped }
  *   network:worldEntityDamaged { entityKey, damage, hp, died, x, y, levelId }
  *   network:worldReset     { source, interactableId, triggeredBySessionId, respawnedCount }
+ *   network:toast          { message, durationMs }
  */
 class NetworkManager {
     constructor() {
@@ -182,7 +183,7 @@ class NetworkManager {
                 eventBus.emit('network:meleeAttack', {
                     sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : null,
                     attackerEntityKey: typeof msg.attackerEntityKey === 'string' ? msg.attackerEntityKey : null,
-                    weaponId: msg.weaponId === 'sword' || msg.weaponId === 'zombie_strike' ? msg.weaponId : 'unarmed',
+                    weaponId: msg.weaponId === 'longsword' || msg.weaponId === 'sword' || msg.weaponId === 'zombie_strike' ? msg.weaponId : 'unarmed',
                     phaseIndex: Number.isFinite(msg.phaseIndex) ? Math.max(0, Math.floor(msg.phaseIndex)) : 0,
                     levelId: typeof msg.levelId === 'string' ? msg.levelId : null,
                     originX: Number.isFinite(msg.originX) ? msg.originX : null,
@@ -262,6 +263,13 @@ class NetworkManager {
                     interactableId: typeof msg.interactableId === 'string' ? msg.interactableId : null,
                     triggeredBySessionId: typeof msg.triggeredBySessionId === 'string' ? msg.triggeredBySessionId : null,
                     respawnedCount: Number.isFinite(msg.respawnedCount) ? Math.max(0, Math.floor(msg.respawnedCount)) : 0,
+                });
+                break;
+
+            case MSG.TOAST:
+                eventBus.emit('network:toast', {
+                    message: typeof msg.message === 'string' ? msg.message : '',
+                    durationMs: Number.isFinite(msg.durationMs) ? Math.max(600, Math.floor(msg.durationMs)) : 1800,
                 });
                 break;
         }
@@ -390,7 +398,7 @@ class NetworkManager {
      * Notify the server about a local melee swing request.
      * Server remains authoritative for hit resolution and damage.
      * @param {object} payload
-     * @param {'unarmed'|'sword'} payload.weaponId
+     * @param {'unarmed'|'longsword'} payload.weaponId
      * @param {number} payload.phaseIndex
      * @param {number} payload.dirX
      * @param {number} payload.dirY
@@ -462,6 +470,13 @@ class NetworkManager {
         this.send({
             type: MSG.INTERACT_REQUEST,
             interactableId: typeof interactableId === 'string' ? interactableId : null,
+        });
+    }
+
+    sendUseConsumable(definitionId) {
+        this.send({
+            type: MSG.USE_CONSUMABLE,
+            definitionId: typeof definitionId === 'string' ? definitionId : 'nothing',
         });
     }
 

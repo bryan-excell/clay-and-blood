@@ -24,6 +24,8 @@ export { StatsComponent } from './StatsComponent.js';
 export { PlayerStateMachine } from './PlayerStateMachine.js';
 export { PlayerCombatComponent } from './PlayerCombatComponent.js';
 export { LoadoutComponent } from './LoadoutComponent.js';
+export { InventoryComponent } from './InventoryComponent.js';
+export { SpellbookComponent } from './SpellbookComponent.js';
 
 // Visibility / FOV
 export { VisibilityComponent } from './VisibilityComponent.js';

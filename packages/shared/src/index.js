@@ -353,6 +353,7 @@ export const MSG = {
     PLAYER_LEAVE:   'player_leave',
     PLAYER_INPUT:   'player_input',
     PLAYER_EQUIP:   'player_equip',
+    USE_CONSUMABLE: 'use_consumable',
     INTERACT_REQUEST:'interact_request',
     POSSESS_REQUEST:'possess_request',
     POSSESS_RELEASE:'possess_release',
@@ -373,6 +374,7 @@ export const MSG = {
     ENTITY_FLINCHED: 'entity_flinched',
     ENTITY_STAGGERED: 'entity_staggered',
     WORLD_RESET: 'world_reset',
+    TOAST: 'toast',
 };
 
 const CARDINAL_DIRECTIONS = ['north', 'east', 'south', 'west'];

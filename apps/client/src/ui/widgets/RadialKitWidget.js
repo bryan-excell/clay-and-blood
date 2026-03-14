@@ -5,6 +5,8 @@ const SLOT_W = 152;
 const SLOT_H = 42;
 const SLOT_GAP_Y = 14;
 const SLOT_OFFSET_X = 142;
+const CONSUMABLE_OFFSET_Y = 122;
+const CONSUMABLE_GAP_X = 168;
 const DEAD_ZONE_X = 60;
 const SLOT_BAND_Y = 52;
 
@@ -88,7 +90,15 @@ export class RadialKitWidget {
         const dy = pointer.y - this._y;
         let selection = null;
 
-        if (dx <= -DEAD_ZONE_X) {
+        if (dy >= CONSUMABLE_OFFSET_Y - SLOT_H) {
+            if (dx <= -CONSUMABLE_GAP_X / 2) {
+                selection = { type: 'consumable', slotIndex: 0 };
+            } else if (dx >= CONSUMABLE_GAP_X / 2) {
+                selection = { type: 'consumable', slotIndex: 2 };
+            } else {
+                selection = { type: 'consumable', slotIndex: 1 };
+            }
+        } else if (dx <= -DEAD_ZONE_X) {
             selection = { type: 'weapon', slotIndex: this._slotIndexForDy(dy) };
         } else if (dx >= DEAD_ZONE_X) {
             selection = { type: 'spell', slotIndex: this._slotIndexForDy(dy) };
@@ -118,6 +128,9 @@ export class RadialKitWidget {
             { type: 'spell', slotIndex: 0, x: SLOT_OFFSET_X, y: -(SLOT_H + SLOT_GAP_Y) },
             { type: 'spell', slotIndex: 1, x: SLOT_OFFSET_X, y: 0 },
             { type: 'spell', slotIndex: 2, x: SLOT_OFFSET_X, y: SLOT_H + SLOT_GAP_Y },
+            { type: 'consumable', slotIndex: 0, x: -CONSUMABLE_GAP_X, y: CONSUMABLE_OFFSET_Y },
+            { type: 'consumable', slotIndex: 1, x: 0, y: CONSUMABLE_OFFSET_Y },
+            { type: 'consumable', slotIndex: 2, x: CONSUMABLE_GAP_X, y: CONSUMABLE_OFFSET_Y },
         ];
 
         this._slots = slotDefs.map((slotDef) => {
@@ -136,8 +149,10 @@ export class RadialKitWidget {
                 bg.on('pointerdown', () => {
                     if (slotDef.type === 'weapon') {
                         this.callbacks.onSelectWeaponSlot?.(slotDef.slotIndex);
-                    } else {
+                    } else if (slotDef.type === 'spell') {
                         this.callbacks.onSelectSpellSlot?.(slotDef.slotIndex);
+                    } else {
+                        this.callbacks.onSelectConsumableSlot?.(slotDef.slotIndex);
                     }
                 });
             }
@@ -152,10 +167,14 @@ export class RadialKitWidget {
         for (const slot of this._slots) {
             const item = slot.type === 'weapon'
                 ? this._loadout?.weaponSlots?.[slot.slotIndex] ?? null
-                : this._loadout?.spellSlots?.[slot.slotIndex] ?? null;
+                : slot.type === 'spell'
+                    ? this._loadout?.spellSlots?.[slot.slotIndex] ?? null
+                    : this._loadout?.consumableSlots?.[slot.slotIndex] ?? null;
             const isActive = slot.type === 'weapon'
                 ? this._loadout?.activeWeaponSlotIndex === slot.slotIndex
-                : this._loadout?.activeSpellSlotIndex === slot.slotIndex;
+                : slot.type === 'spell'
+                    ? this._loadout?.activeSpellSlotIndex === slot.slotIndex
+                    : this._loadout?.activeConsumableSlotIndex === slot.slotIndex;
             const isSelected = this._selectedSlot?.type === slot.type && this._selectedSlot?.slotIndex === slot.slotIndex;
             const isHovered = this._hoverSelection?.type === slot.type && this._hoverSelection?.slotIndex === slot.slotIndex;
 
@@ -180,8 +199,11 @@ export class RadialKitWidget {
 
             slot.bg.setFillStyle(fill, 0.97);
             slot.bg.setStrokeStyle(isActive || isSelected || isHovered ? 3 : 2, border, 1);
-            slot.label.setText(item?.name ?? (slot.type === 'weapon' ? 'Unarmed' : 'Nothing'));
-            slot.label.setColor(text);
+            const label = slot.type === 'consumable'
+                ? `${item?.name ?? 'Nothing'}${item?.id && item?.id !== 'nothing' ? ` x${item?.quantity ?? 0}` : ''}`
+                : item?.name ?? (slot.type === 'weapon' ? 'Unarmed' : 'Nothing');
+            slot.label.setText(label);
+            slot.label.setColor(slot.type === 'consumable' && item?.isDepleted ? COLORS.inactiveText : text);
         }
     }
 

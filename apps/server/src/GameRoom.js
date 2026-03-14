@@ -86,6 +86,59 @@ const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
 const PROJECTILE_MIN_SPEED = 0.001;
 const SPRINT_STAMINA_DRAIN_PER_SEC = MOVEMENT_RESOURCE_CONFIG.sprint.staminaDrainPerSec;
 const DASH_STAMINA_COST = MOVEMENT_RESOURCE_CONFIG.dash.staminaCost;
+const ACTIVE_EFFECT_HEALING_GEM = 'healing_gem_regen';
+const ACTIVE_EFFECT_MAGIC_DEW = 'magic_dew_regen';
+const INVENTORY_CATEGORY_WEAPON = 'weapon';
+const INVENTORY_CATEGORY_ARMOR = 'armor';
+const INVENTORY_CATEGORY_ACCESSORY = 'accessory';
+const INVENTORY_CATEGORY_CONSUMABLE = 'consumable';
+const INVENTORY_CATEGORY_RESOURCE = 'resource';
+const STARTER_SPELLS = Object.freeze([
+    { spellId: 'possess', upgradeLevel: 0 },
+    { spellId: 'imposing_flame', upgradeLevel: 0 },
+    { spellId: 'gelid_cradle', upgradeLevel: 0 },
+    { spellId: 'arc_flash', upgradeLevel: 0 },
+    { spellId: 'traction', upgradeLevel: 0 },
+]);
+const ITEM_DEFINITIONS = Object.freeze({
+    bow: Object.freeze({ id: 'bow', name: 'Bow', category: INVENTORY_CATEGORY_WEAPON, baseSellable: true, baseDroppable: true }),
+    longsword: Object.freeze({ id: 'longsword', name: 'Longsword', category: INVENTORY_CATEGORY_WEAPON, baseSellable: true, baseDroppable: true }),
+    leather_armor: Object.freeze({ id: 'leather_armor', name: 'Leather Armor', category: INVENTORY_CATEGORY_ARMOR, baseSellable: true, baseDroppable: true }),
+    cape: Object.freeze({ id: 'cape', name: 'Cape', category: INVENTORY_CATEGORY_ACCESSORY, baseSellable: true, baseDroppable: true }),
+    gold_pouch: Object.freeze({ id: 'gold_pouch', name: 'Gold Pouch', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, effectType: 'grant_gold', goldAmount: 100 }),
+    healing_gem: Object.freeze({ id: 'healing_gem', name: 'Healing Gem', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, effectType: ACTIVE_EFFECT_HEALING_GEM, durationMs: 5000, tickIntervalMs: 1000, magnitude: 8 }),
+    magic_dew: Object.freeze({ id: 'magic_dew', name: 'Magic Dew', category: INVENTORY_CATEGORY_CONSUMABLE, baseSellable: true, baseDroppable: true, effectType: ACTIVE_EFFECT_MAGIC_DEW, durationMs: 5000, tickIntervalMs: 1000, magnitude: 6 }),
+    weapon_upgrade_material: Object.freeze({ id: 'weapon_upgrade_material', name: 'Weapon Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true }),
+    spell_upgrade_material: Object.freeze({ id: 'spell_upgrade_material', name: 'Spell Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true }),
+});
+const SEEDED_WORLD_DROPS = Object.freeze([
+    // Spread the test loot across the walkable base of the inn so each pickup is easy to see.
+    Object.freeze({ entityKey: 'world:loot_inn_cape', definitionId: 'cape', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 2 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_longsword', definitionId: 'longsword', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 4 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_bow', definitionId: 'bow', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 6 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_leather_armor', definitionId: 'leather_armor', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 8 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_gold_pouch', definitionId: 'gold_pouch', quantity: 2, upgradeLevel: 0, levelId: 'inn', x: 10 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_healing_gem', definitionId: 'healing_gem', quantity: 3, upgradeLevel: 0, levelId: 'inn', x: 12 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_magic_dew', definitionId: 'magic_dew', quantity: 3, upgradeLevel: 0, levelId: 'inn', x: 3 * TILE_SIZE + TILE_SIZE / 2, y: 9 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_weapon_material', definitionId: 'weapon_upgrade_material', quantity: 10, upgradeLevel: 0, levelId: 'inn', x: 6 * TILE_SIZE + TILE_SIZE / 2, y: 9 * TILE_SIZE + TILE_SIZE / 2 }),
+    Object.freeze({ entityKey: 'world:loot_inn_spell_material', definitionId: 'spell_upgrade_material', quantity: 10, upgradeLevel: 0, levelId: 'inn', x: 9 * TILE_SIZE + TILE_SIZE / 2, y: 9 * TILE_SIZE + TILE_SIZE / 2 }),
+]);
+
+function getItemDefinition(definitionId) {
+    return typeof definitionId === 'string' ? ITEM_DEFINITIONS[definitionId] ?? null : null;
+}
+
+function buildInventoryEntry(entryId, definitionId, quantity = 1, upgradeLevel = 0) {
+    const definition = getItemDefinition(definitionId);
+    if (!definition) return null;
+    return {
+        entryId,
+        definitionId,
+        category: definition.category,
+        quantity: Math.max(1, Math.floor(quantity)),
+        upgradeLevel: Math.max(0, Math.floor(upgradeLevel)),
+    };
+}
 
 function sanitizeEquipId(value) {
     if (typeof value !== 'string') return null;
@@ -270,6 +323,7 @@ export class GameRoom {
 
     // Capped at LAG_COMP_HISTORY_SIZE entries (sliding window ~1 second).
         this.positionHistory = [];
+        this._seedWorldDrops();
         this._initializeWorldSpawns();
     }
 
@@ -317,6 +371,8 @@ export class GameRoom {
                     sightRadius: ARCHETYPE_CONFIG.player.sightRadius,
                     poise: this._defaultPoiseForKind('player'),
                     spellState: { pendingCast: null, cooldownUntilBySpellId: {} },
+                    inventory: { gold: 0, entries: [], nextEntryId: 1 },
+                    spellbook: { knownSpells: STARTER_SPELLS.map((entry) => ({ ...entry })) },
                 });
 
                 // Ack the join with the caller's session ID
@@ -352,6 +408,11 @@ export class GameRoom {
                 if (this.players.size === 1) {
                     await this.state.storage.setAlarm(Date.now() + TICK_MS);
                 }
+                break;
+            }
+
+            case MSG.USE_CONSUMABLE: {
+                this._useConsumableForPlayer(sessionId, sanitizeEquipId(data.definitionId));
                 break;
             }
 
@@ -421,8 +482,8 @@ export class GameRoom {
                 const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
                 if (dirLen < 0.001) break;
 
-                const requestedWeaponId = data.weaponId === 'sword' ? 'sword' : 'unarmed';
-                const equippedWeaponId = player.equipped?.weaponId === 'sword' ? 'sword' : 'unarmed';
+                const requestedWeaponId = (data.weaponId === 'longsword' || data.weaponId === 'sword') ? 'longsword' : 'unarmed';
+                const equippedWeaponId = (player.equipped?.weaponId === 'longsword' || player.equipped?.weaponId === 'sword') ? 'longsword' : 'unarmed';
                 const weaponId = requestedWeaponId === equippedWeaponId ? requestedWeaponId : equippedWeaponId;
                 const phaseIndex = Number.isInteger(data.phaseIndex) ? data.phaseIndex : Math.floor(data.phaseIndex ?? 0);
 
@@ -1008,6 +1069,7 @@ export class GameRoom {
 
         for (const [entityKey, world] of this.worldEntities.entries()) {
             const kind = world?.kind ?? null;
+            if (kind === 'loot') continue;
             const resources = tickResourceRegen(world?.resources ?? this._defaultResourcesForKind(kind), TICK_MS, nowMs);
             this._updateWorldEntity(entityKey, (currentWorld) => ({ ...currentWorld, resources }));
         }
@@ -1395,20 +1457,25 @@ export class GameRoom {
         if (typeof entityKey !== 'string') return [];
         const summaries = [];
         for (const effect of this._listActiveEffectsForEntity(entityKey)) {
-            if (effect.type !== ACTIVE_EFFECT_TRACTION) continue;
-            if (effect.sourceEntityKey === entityKey) {
+            if (effect.type === ACTIVE_EFFECT_TRACTION && effect.sourceEntityKey === entityKey) {
                 summaries.push({
                     id: effect.id,
                     type: 'traction_source',
                     spellId: TRACTION_SPELL_ID,
                     targetEntityKey: effect.targetEntityKey ?? null,
                 });
-            } else if (effect.targetEntityKey === entityKey) {
+            } else if (effect.type === ACTIVE_EFFECT_TRACTION && effect.targetEntityKey === entityKey) {
                 summaries.push({
                     id: effect.id,
                     type: 'traction_target',
                     spellId: TRACTION_SPELL_ID,
                     sourceEntityKey: effect.sourceEntityKey ?? null,
+                });
+            } else if (effect.type === ACTIVE_EFFECT_HEALING_GEM || effect.type === ACTIVE_EFFECT_MAGIC_DEW) {
+                summaries.push({
+                    id: effect.id,
+                    type: effect.type,
+                    expiresAtMs: effect.expiresAtMs ?? null,
                 });
             }
         }
@@ -1547,27 +1614,64 @@ export class GameRoom {
         if (this.activeEffects.size === 0) return;
         for (const effect of Array.from(this.activeEffects.values())) {
             if (!effect) continue;
-            if (effect.type !== ACTIVE_EFFECT_TRACTION) continue;
-            const source = this._getCombatantByEntityKey(effect.sourceEntityKey);
-            const target = this.worldEntities.get(effect.targetEntityKey);
-            if (!source || !target) {
-                this._removeActiveEffect(effect.id, 'missing-endpoint');
+            if (effect.type === ACTIVE_EFFECT_TRACTION) {
+                const source = this._getCombatantByEntityKey(effect.sourceEntityKey);
+                const target = this.worldEntities.get(effect.targetEntityKey);
+                if (!source || !target) {
+                    this._removeActiveEffect(effect.id, 'missing-endpoint');
+                    continue;
+                }
+                if (!this._isValidTractionTarget(source, target.entityKey, { ignoreEffectId: effect.id })) {
+                    this._removeActiveEffect(effect.id, 'invalid-target');
+                    continue;
+                }
+                const nextPos = this._resolveTractionTargetPosition(effect, source, target, {
+                    levelId: source.levelId ?? target.levelId ?? null,
+                });
+                if (!nextPos) continue;
+                this.worldEntities.set(target.entityKey, {
+                    ...target,
+                    levelId: source.levelId ?? target.levelId ?? null,
+                    x: nextPos.x,
+                    y: nextPos.y,
+                });
                 continue;
             }
-            if (!this._isValidTractionTarget(source, target.entityKey, { ignoreEffectId: effect.id })) {
-                this._removeActiveEffect(effect.id, 'invalid-target');
+
+            const nowMs = Date.now();
+            if (Number.isFinite(effect.expiresAtMs) && effect.expiresAtMs <= nowMs) {
+                this._removeActiveEffect(effect.id, 'expired');
                 continue;
             }
-            const nextPos = this._resolveTractionTargetPosition(effect, source, target, {
-                levelId: source.levelId ?? target.levelId ?? null,
-            });
-            if (!nextPos) continue;
-            this.worldEntities.set(target.entityKey, {
-                ...target,
-                levelId: source.levelId ?? target.levelId ?? null,
-                x: nextPos.x,
-                y: nextPos.y,
-            });
+            if (!Number.isFinite(effect.nextTickAtMs) || effect.nextTickAtMs > nowMs) continue;
+
+            const sourceEntityKey = effect.sourceEntityKey ?? null;
+            const resources = this._getEntityResources(sourceEntityKey);
+            if (!resources) {
+                this._removeActiveEffect(effect.id, 'missing-resources');
+                continue;
+            }
+            let nextResources = resources;
+            if (effect.type === ACTIVE_EFFECT_HEALING_GEM) {
+                nextResources = {
+                    ...resources,
+                    hp: {
+                        ...resources.hp,
+                        current: Math.min(resources.hp.max, (resources.hp.current ?? 0) + (effect.magnitude ?? 0)),
+                    },
+                };
+            } else if (effect.type === ACTIVE_EFFECT_MAGIC_DEW) {
+                nextResources = {
+                    ...resources,
+                    mana: {
+                        ...resources.mana,
+                        current: Math.min(resources.mana.max, (resources.mana.current ?? 0) + (effect.magnitude ?? 0)),
+                    },
+                };
+            }
+            this._setEntityResources(sourceEntityKey, nextResources);
+            effect.nextTickAtMs = nowMs + Math.max(250, effect.tickIntervalMs ?? 1000);
+            this.activeEffects.set(effect.id, effect);
         }
     }
 
@@ -2460,6 +2564,10 @@ export class GameRoom {
     }
 
     _handleInteractRequest(sessionId, player, interactableId) {
+        if (typeof interactableId === 'string' && interactableId.startsWith('world:')) {
+            this._pickupWorldLoot(sessionId, player, interactableId);
+            return;
+        }
         const definition = getInteractableDefinition(interactableId);
         if (!definition || definition.kind !== 'warm_fire') return;
 
@@ -2586,7 +2694,7 @@ export class GameRoom {
     }
 
     _normalizeMeleeWeaponId(weaponId) {
-        if (weaponId === 'sword') return 'sword';
+        if (weaponId === 'longsword' || weaponId === 'sword') return 'longsword';
         if (weaponId === 'zombie_strike') return 'zombie_strike';
         return 'unarmed';
     }
@@ -3065,12 +3173,218 @@ export class GameRoom {
             sessionId,
             controlledEntityKey,
             resources: summarizeResources(resources),
+            inventory: this._buildInventorySnapshot(player?.inventory),
+            spellbook: this._buildSpellbookSnapshot(player?.spellbook),
             teamId: typeof this._getEntityTeamId(controlledEntityKey) === 'string'
                 ? this._getEntityTeamId(controlledEntityKey)
                 : null,
             sightRadius: this._resolveSightRadiusForPlayer(sessionId),
             buffs: this._buildEffectSummariesForEntity(controlledEntityKey),
         };
+    }
+
+    _buildInventorySnapshot(inventory) {
+        const entries = Array.isArray(inventory?.entries) ? inventory.entries : [];
+        return {
+            gold: Number.isFinite(inventory?.gold) ? Math.max(0, Math.floor(inventory.gold)) : 0,
+            entries: entries.map((entry) => ({
+                entryId: entry.entryId,
+                definitionId: entry.definitionId,
+                category: entry.category,
+                quantity: entry.quantity,
+                upgradeLevel: entry.upgradeLevel ?? 0,
+            })),
+        };
+    }
+
+    _buildSpellbookSnapshot(spellbook) {
+        return {
+            knownSpells: Array.isArray(spellbook?.knownSpells)
+                ? spellbook.knownSpells.map((entry) => ({
+                    spellId: entry.spellId,
+                    upgradeLevel: entry.upgradeLevel ?? 0,
+                }))
+                : [],
+        };
+    }
+
+    _nextInventoryEntryId(inventory) {
+        const nextValue = Number.isFinite(inventory?.nextEntryId) ? Math.max(1, Math.floor(inventory.nextEntryId)) : 1;
+        return `inv_${String(nextValue).padStart(6, '0')}`;
+    }
+
+    _inventoryEntries(inventory) {
+        return Array.isArray(inventory?.entries) ? inventory.entries : [];
+    }
+
+    _addInventoryEntry(sessionId, definitionId, quantity = 1, upgradeLevel = 0) {
+        const definition = getItemDefinition(definitionId);
+        if (!definition) return false;
+        if (!Number.isFinite(quantity) || quantity <= 0) return false;
+        this._updatePlayer(sessionId, (player) => {
+            const inventory = player.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            const existing = this._inventoryEntries(inventory).find((entry) => (
+                entry.definitionId === definitionId &&
+                entry.category === definition.category &&
+                (entry.upgradeLevel ?? 0) === Math.max(0, Math.floor(upgradeLevel))
+            ));
+            if (existing) {
+                existing.quantity += Math.max(1, Math.floor(quantity));
+                return { ...player, inventory: { ...inventory, entries: [...inventory.entries] } };
+            }
+            const entryId = this._nextInventoryEntryId(inventory);
+            const nextEntry = buildInventoryEntry(entryId, definitionId, quantity, upgradeLevel);
+            return {
+                ...player,
+                inventory: {
+                    gold: inventory.gold ?? 0,
+                    nextEntryId: (inventory.nextEntryId ?? 1) + 1,
+                    entries: [...this._inventoryEntries(inventory), nextEntry],
+                },
+            };
+        });
+        return true;
+    }
+
+    _consumeInventoryEntryByDefinition(sessionId, definitionId, category) {
+        let consumed = null;
+        this._updatePlayer(sessionId, (player) => {
+            const inventory = player.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            const entries = [...this._inventoryEntries(inventory)].sort((a, b) => a.entryId.localeCompare(b.entryId));
+            const entry = entries.find((candidate) => candidate.definitionId === definitionId && candidate.category === category && candidate.quantity > 0);
+            if (!entry) return player;
+            entry.quantity -= 1;
+            consumed = { ...entry, quantity: entry.quantity + 1 };
+            const filtered = entries.filter((candidate) => candidate.quantity > 0);
+            return {
+                ...player,
+                inventory: {
+                    gold: inventory.gold ?? 0,
+                    nextEntryId: inventory.nextEntryId ?? 1,
+                    entries: filtered,
+                },
+            };
+        });
+        return consumed;
+    }
+
+    _addGold(sessionId, amount) {
+        if (!Number.isFinite(amount) || amount <= 0) return;
+        this._updatePlayer(sessionId, (player) => {
+            const inventory = player.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            return {
+                ...player,
+                inventory: {
+                    ...inventory,
+                    gold: Math.max(0, Math.floor(inventory.gold ?? 0) + Math.floor(amount)),
+                },
+            };
+        });
+    }
+
+    _enqueueToast(sessionId, message, durationMs = 1800) {
+        if (!message) return;
+        this.#sendToSession(sessionId, {
+            type: MSG.TOAST,
+            message,
+            durationMs,
+        });
+    }
+
+    _seedWorldDrops() {
+        for (const seed of SEEDED_WORLD_DROPS) {
+            if (this.worldEntities.has(seed.entityKey)) continue;
+            this.worldEntities.set(seed.entityKey, {
+                entityKey: seed.entityKey,
+                kind: 'loot',
+                x: seed.x,
+                y: seed.y,
+                levelId: seed.levelId,
+                teamId: TEAM_NEUTRAL,
+                hitRadius: 14,
+                resources: null,
+                loot: {
+                    definitionId: seed.definitionId,
+                    quantity: seed.quantity,
+                    upgradeLevel: seed.upgradeLevel ?? 0,
+                    category: getItemDefinition(seed.definitionId)?.category ?? null,
+                },
+            });
+        }
+    }
+
+    _pickupWorldLoot(sessionId, player, entityKey) {
+        const drop = this.worldEntities.get(entityKey);
+        if (!drop || drop.kind !== 'loot' || !drop.loot) return false;
+        const radius = 80;
+        const x = player.transform?.x ?? 0;
+        const y = player.transform?.y ?? 0;
+        const dx = (drop.x ?? 0) - x;
+        const dy = (drop.y ?? 0) - y;
+        if ((dx * dx + dy * dy) > radius * radius) return false;
+
+        const definition = getItemDefinition(drop.loot.definitionId);
+        if (!definition) return false;
+        this._addInventoryEntry(sessionId, drop.loot.definitionId, drop.loot.quantity ?? 1, drop.loot.upgradeLevel ?? 0);
+        this.worldEntities.delete(entityKey);
+        const quantityText = (drop.loot.quantity ?? 1) > 1 ? ` x${drop.loot.quantity}` : '';
+        this._enqueueToast(sessionId, `Picked up: ${definition.name}${quantityText}`);
+        return true;
+    }
+
+    _useConsumableForPlayer(sessionId, definitionId) {
+        const definition = getItemDefinition(definitionId);
+        if (!definition || definition.category !== INVENTORY_CATEGORY_CONSUMABLE) {
+            this._enqueueToast(sessionId, 'No consumable assigned', 1400);
+            return;
+        }
+
+        const consumed = this._consumeInventoryEntryByDefinition(sessionId, definitionId, INVENTORY_CATEGORY_CONSUMABLE);
+        if (!consumed) {
+            this._enqueueToast(sessionId, `Out of ${definition.name}`, 1400);
+            return;
+        }
+
+        if (definition.effectType === 'grant_gold') {
+            this._addGold(sessionId, definition.goldAmount ?? 0);
+            return;
+        }
+
+        this._applyConsumableEffect(sessionId, definition);
+    }
+
+    _applyConsumableEffect(sessionId, definition) {
+        const sourceEntityKey = this.players.get(sessionId)?.controlledEntityKey ?? `player:${sessionId}`;
+        const nowMs = Date.now();
+        const activeType = definition.effectType;
+        const existing = Array.from(this.activeEffects.values()).find((effect) => (
+            effect?.type === activeType && effect.sourceEntityKey === sourceEntityKey
+        ));
+        const durationMs = Math.max(1000, definition.durationMs ?? 1000);
+        const tickIntervalMs = Math.max(250, definition.tickIntervalMs ?? 1000);
+        const magnitude = Math.max(1, definition.magnitude ?? 1);
+
+        if (existing) {
+            existing.startedAtMs = nowMs;
+            existing.expiresAtMs = nowMs + durationMs;
+            existing.nextTickAtMs = nowMs + tickIntervalMs;
+            existing.magnitude = magnitude;
+            this.activeEffects.set(existing.id, existing);
+            return;
+        }
+
+        this._registerActiveEffect({
+            id: crypto.randomUUID(),
+            type: activeType,
+            sourceEntityKey,
+            targetEntityKey: sourceEntityKey,
+            ownerSessionId: sessionId,
+            startedAtMs: nowMs,
+            expiresAtMs: nowMs + durationMs,
+            nextTickAtMs: nowMs + tickIntervalMs,
+            tickIntervalMs,
+            magnitude,
+        });
     }
 
     _updatePlayer(sessionId, updater) {

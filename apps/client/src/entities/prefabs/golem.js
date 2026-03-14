@@ -9,6 +9,8 @@ import { AuthorityComponent } from '../../components/AuthorityComponent.js';
 import { IntentComponent } from '../../components/IntentComponent.js';
 import { StatsComponent } from '../../components/StatsComponent.js';
 import { LoadoutComponent } from '../../components/LoadoutComponent.js';
+import { InventoryComponent } from '../../components/InventoryComponent.js';
+import { SpellbookComponent } from '../../components/SpellbookComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
@@ -45,9 +47,12 @@ export function createGolem(scene, config = {}) {
         staminaMax: ARCHETYPE_CONFIG.golem.resources.stamina.max,
     }));
     golem.addComponent(new ExitTraversalComponent({ canUseExits: true }));
+    golem.addComponent(new InventoryComponent({ gold: 0, entries: [] }));
+    golem.addComponent(new SpellbookComponent({ knownSpells: [] }));
     golem.addComponent(new LoadoutComponent({
-        weapons:     ['unarmed', 'bow', 'sword'],
+        weapons:     ['unarmed', 'bow', 'longsword'],
         spells:      [],
+        consumables: ['nothing', 'gold_pouch', 'healing_gem', 'magic_dew'],
         armorSets:   [],
         accessories: [],
         equipped: { weaponId: 'unarmed', spellId: 'nothing', armorSetId: null, accessoryId: null },

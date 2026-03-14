@@ -4,6 +4,7 @@ import { eventBus } from '../core/EventBus.js';
 import { HpBarWidget } from '../ui/widgets/HpBarWidget.js';
 import { InventoryDrawerWidget, DRAWER_TOTAL_W } from '../ui/widgets/InventoryDrawerWidget.js';
 import { RadialKitWidget } from '../ui/widgets/RadialKitWidget.js';
+import { ToastFeedWidget } from '../ui/widgets/ToastFeedWidget.js';
 import { GAME_FONT_FAMILY } from '../config.js';
 
 export class UIScene extends Phaser.Scene {
@@ -16,11 +17,16 @@ export class UIScene extends Phaser.Scene {
         this._onEscKeyDown     = null;
         this._onCycleWeaponKeyDown = null;
         this._onCycleSpellKeyDown = null;
+        this._onUseConsumableKeyDown = null;
+        this._onCycleConsumableKeyDown = null;
         this._quickRadialWidget = null;
         this._escDebounceActive = false;
         this._pendingState     = uiStateStore.getState();
         this._equippedWeaponText = null;
         this._equippedSpellText = null;
+        this._equippedConsumableText = null;
+        this._toastFeed = null;
+        this._unsubscribeToast = null;
     }
 
     create() {
@@ -53,6 +59,12 @@ export class UIScene extends Phaser.Scene {
             fontFamily: GAME_FONT_FAMILY,
             color: '#a9c7ef',
         }).setOrigin(0, 0);
+        this._equippedConsumableText = this.add.text(24, 152, '', {
+            fontSize: '13px',
+            fontFamily: GAME_FONT_FAMILY,
+            color: '#c5deb0',
+        }).setOrigin(0, 0);
+        this._toastFeed = new ToastFeedWidget(this);
 
         // Inventory drawer — equip actions are emitted over the event bus so
         // GameScene can route them to the controlled entity's LoadoutComponent.
@@ -95,10 +107,18 @@ export class UIScene extends Phaser.Scene {
 
         this._onCycleWeaponKeyDown = () => eventBus.emit('ui:cycleWeaponSlot');
         this._onCycleSpellKeyDown = () => eventBus.emit('ui:cycleSpellSlot');
+        this._onUseConsumableKeyDown = () => eventBus.emit('ui:useConsumable');
+        this._onCycleConsumableKeyDown = () => eventBus.emit('ui:cycleConsumableSlot');
         this.input.keyboard.on('keydown-ONE', this._onCycleWeaponKeyDown);
         this.input.keyboard.on('keydown-LEFT', this._onCycleWeaponKeyDown);
         this.input.keyboard.on('keydown-TWO', this._onCycleSpellKeyDown);
         this.input.keyboard.on('keydown-RIGHT', this._onCycleSpellKeyDown);
+        this.input.keyboard.on('keydown-Q', this._onUseConsumableKeyDown);
+        this.input.keyboard.on('keydown-THREE', this._onCycleConsumableKeyDown);
+        this.input.keyboard.on('keydown-UP', this._onCycleConsumableKeyDown);
+        this._unsubscribeToast = eventBus.on('toast:enqueue', ({ message, durationMs }) => {
+            this._toastFeed?.enqueue(message, durationMs);
+        });
 
         // Subscribe to the state store.
         this._unsubscribeStore = uiStateStore.subscribe((state) => {
@@ -140,11 +160,23 @@ export class UIScene extends Phaser.Scene {
                 this.input.keyboard.off('keydown-RIGHT', this._onCycleSpellKeyDown);
                 this._onCycleSpellKeyDown = null;
             }
+            if (this._onUseConsumableKeyDown) {
+                this.input.keyboard.off('keydown-Q', this._onUseConsumableKeyDown);
+                this._onUseConsumableKeyDown = null;
+            }
+            if (this._onCycleConsumableKeyDown) {
+                this.input.keyboard.off('keydown-THREE', this._onCycleConsumableKeyDown);
+                this.input.keyboard.off('keydown-UP', this._onCycleConsumableKeyDown);
+                this._onCycleConsumableKeyDown = null;
+            }
+            this._unsubscribeToast?.();
             this._hpBar?.destroy();
             this._staminaBar?.destroy();
             this._manaBar?.destroy();
             this._equippedWeaponText?.destroy();
             this._equippedSpellText?.destroy();
+            this._equippedConsumableText?.destroy();
+            this._toastFeed?.destroy();
             this._quickRadialWidget?.destroy();
             // Clean up drawer state in the store.
             uiStateStore.set('drawerOpen', false);
@@ -175,9 +207,11 @@ export class UIScene extends Phaser.Scene {
         this._manaBar?.setPosition(rightEdge, topPadding + 56);
         this._equippedWeaponText?.setPosition(leftPadding, topPadding + 92);
         this._equippedSpellText?.setPosition(leftPadding, topPadding + 112);
+        this._equippedConsumableText?.setPosition(leftPadding, topPadding + 132);
         // Drawer height tracks the scene.
         this._drawer?.setHeight(height);
         this._quickRadialWidget?.setPosition(width / 2, height / 2);
+        this._toastFeed?.setPosition(width - 24, height - 24);
     }
 
     // ------------------------------------------------------------------
@@ -209,6 +243,8 @@ export class UIScene extends Phaser.Scene {
             eventBus.emit('ui:activateWeaponSlot', { slotIndex: selection.slotIndex });
         } else if (selection?.type === 'spell') {
             eventBus.emit('ui:activateSpellSlot', { slotIndex: selection.slotIndex });
+        } else if (selection?.type === 'consumable') {
+            eventBus.emit('ui:activateConsumableSlot', { slotIndex: selection.slotIndex });
         }
 
         this._quickRadialWidget.hide();
@@ -230,6 +266,7 @@ export class UIScene extends Phaser.Scene {
         this._manaBar?.setVisible(hasEntity);
         this._equippedWeaponText?.setVisible(hasEntity);
         this._equippedSpellText?.setVisible(hasEntity);
+        this._equippedConsumableText?.setVisible(hasEntity);
         if (!state.quickRadialOpen) this._quickRadialWidget?.hide();
 
         if (!hasEntity) {
@@ -242,7 +279,9 @@ export class UIScene extends Phaser.Scene {
         this._manaBar?.update(controlled.mana, controlled.manaMax);
         this._equippedWeaponText?.setText(`⚔ ${controlled.loadout?.equipped?.weaponId ? (controlled.loadout.weapons?.find(item => item.id === controlled.loadout.equipped.weaponId)?.name ?? 'Unarmed') : 'Unarmed'}`);
         this._equippedSpellText?.setText(`✦ ${controlled.loadout?.equipped?.spellId ? (controlled.loadout.spells?.find(item => item.id === controlled.loadout.equipped.spellId)?.name ?? 'Nothing') : 'Nothing'}`);
-        this._drawer?.update(controlled.loadout ?? null);
+        const consumableSlot = controlled.loadout?.consumableSlots?.[controlled.loadout?.activeConsumableSlotIndex ?? 0] ?? null;
+        this._equippedConsumableText?.setText(`Q ${consumableSlot?.name ?? 'Nothing'}${consumableSlot?.id && consumableSlot?.id !== 'nothing' ? ` x${consumableSlot?.quantity ?? 0}` : ''}`);
+        this._drawer?.update(controlled);
         this._quickRadialWidget?.refresh(controlled.loadout ?? null, {
             hoverSelection: uiStateStore.get('quickRadialHover'),
         });

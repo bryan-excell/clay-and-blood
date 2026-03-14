@@ -191,7 +191,7 @@ export const MELEE_WEAPON_CONFIG = Object.freeze({
             }),
         ]),
     }),
-    sword: Object.freeze({
+    longsword: Object.freeze({
         queueGraceMs: 120,
         phases: Object.freeze([
             Object.freeze({
@@ -257,7 +257,7 @@ export const MELEE_WEAPON_CONFIG = Object.freeze({
 
 export const MELEE_ATTACK_CONFIG = Object.freeze({
     unarmed: MELEE_WEAPON_CONFIG.unarmed.phases,
-    sword: MELEE_WEAPON_CONFIG.sword.phases,
+    longsword: MELEE_WEAPON_CONFIG.longsword.phases,
     zombie_strike: MELEE_WEAPON_CONFIG.zombie_strike.phases,
 });
 
@@ -387,7 +387,8 @@ export function resolveMeleeAttackProfile(weaponId, phaseIndex = 0) {
 }
 
 export function resolveMeleeWeaponConfig(weaponId) {
-    const key = MELEE_WEAPON_CONFIG[weaponId] ? weaponId : 'unarmed';
+    const normalizedId = weaponId === 'sword' ? 'longsword' : weaponId;
+    const key = MELEE_WEAPON_CONFIG[normalizedId] ? normalizedId : 'unarmed';
     return MELEE_WEAPON_CONFIG[key];
 }
 

@@ -2,14 +2,45 @@ import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { createDefaultControlledEntityState } from '../core/uiStateSchema.js';
-import { WEAPONS, SPELLS, ACCESSORIES, ARMOR_SETS } from '../data/ItemRegistry.js';
+import { WEAPONS, SPELLS, ACCESSORIES, ARMOR_SETS, CONSUMABLES, RESOURCES, getItemDef } from '../data/ItemRegistry.js';
 
 const EMPTY_BUFFS = Object.freeze([]);
 
 // Resolve an array of item ids to full item definition objects.
 // Falls back to a minimal stub for any id not found in the registry.
 function resolveItems(ids, registry) {
-    return ids.map(id => registry[id] ?? { id, name: id.charAt(0).toUpperCase() + id.slice(1) });
+    const list = Array.isArray(ids) ? ids : [];
+    return list.map(id => registry[id] ?? { id, name: id.charAt(0).toUpperCase() + id.slice(1) });
+}
+
+function resolveInventoryRows(entries = [], loadout = null) {
+    const rows = entries.map((entry) => {
+        const definition = getItemDef(entry.definitionId) ?? { id: entry.definitionId, name: entry.definitionId };
+        const isAssigned = loadout
+            ? (loadout.weaponSlots?.includes(entry.definitionId) ||
+                loadout.consumableSlots?.includes(entry.definitionId) ||
+                loadout.equipped?.armorSetId === entry.definitionId ||
+                loadout.equipped?.accessoryId === entry.definitionId)
+            : false;
+        return {
+            entryId: entry.entryId,
+            definitionId: entry.definitionId,
+            category: entry.category,
+            displayName: definition.name ?? entry.definitionId,
+            quantity: entry.quantity,
+            upgradeLevel: entry.upgradeLevel ?? 0,
+            canSell: !!definition.baseSellable && !isAssigned,
+            canDrop: !!definition.baseDroppable && !isAssigned,
+        };
+    });
+
+    return {
+        weapons: rows.filter((entry) => entry.category === 'weapon'),
+        armor: rows.filter((entry) => entry.category === 'armor'),
+        accessories: rows.filter((entry) => entry.category === 'accessory'),
+        consumables: rows.filter((entry) => entry.category === 'consumable'),
+        resources: rows.filter((entry) => entry.category === 'resource'),
+    };
 }
 
 export class UiProjectionSystem {
@@ -18,6 +49,8 @@ export class UiProjectionSystem {
         this._unsubscribeControlChanged = null;
         this._unsubscribeLoadoutChanged = null;
         this._unsubscribeLoadoutKitChanged = null;
+        this._unsubscribeInventoryChanged = null;
+        this._unsubscribeSpellbookChanged = null;
         this._started = false;
     }
 
@@ -42,6 +75,16 @@ export class UiProjectionSystem {
             if (controlled?.id !== entityId) return;
             this.publishImmediate();
         });
+        this._unsubscribeInventoryChanged = eventBus.on('inventory:changed', ({ entityId }) => {
+            const controlled = this.scene.getLocallyControlledEntity?.();
+            if (controlled?.id !== entityId) return;
+            this.publishImmediate();
+        });
+        this._unsubscribeSpellbookChanged = eventBus.on('spellbook:changed', ({ entityId }) => {
+            const controlled = this.scene.getLocallyControlledEntity?.();
+            if (controlled?.id !== entityId) return;
+            this.publishImmediate();
+        });
     }
 
     stop() {
@@ -59,6 +102,14 @@ export class UiProjectionSystem {
         if (this._unsubscribeLoadoutKitChanged) {
             this._unsubscribeLoadoutKitChanged();
             this._unsubscribeLoadoutKitChanged = null;
+        }
+        if (this._unsubscribeInventoryChanged) {
+            this._unsubscribeInventoryChanged();
+            this._unsubscribeInventoryChanged = null;
+        }
+        if (this._unsubscribeSpellbookChanged) {
+            this._unsubscribeSpellbookChanged();
+            this._unsubscribeSpellbookChanged = null;
         }
     }
 
@@ -81,6 +132,8 @@ export class UiProjectionSystem {
 
         const stats   = controlled.getComponent('stats');
         const loadout = controlled.getComponent('loadout');
+        const inventory = controlled.getComponent('inventory');
+        const spellbook = controlled.getComponent('spellbook');
 
         const networkSelf = uiStateStore.get('networkSelf');
         const controlledEntityKey = typeof this.scene._getNetworkEntityKey === 'function'
@@ -100,6 +153,43 @@ export class UiProjectionSystem {
         const buffs = canApplyNetworkSelf && Array.isArray(networkSelf?.buffs)
             ? networkSelf.buffs
             : EMPTY_BUFFS;
+        const projectedLoadout = loadout ? {
+            weapons: resolveItems(loadout.weapons, WEAPONS),
+            spells: resolveItems(loadout.spells, SPELLS),
+            armorSets: resolveItems(loadout.armorSets, ARMOR_SETS),
+            accessories: resolveItems(loadout.accessories, ACCESSORIES),
+            consumables: resolveItems(loadout.consumables, CONSUMABLES),
+            weaponSlots: resolveItems(loadout.weaponSlots, WEAPONS),
+            spellSlots: resolveItems(loadout.spellSlots, SPELLS),
+            consumableSlots: (loadout.consumableSlots ?? []).map((id) => {
+                const definition = CONSUMABLES[id] ?? null;
+                const quantity = canApplyNetworkSelf
+                    ? (networkSelf?.inventory?.entries ?? []).reduce((sum, entry) => (
+                        entry.category === 'consumable' && entry.definitionId === id ? sum + (entry.quantity ?? 0) : sum
+                    ), 0)
+                    : (inventory?.getTotalQuantityByDefinitionId(id) ?? 0);
+                return {
+                    id,
+                    name: definition?.name ?? (id === 'nothing' ? 'Nothing' : id),
+                    quantity,
+                    isDepleted: quantity <= 0 && id !== 'nothing',
+                };
+            }),
+            activeWeaponSlotIndex: loadout.activeWeaponSlotIndex,
+            activeSpellSlotIndex: loadout.activeSpellSlotIndex,
+            activeConsumableSlotIndex: loadout.activeConsumableSlotIndex,
+            equipped: loadout.equipped,
+            selectedConsumableDefinitionId: loadout.consumableSlots?.[loadout.activeConsumableSlotIndex] ?? 'nothing',
+        } : null;
+        const projectedInventorySource = canApplyNetworkSelf
+            ? (networkSelf?.inventory ?? null)
+            : (inventory ? { gold: inventory.gold, entries: inventory.entries } : null);
+        const projectedSpellbookSource = canApplyNetworkSelf
+            ? (networkSelf?.spellbook ?? null)
+            : (spellbook ? { knownSpells: spellbook.knownSpells } : null);
+        const inventoryRows = projectedInventorySource
+            ? resolveInventoryRows(projectedInventorySource.entries ?? [], projectedLoadout)
+            : { weapons: [], armor: [], accessories: [], consumables: [], resources: [] };
 
         return {
             entityId:   controlled.id,
@@ -112,18 +202,17 @@ export class UiProjectionSystem {
             stamina,
             staminaMax,
             buffs,
-            // Full item defs are resolved here so the UI layer doesn't need
-            // to import ItemRegistry directly.
-            loadout: loadout ? {
-                weapons:     resolveItems(loadout.weapons,     WEAPONS),
-                spells:      resolveItems(loadout.spells,      SPELLS),
-                armorSets:   resolveItems(loadout.armorSets,   ARMOR_SETS),
-                accessories: resolveItems(loadout.accessories, ACCESSORIES),
-                weaponSlots: resolveItems(loadout.weaponSlots, WEAPONS),
-                spellSlots: resolveItems(loadout.spellSlots, SPELLS),
-                activeWeaponSlotIndex: loadout.activeWeaponSlotIndex,
-                activeSpellSlotIndex: loadout.activeSpellSlotIndex,
-                equipped:    loadout.equipped,
+            loadout: projectedLoadout,
+            inventory: projectedInventorySource ? {
+                gold: projectedInventorySource.gold ?? 0,
+                ...inventoryRows,
+            } : null,
+            spellbook: projectedSpellbookSource ? {
+                knownSpells: (projectedSpellbookSource.knownSpells ?? []).map((entry) => ({
+                    spellId: entry.spellId,
+                    displayName: SPELLS[entry.spellId]?.name ?? entry.spellId,
+                    upgradeLevel: entry.upgradeLevel ?? 0,
+                })),
             } : null,
         };
     }

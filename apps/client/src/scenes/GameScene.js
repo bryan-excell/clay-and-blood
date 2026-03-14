@@ -693,6 +693,12 @@ export class GameScene extends Phaser.Scene {
                     : this.getLocallyControlledEntity();
                 this._applyResourceSummaryToEntity(controlled, self.resources);
             }
+            if (self?.inventory) {
+                this.player?.getComponent('inventory')?.applySnapshot(self.inventory);
+            }
+            if (self?.spellbook) {
+                this.player?.getComponent('spellbook')?.applySnapshot(self.spellbook);
+            }
             if (Number.isFinite(tick)) {
                 if (tick > this._latestServerTick) {
                     this._latestServerTick = tick;
@@ -1096,11 +1102,29 @@ export class GameScene extends Phaser.Scene {
         eventBus.on('ui:activateSpellSlot', ({ slotIndex }) => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.activateSpellSlot(slotIndex);
         });
+        eventBus.on('ui:assignConsumableSlot', ({ slotIndex, id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.assignConsumableSlot(slotIndex, id);
+        });
+        eventBus.on('ui:activateConsumableSlot', ({ slotIndex }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.activateConsumableSlot(slotIndex);
+        });
         eventBus.on('ui:cycleWeaponSlot', () => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleWeaponSlot();
         });
         eventBus.on('ui:cycleSpellSlot', () => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleSpellSlot();
+        });
+        eventBus.on('ui:cycleConsumableSlot', () => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleConsumableSlot();
+        });
+        eventBus.on('ui:useConsumable', () => {
+            const loadout = this.getLocallyControlledEntity()?.getComponent('loadout');
+            const definitionId = loadout?.consumableSlots?.[loadout.activeConsumableSlotIndex] ?? 'nothing';
+            if (!definitionId || definitionId === 'nothing') {
+                eventBus.emit('toast:enqueue', { message: 'No consumable assigned', durationMs: 1400 });
+                return;
+            }
+            networkManager.sendUseConsumable(definitionId);
         });
 
         // Replicate any equip change for the controlled entity to the server.
@@ -1421,10 +1445,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     _resolveMeleeVisualSpec(weaponId, phaseIndex) {
-        if (weaponId === 'sword') {
-            const p0 = resolveMeleeAttackProfile('sword', 0);
-            const p1 = resolveMeleeAttackProfile('sword', 1);
-            const p2 = resolveMeleeAttackProfile('sword', 2);
+        if (weaponId === 'longsword' || weaponId === 'sword') {
+            const p0 = resolveMeleeAttackProfile('longsword', 0);
+            const p1 = resolveMeleeAttackProfile('longsword', 1);
+            const p2 = resolveMeleeAttackProfile('longsword', 2);
             const swordSpecs = [
                 { radius: p0.radius, arc: p0.arc, color: p0.visual.color, alpha: p0.visual.alpha, activeMs: p0.activeMs },
                 { radius: p1.radius, arc: p1.arc, color: p1.visual.color, alpha: p1.visual.alpha, activeMs: p1.activeMs },
@@ -1560,6 +1584,7 @@ export class GameScene extends Phaser.Scene {
         if (kind === 'corpse') return 'corpse';
         if (kind === 'golem') return 'golem';
         if (kind === 'zombie') return 'zombie';
+        if (kind === 'loot') return 'loot';
         if (typeof entityKey === 'string' && entityKey.includes('golem')) return 'golem';
         if (typeof entityKey === 'string' && entityKey.includes('zombie')) return 'zombie';
         return null;
@@ -1567,7 +1592,7 @@ export class GameScene extends Phaser.Scene {
 
     _isReplicatedWorldActor(entity) {
         if (!entity) return false;
-        return entity.type === 'golem' || entity.type === 'zombie' || entity.type === 'corpse';
+        return entity.type === 'golem' || entity.type === 'zombie' || entity.type === 'corpse' || entity.type === 'loot';
     }
 
     _applyNetworkEntityEquips(entityEquips) {
@@ -2614,6 +2639,29 @@ export class GameScene extends Phaser.Scene {
             nearest = { definition, x, y };
         }
 
+        for (const entity of this.entityManager.getEntitiesByType('loot')) {
+            const transform = entity?.getComponent?.('transform');
+            if (!transform || (transform.levelId ?? gameState.currentLevelId) !== gameState.currentLevelId) continue;
+            const circle = entity?.getComponent?.('circle')?.gameObject;
+            const x = Number.isFinite(circle?.x) ? circle.x : transform.position.x;
+            const y = Number.isFinite(circle?.y) ? circle.y : transform.position.y;
+            const radius = 72;
+            const dx = x - px;
+            const dy = y - py;
+            const distSq = dx * dx + dy * dy;
+            if (distSq > radius * radius || distSq >= nearestDistSq) continue;
+            nearestDistSq = distSq;
+            nearest = {
+                definition: {
+                    displayName: 'Glowing Loot',
+                    promptText: 'Pick up [E]',
+                    interactableId: this._getNetworkEntityKey(entity),
+                },
+                x,
+                y,
+            };
+        }
+
         this._nearestInteractable = nearest;
 
         const targetAlpha = nearest ? 1 : 0;
@@ -2624,7 +2672,9 @@ export class GameScene extends Phaser.Scene {
             this._interactLabel.setText(`${nearest.definition.displayName}\n${nearest.definition.promptText}`);
             this._interactLabel.setPosition(nearest.x, nearest.y - TILE_SIZE * 0.8);
             if (Phaser.Input.Keyboard.JustDown(this._interactKey)) {
-                this._pendingWorldResetFxUntilMs = performance.now() + 2000;
+                if (!nearest.definition.interactableId?.startsWith?.('world:')) {
+                    this._pendingWorldResetFxUntilMs = performance.now() + 2000;
+                }
                 networkManager.sendInteract(nearest.definition.interactableId);
             }
         }

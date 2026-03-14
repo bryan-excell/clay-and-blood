@@ -13,9 +13,9 @@
  */
 
 export const WEAPONS = Object.freeze({
-    unarmed:       Object.freeze({ id: 'unarmed',       name: 'Unarmed',      mouseUsage: 'left', implicit: true }),
-    bow:           Object.freeze({ id: 'bow',           name: 'Bow',          mouseUsage: 'left' }),
-    sword:         Object.freeze({ id: 'sword',         name: 'Sword',        mouseUsage: 'left' }),
+    unarmed:       Object.freeze({ id: 'unarmed',       name: 'Unarmed',      category: 'weapon', mouseUsage: 'left', implicit: true, baseSellable: false, baseDroppable: false, sellPrice: 0, buyPrice: 0 }),
+    bow:           Object.freeze({ id: 'bow',           name: 'Bow',          category: 'weapon', mouseUsage: 'left', baseSellable: true, baseDroppable: true, sellPrice: 75, buyPrice: 150 }),
+    longsword:     Object.freeze({ id: 'longsword',     name: 'Longsword',    category: 'weapon', mouseUsage: 'left', baseSellable: true, baseDroppable: true, sellPrice: 75, buyPrice: 150 }),
     zombie_strike: Object.freeze({ id: 'zombie_strike', name: 'Zombie Strike', mouseUsage: 'left' }),
 });
 
@@ -30,11 +30,78 @@ export const SPELLS = Object.freeze({
 });
 
 export const ACCESSORIES = Object.freeze({
-    cape: Object.freeze({ id: 'cape', name: 'Cape', spacebarAction: 'dash' }),
+    cape: Object.freeze({ id: 'cape', name: 'Cape', category: 'accessory', spacebarAction: 'dash', baseSellable: true, baseDroppable: true, sellPrice: 40, buyPrice: 90 }),
 });
 
 export const ARMOR_SETS = Object.freeze({
-    // Future armor sets go here.
+    leather_armor: Object.freeze({ id: 'leather_armor', name: 'Leather Armor', category: 'armor', baseSellable: true, baseDroppable: true, sellPrice: 60, buyPrice: 120 }),
+});
+
+export const CONSUMABLES = Object.freeze({
+    gold_pouch: Object.freeze({
+        id: 'gold_pouch',
+        name: 'Gold Pouch',
+        category: 'consumable',
+        baseSellable: true,
+        baseDroppable: true,
+        sellPrice: 25,
+        buyPrice: 50,
+        consumableEffect: Object.freeze({
+            effectType: 'grant_gold',
+            goldAmount: 100,
+        }),
+    }),
+    healing_gem: Object.freeze({
+        id: 'healing_gem',
+        name: 'Healing Gem',
+        category: 'consumable',
+        baseSellable: true,
+        baseDroppable: true,
+        sellPrice: 20,
+        buyPrice: 40,
+        consumableEffect: Object.freeze({
+            effectType: 'healing_gem_regen',
+            durationMs: 5000,
+            tickIntervalMs: 1000,
+            magnitude: 8,
+        }),
+    }),
+    magic_dew: Object.freeze({
+        id: 'magic_dew',
+        name: 'Magic Dew',
+        category: 'consumable',
+        baseSellable: true,
+        baseDroppable: true,
+        sellPrice: 20,
+        buyPrice: 40,
+        consumableEffect: Object.freeze({
+            effectType: 'magic_dew_regen',
+            durationMs: 5000,
+            tickIntervalMs: 1000,
+            magnitude: 6,
+        }),
+    }),
+});
+
+export const RESOURCES = Object.freeze({
+    weapon_upgrade_material: Object.freeze({
+        id: 'weapon_upgrade_material',
+        name: 'Weapon Upgrade Material',
+        category: 'resource',
+        baseSellable: true,
+        baseDroppable: true,
+        sellPrice: 10,
+        buyPrice: 20,
+    }),
+    spell_upgrade_material: Object.freeze({
+        id: 'spell_upgrade_material',
+        name: 'Spell Upgrade Material',
+        category: 'resource',
+        baseSellable: true,
+        baseDroppable: true,
+        sellPrice: 10,
+        buyPrice: 20,
+    }),
 });
 
 /**
@@ -43,5 +110,5 @@ export const ARMOR_SETS = Object.freeze({
  * @returns {object|null}
  */
 export function getItemDef(id) {
-    return WEAPONS[id] ?? SPELLS[id] ?? ACCESSORIES[id] ?? ARMOR_SETS[id] ?? null;
+    return WEAPONS[id] ?? SPELLS[id] ?? ACCESSORIES[id] ?? ARMOR_SETS[id] ?? CONSUMABLES[id] ?? RESOURCES[id] ?? null;
 }

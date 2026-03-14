@@ -14,6 +14,8 @@ export function createDefaultControlledEntityState() {
         buffs: [],
         // Loadout snapshot — null until a controlled entity with a LoadoutComponent is active.
         loadout: null,
+        inventory: null,
+        spellbook: null,
     };
 }
 
