@@ -923,6 +923,7 @@ export class GameRoom {
                     ? data.levelId
                     : (movingWorldEntity?.levelId ?? player.transform.levelId ?? 'town-square');
                 let toExitIndex = Number.isInteger(data.toExitIndex) ? data.toExitIndex : null;
+                let toExitId = typeof data.toExitId === 'string' ? data.toExitId : null;
                 let entryDirection = sanitizeDirection(data.entryDirection);
 
                 const hasCanonicalStaticLink = !!(
@@ -938,6 +939,7 @@ export class GameRoom {
                     const resolved = resolveExitTransition(fromLevelId, fromExitIndex);
                     levelId = resolved.toLevelId;
                     toExitIndex = resolved.toExitIndex;
+                    toExitId = resolved.toExitId ?? null;
                     if (!entryDirection) entryDirection = resolved.entryDirection;
                 }
 
@@ -947,10 +949,11 @@ export class GameRoom {
                 let x = typeof data.x === 'number' ? data.x : (Math.floor(fallbackW / 2) * TILE_SIZE + TILE_SIZE / 2);
                 let y = typeof data.y === 'number' ? data.y : (Math.floor(fallbackH / 2) * TILE_SIZE + TILE_SIZE / 2);
 
-                if (Number.isInteger(toExitIndex)) {
+                if (Number.isInteger(toExitIndex) || typeof toExitId === 'string') {
                     const spawn = resolveExitSpawnPosition({
                         toLevelId: levelId,
                         toExitIndex,
+                        toExitId,
                         entryDirection,
                     });
                     if (spawn) {

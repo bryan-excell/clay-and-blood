@@ -31,7 +31,7 @@ export class EntityLevelGenerator {
 
         let grid, exits, width, height;
 
-        if (def.type === 'static') {
+        if (def.kind === 'static') {
             // Use the hand-authored layout verbatim
             width  = def.width;
             height = def.height;
@@ -54,7 +54,13 @@ export class EntityLevelGenerator {
 
         return {
             id:              levelId,
-            type:            def.type,
+            stageSlug:       def.stageSlug ?? levelId,
+            stageUuid:       def.stageUuid ?? null,
+            type:            def.kind === 'static' ? 'static' : 'random',
+            kind:            def.kind ?? 'procedural',
+            displayName:     def.displayName ?? null,
+            regionId:        def.regionId ?? null,
+            tags:            Array.isArray(def.tags) ? [...def.tags] : [],
             width,
             height,
             floorTile:       def.floorTile  ?? 'floor_dirt',
@@ -118,7 +124,7 @@ export class EntityLevelGenerator {
     static addExits(scene, level, targetExits = null) {
         if (targetExits && targetExits.length > 0) {
             targetExits.forEach(exitData => {
-                this.createExitAtPosition(scene, level, exitData.x, exitData.y, exitData.exitIndex);
+                this.createExitAtPosition(scene, level, exitData.x, exitData.y, exitData.exitIndex, exitData.id ?? null);
             });
             return;
         }
@@ -153,7 +159,7 @@ export class EntityLevelGenerator {
      * @param {number} y  grid y
      * @param {number} exitIndex
      */
-    static createExitAtPosition(scene, level, x, y, exitIndex) {
+    static createExitAtPosition(scene, level, x, y, exitIndex, exitId = null) {
         const existing = level.exits.findIndex(e => e.exitIndex === exitIndex);
         if (existing !== -1) level.exits.splice(existing, 1);
 
@@ -161,7 +167,7 @@ export class EntityLevelGenerator {
 
         const tileX      = x * TILE_SIZE + TILE_SIZE / 2;
         const tileY      = y * TILE_SIZE + TILE_SIZE / 2;
-        const exitEntity = scene.entityFactory.createFromPrefab('exit', { x: tileX, y: tileY, exitIndex });
+        const exitEntity = scene.entityFactory.createFromPrefab('exit', { x: tileX, y: tileY, exitIndex, exitId });
 
         if (!exitEntity) {
             console.error(`Failed to create exit entity at ${x},${y} index ${exitIndex}`);
@@ -170,7 +176,7 @@ export class EntityLevelGenerator {
 
         if (!level.entities.exits) level.entities.exits = [];
         level.entities.exits.push(exitEntity);
-        level.exits.push({ x, y, exitIndex });
+        level.exits.push({ x, y, exitIndex, id: exitId });
 
         console.log(`Created exit ${exitIndex} at grid (${x}, ${y}), world (${tileX}, ${tileY})`);
     }

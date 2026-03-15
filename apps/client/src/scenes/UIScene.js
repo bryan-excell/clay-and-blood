@@ -7,7 +7,7 @@ import { RadialKitWidget } from '../ui/widgets/RadialKitWidget.js';
 import { ToastFeedWidget } from '../ui/widgets/ToastFeedWidget.js';
 import { MerchantShopWidget } from '../ui/widgets/MerchantShopWidget.js';
 import { UpgraderWidget } from '../ui/widgets/UpgraderWidget.js';
-import { GAME_FONT_FAMILY } from '../config.js';
+import { DEBUG_WORLD_OVERLAY_DEFAULT, GAME_FONT_FAMILY } from '../config.js';
 
 export class UIScene extends Phaser.Scene {
     constructor() {
@@ -21,12 +21,15 @@ export class UIScene extends Phaser.Scene {
         this._onCycleSpellKeyDown = null;
         this._onUseConsumableKeyDown = null;
         this._onCycleConsumableKeyDown = null;
+        this._onToggleDebugOverlayKeyDown = null;
         this._quickRadialWidget = null;
         this._escDebounceActive = false;
+        this._showWorldDebug = DEBUG_WORLD_OVERLAY_DEFAULT;
         this._pendingState     = uiStateStore.getState();
         this._equippedWeaponText = null;
         this._equippedSpellText = null;
         this._equippedConsumableText = null;
+        this._worldDebugText = null;
         this._toastFeed = null;
         this._merchantShop = null;
         this._upgrader = null;
@@ -72,6 +75,14 @@ export class UIScene extends Phaser.Scene {
             fontFamily: GAME_FONT_FAMILY,
             color: '#c5deb0',
         }).setOrigin(0, 0);
+        this._worldDebugText = this.add.text(this.scale.width - 24, 24, '', {
+            fontSize: '13px',
+            fontFamily: GAME_FONT_FAMILY,
+            color: '#d9e6f2',
+            stroke: '#0f141a',
+            strokeThickness: 4,
+            align: 'right',
+        }).setOrigin(1, 0).setDepth(760);
         this._toastFeed = new ToastFeedWidget(this);
         this._merchantShop = new MerchantShopWidget(this);
         this._merchantShop.hide();
@@ -149,6 +160,12 @@ export class UIScene extends Phaser.Scene {
         this.input.keyboard.on('keydown-Q', this._onUseConsumableKeyDown);
         this.input.keyboard.on('keydown-THREE', this._onCycleConsumableKeyDown);
         this.input.keyboard.on('keydown-UP', this._onCycleConsumableKeyDown);
+        this._onToggleDebugOverlayKeyDown = (event) => {
+            event.preventDefault?.();
+            this._showWorldDebug = !this._showWorldDebug;
+            this._renderState();
+        };
+        this.input.keyboard.on('keydown-P', this._onToggleDebugOverlayKeyDown);
         this._unsubscribeToast = eventBus.on('toast:enqueue', ({ message, durationMs }) => {
             this._toastFeed?.enqueue(message, durationMs);
         });
@@ -206,6 +223,10 @@ export class UIScene extends Phaser.Scene {
                 this.input.keyboard.off('keydown-UP', this._onCycleConsumableKeyDown);
                 this._onCycleConsumableKeyDown = null;
             }
+            if (this._onToggleDebugOverlayKeyDown) {
+                this.input.keyboard.off('keydown-P', this._onToggleDebugOverlayKeyDown);
+                this._onToggleDebugOverlayKeyDown = null;
+            }
             this._unsubscribeToast?.();
             this._unsubscribeOpenShop?.();
             this._unsubscribeCloseShop?.();
@@ -220,6 +241,7 @@ export class UIScene extends Phaser.Scene {
             this._equippedWeaponText?.destroy();
             this._equippedSpellText?.destroy();
             this._equippedConsumableText?.destroy();
+            this._worldDebugText?.destroy();
             this._toastFeed?.destroy();
             this._merchantShop?.destroy();
             this._upgrader?.destroy();
@@ -260,6 +282,7 @@ export class UIScene extends Phaser.Scene {
         this._equippedWeaponText?.setPosition(leftPadding, topPadding + 92);
         this._equippedSpellText?.setPosition(leftPadding, topPadding + 112);
         this._equippedConsumableText?.setPosition(leftPadding, topPadding + 132);
+        this._worldDebugText?.setPosition(width - 24, topPadding);
         // Drawer height tracks the scene.
         this._drawer?.setHeight(height);
         this._quickRadialWidget?.setPosition(width / 2, height / 2);
@@ -396,6 +419,19 @@ export class UIScene extends Phaser.Scene {
         this._equippedWeaponText?.setVisible(hasEntity);
         this._equippedSpellText?.setVisible(hasEntity);
         this._equippedConsumableText?.setVisible(hasEntity);
+        this._worldDebugText?.setVisible(this._showWorldDebug);
+        const worldDebug = state.worldDebug ?? null;
+        const debugLines = [
+            `Stage Slug: ${worldDebug?.stageSlug ?? 'unknown'}`,
+            `Stage UUID: ${worldDebug?.stageUuid ?? 'unknown'}`,
+            `Name: ${worldDebug?.displayName ?? 'unknown'}`,
+            `Kind: ${worldDebug?.stageKind ?? 'unknown'}`,
+            `Region: ${worldDebug?.regionName ?? worldDebug?.regionId ?? 'none'}`,
+        ];
+        if (Number.isFinite(worldDebug?.tileX) && Number.isFinite(worldDebug?.tileY)) {
+            debugLines.push(`Tile: ${worldDebug.tileX}, ${worldDebug.tileY}`);
+        }
+        this._worldDebugText?.setText(this._showWorldDebug ? debugLines.join('\n') : '');
         if (!state.quickRadialOpen) this._quickRadialWidget?.hide();
 
         if (!hasEntity) {

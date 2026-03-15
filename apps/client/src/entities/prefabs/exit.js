@@ -11,10 +11,12 @@ class ExitComponent extends Component {
     /**
      * Create a new exit component
      * @param {number} exitIndex - The index of this exit in the stage
+     * @param {string|null} exitId - Stable exit identifier for authored stages
      */
-    constructor(exitIndex) {
+    constructor(exitIndex, exitId = null) {
         super('exit');
         this.exitIndex = exitIndex;
+        this.exitId = typeof exitId === 'string' ? exitId : null;
     }
 
     /**
@@ -23,7 +25,8 @@ class ExitComponent extends Component {
      */
     getNetworkState() {
         return {
-            exitIndex: this.exitIndex
+            exitIndex: this.exitIndex,
+            exitId: this.exitId,
         };
     }
 }
@@ -41,7 +44,8 @@ export function createExit(scene, config = {}) {
         width = TILE_SIZE,
         height = TILE_SIZE,
         color = COLOR_EXIT,
-        exitIndex = 0
+        exitIndex = 0,
+        exitId = null,
     } = config;
 
     const exit = scene.entityFactory.createEntity(`exit_${exitIndex}`);
@@ -61,7 +65,7 @@ export function createExit(scene, config = {}) {
     exit.addComponent(new PhysicsCapability('static'));
 
     // 4. Add exit-specific logic
-    exit.addComponent(new ExitComponent(exitIndex));
+    exit.addComponent(new ExitComponent(exitIndex, exitId));
 
     return exit;
 }

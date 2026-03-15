@@ -138,7 +138,7 @@ export class EntityLevelManager {
                 const tileX = exitData.x * TILE_SIZE + TILE_SIZE / 2;
                 const tileY = exitData.y * TILE_SIZE + TILE_SIZE / 2;
                 const exitEntity = this.scene.entityFactory.createFromPrefab('exit', {
-                    x: tileX, y: tileY, exitIndex: exitData.exitIndex
+                    x: tileX, y: tileY, exitIndex: exitData.exitIndex, exitId: exitData.id ?? null,
                 });
                 level.entities.exits.push(exitEntity);
                 level.grid[exitData.y][exitData.x] = 2;

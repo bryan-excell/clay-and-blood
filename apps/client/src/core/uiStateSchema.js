@@ -23,6 +23,16 @@ export function createDefaultUiState() {
     return {
         schemaVersion: UI_STATE_SCHEMA_VERSION,
         controlledEntity: createDefaultControlledEntityState(),
+        worldDebug: {
+            stageSlug: null,
+            stageUuid: null,
+            displayName: null,
+            stageKind: null,
+            regionId: null,
+            regionName: null,
+            tileX: null,
+            tileY: null,
+        },
         networkSelf: null,
         // True while the inventory drawer is open. Gameplay systems read this
         // to suppress clicks that land on the drawer panel.

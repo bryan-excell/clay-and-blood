@@ -21,6 +21,7 @@ export const ARROW_MAX_RANGE = 1000;
 export const ARROW_PENETRATION = 0;
 
 export const GAME_FONT_FAMILY = '"Libre Baskerville", Georgia, serif';
+export const DEBUG_WORLD_OVERLAY_DEFAULT = import.meta?.env?.VITE_DEBUG_WORLD_OVERLAY === '1';
 
 // Attack movement feel
 export const ATTACK_MOVE_SPEED_MULTIPLIER = 0.25;

@@ -2,7 +2,9 @@ import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { createDefaultControlledEntityState } from '../core/uiStateSchema.js';
+import { gameState } from '../core/GameState.js';
 import { WEAPONS, SPELLS, ACCESSORIES, ARMOR_SETS, CONSUMABLES, RESOURCES, getItemDef } from '../data/ItemRegistry.js';
+import { TILE_SIZE, getRegionDefinition, getStageDefinition } from '@clay-and-blood/shared';
 
 const EMPTY_BUFFS = Object.freeze([]);
 
@@ -123,7 +125,11 @@ export class UiProjectionSystem {
 
     _publish() {
         const next = this._buildControlledEntityState();
-        uiStateStore.set('controlledEntity', next);
+        const worldDebug = this._buildWorldDebugState();
+        uiStateStore.patch({
+            controlledEntity: next,
+            worldDebug,
+        });
     }
 
     _buildControlledEntityState() {
@@ -214,6 +220,25 @@ export class UiProjectionSystem {
                     upgradeLevel: entry.upgradeLevel ?? 0,
                 })),
             } : null,
+        };
+    }
+
+    _buildWorldDebugState() {
+        const controlled = this.scene.getLocallyControlledEntity?.();
+        const transform = controlled?.getComponent('transform');
+        const stageSlug = transform?.levelId ?? gameState.currentLevelId ?? null;
+        const stage = stageSlug ? getStageDefinition(stageSlug) : null;
+        const region = stage?.regionId ? getRegionDefinition(stage.regionId) : null;
+
+        return {
+            stageSlug,
+            stageUuid: stage?.stageUuid ?? null,
+            displayName: stage?.displayName ?? null,
+            stageKind: stage?.kind ?? null,
+            regionId: stage?.regionId ?? null,
+            regionName: region?.displayName ?? null,
+            tileX: Number.isFinite(transform?.position?.x) ? Math.floor(transform.position.x / TILE_SIZE) : null,
+            tileY: Number.isFinite(transform?.position?.y) ? Math.floor(transform.position.y / TILE_SIZE) : null,
         };
     }
 }

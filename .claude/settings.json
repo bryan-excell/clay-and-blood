@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep -l \"region\\\\|world\\\\|stage\\\\|exit\\\\|tile\\\\|map\")"
+    ]
+  }
+}

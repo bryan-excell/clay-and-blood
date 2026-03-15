@@ -55,12 +55,14 @@ export class ExitManager {
 
         let targetLevelId;
         let targetExitIndex;
+        let targetExitId = null;
         let entryDirection = null;
 
         if (!currentLevel.exitConnections || !currentLevel.exitConnections[exitIndex]) {
             const resolved = resolveExitTransition(currentLevelId, exitIndex);
             targetLevelId = resolved.toLevelId;
             targetExitIndex = resolved.toExitIndex;
+            targetExitId = resolved.toExitId ?? null;
             entryDirection = resolved.entryDirection ?? null;
 
             this.scene.levelManager.connectLevels(
@@ -73,13 +75,16 @@ export class ExitManager {
             const connection = currentLevel.exitConnections[exitIndex];
             targetLevelId = connection.levelId;
             targetExitIndex = connection.exitIndex;
+            targetExitId = connection.exitId ?? null;
             entryDirection = connection.entryDirection ?? null;
         }
 
         const targetLevel = this.scene.levelManager.getLevel(targetLevelId);
-        const targetExit = targetLevel?.exits?.find((e) => e.exitIndex === targetExitIndex);
+        const targetExit = (typeof targetExitId === 'string'
+            ? targetLevel?.exits?.find((e) => e.id === targetExitId)
+            : null) ?? targetLevel?.exits?.find((e) => e.exitIndex === targetExitIndex);
         if (!targetExit) {
-            console.error(`Exit ${targetExitIndex} not found in target level ${targetLevelId}`);
+            console.error(`Exit ${targetExitId ?? targetExitIndex} not found in target level ${targetLevelId}`);
             this.canTransition = true;
             return;
         }
@@ -98,7 +103,8 @@ export class ExitManager {
                 entityKey: this.getEntityNetworkKey(controlledEntity),
                 fromLevelId: currentLevelId,
                 fromExitIndex: exitIndex,
-                toExitIndex: targetExitIndex,
+                toExitIndex: targetExit.exitIndex,
+                toExitId: targetExit.id ?? targetExitId ?? null,
                 entryDirection,
             });
         }
@@ -131,6 +137,7 @@ export class ExitManager {
         const spawn = resolveExitSpawnPosition({
             toLevelId: targetLevel.id,
             toExitIndex: targetExit.exitIndex,
+            toExitId: targetExit.id ?? null,
             entryDirection,
         });
         if (!spawn) return null;

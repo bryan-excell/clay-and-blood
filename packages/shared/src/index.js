@@ -1,17 +1,21 @@
+import {
+    STATIC_EXIT_CONNECTIONS,
+    STATIC_STAGE_SPAWN_POINTS,
+    getStageDefinition,
+} from './world/stageRegistry.js';
+import {
+    TILE_EXIT,
+    TILE_FLOOR,
+    TILE_VOID,
+    TILE_WALL,
+    isSolidTile,
+    isWalkableTile,
+} from './world/tileRegistry.js';
+
 // Tile / world constants (defaults for procedurally generated levels)
 export const TILE_SIZE = 64;
 export const STAGE_WIDTH = 20;
 export const STAGE_HEIGHT = 20;
-
-// Tile values
-// 0 = floor (walkable)
-// 1 = wall  (solid, rendered when adjacent to open space)
-// 2 = exit  (walkable, triggers level transition)
-// 3 = void  (outside the playable area; not rendered, treated as solid)
-export const TILE_FLOOR = 0;
-export const TILE_WALL  = 1;
-export const TILE_EXIT  = 2;
-export const TILE_VOID  = 3;
 
 // Player constants
 export const PLAYER_RADIUS = 16;
@@ -19,7 +23,6 @@ export const PLAYER_SPEED = 200;
 export const PLAYER_SPRINT_MULTIPLIER = 1.75;
 export const PLAYER_DASH_SPEED = 800;
 export const PLAYER_DASH_DURATION = 250; // ms
-const SOLID_TILE_TYPES = new Set([TILE_WALL, TILE_VOID]);
 const SWEEP_EPSILON = 1e-6;
 
 /**
@@ -96,7 +99,7 @@ export function resolvePlayerCollisions(x, y, grid, vxHint = 0, vyHint = 0) {
     const r = PLAYER_RADIUS;
     const gridH = grid.length;
     const gridW = gridH > 0 ? grid[0].length : 0;
-    const isSolid = (tile) => SOLID_TILE_TYPES.has(tile);
+    const isSolid = (tile) => isSolidTile(tile);
     const radiusCells = 2;
 
     // Iterative depenetration to robustly resolve corner and deep-overlap cases.
@@ -225,7 +228,7 @@ function sweepPlayerMove(x, y, dx, dy, grid) {
     const r = PLAYER_RADIUS;
     const rows = grid.length;
     const cols = rows > 0 ? grid[0].length : 0;
-    const isSolid = (tile) => SOLID_TILE_TYPES.has(tile);
+    const isSolid = (tile) => isSolidTile(tile);
 
     let remDx = dx;
     let remDy = dy;
@@ -521,169 +524,12 @@ export function generateLevelData(levelId, options = {}) {
     return { grid, exits, width: w, height: h };
 }
 
-// ─── Static stage layouts ─────────────────────────────────────────────────────
-// Authoritative tile geometry used by both client and server.
-// Each entry: { width, height, tiles, exits }.
-// Client-only metadata (connections, floorTile, spawnPoint, display name)
-// lives in StageDefinitions.js.
-
-function _emptyRoom(w, h) {
-    return Array.from({ length: h }, (_, y) =>
-        Array.from({ length: w }, (_, x) =>
-            x === 0 || x === w - 1 || y === 0 || y === h - 1 ? 1 : 0
-        )
-    );
-}
-
-export const STATIC_STAGE_LAYOUTS = (() => {
-    const layouts = {};
-
-    // Town Square: 40×40, open floor, one exit per cardinal side,
-    // plus a small inn building in the northwest area and a vendor shop
-    // in the northeast area.
-    {
-        const w = 40, h = 40;
-        const tiles = _emptyRoom(w, h);
-        const midX = Math.floor(w / 2);
-        const midY = Math.floor(h / 2);
-
-        // Cardinal exits
-        tiles[0][midX]     = 2; // north, exitIndex 0
-        tiles[h - 1][midX] = 2; // south, exitIndex 1
-        tiles[midY][0]     = 2; // west,  exitIndex 2
-        tiles[midY][w - 1] = 2; // east,  exitIndex 3
-
-        // Small Inn building in the NW area (x=4–10, y=3–9).
-        // The exterior walls outline a small structure; the interior
-        // floor tiles are enclosed and not directly accessible from
-        // the square — players enter by stepping on the door exit.
-        for (let bx = 4; bx <= 10; bx++) {
-            tiles[3][bx] = 1; // north wall of building
-            tiles[9][bx] = 1; // south wall of building
-        }
-        for (let by = 4; by <= 8; by++) {
-            tiles[by][4]  = 1; // west wall
-            tiles[by][10] = 1; // east wall
-        }
-        // Door on south wall — stepping on this exits to the Inn.
-        tiles[9][7] = 2; // exitIndex 4
-
-        // Small vendor building in the NE area (x=29–35, y=3–9).
-        for (let bx = 29; bx <= 35; bx++) {
-            tiles[3][bx] = 1;
-            tiles[9][bx] = 1;
-        }
-        for (let by = 4; by <= 8; by++) {
-            tiles[by][29] = 1;
-            tiles[by][35] = 1;
-        }
-        // Door opening on the south wall into the town square.
-        tiles[9][32] = 0;
-
-        layouts['town-square'] = {
-            width: w, height: h, tiles,
-            exits: [
-                { x: midX, y: 0,     exitIndex: 0, side: 'north' },
-                { x: midX, y: h - 1, exitIndex: 1, side: 'south' },
-                { x: 0,    y: midY,  exitIndex: 2, side: 'west'  },
-                { x: w - 1,y: midY,  exitIndex: 3, side: 'east'  },
-                { x: 7,    y: 9,     exitIndex: 4, side: 'interior' }, // Inn door
-            ],
-        };
-    }
-
-    // West Gate: 20×9 narrow horizontal hallway.
-    {
-        const w = 20, h = 9;
-        const tiles = _emptyRoom(w, h);
-        const midY = Math.floor(h / 2);
-        tiles[midY][0]     = 2; // west → The Wilds
-        tiles[midY][w - 1] = 2; // east → Town Square
-        layouts['west-gate'] = {
-            width: w, height: h, tiles,
-            exits: [
-                { x: 0,     y: midY, exitIndex: 0, side: 'west' },
-                { x: w - 1, y: midY, exitIndex: 1, side: 'east' },
-            ],
-        };
-    }
-
-    // Inn: 16×12 L-shaped room.
-    // The top-right corner (x=8–15, y=0–5) is void (TILE_VOID=3),
-    // creating an L-shape with an impassable void border.
-    // Layout:
-    //   y 0–5 : left arm of the L  (x 0–7 wall/floor, x 8–15 void)
-    //   y 6–11: full-width base of the L
-    //   Exit at (5, 11) — south wall, leads back to Town Square.
-    {
-        const w = 16, h = 12;
-        // Fill everything as void first, then carve out the L shape
-        const tiles = Array.from({ length: h }, () => new Array(w).fill(3));
-
-        // Left arm: x=0–7, y=0–5
-        for (let y = 0; y <= 5; y++) {
-            for (let x = 0; x <= 7; x++) {
-                // border = wall, interior = floor
-                tiles[y][x] = (x === 0 || x === 7 || y === 0) ? 1 : 0;
-            }
-        }
-
-        // Base of L: x=0–15, y=6–11
-        for (let y = 6; y <= 11; y++) {
-            for (let x = 0; x <= 15; x++) {
-                tiles[y][x] = (x === 0 || x === 15 || y === 11) ? 1 : 0;
-            }
-        }
-
-        // Inner corner — row y=6 needs a wall along x=7–15 to close the left arm
-        for (let x = 7; x <= 15; x++) {
-            tiles[6][x] = 1;
-        }
-        // Left arm right-side wall also needs to connect down to y=6
-        // (already handled: x=7, y=0–6 are all walls from the two loops above)
-
-        // South exit: replaces the south-wall tile at (5, 11)
-        tiles[11][5] = 2; // exitIndex 0, back to Town Square
-
-        layouts['inn'] = {
-            width: w, height: h, tiles,
-            exits: [
-                { x: 5, y: 11, exitIndex: 0, side: 'south' },
-            ],
-        };
-    }
-
-    return layouts;
-})();
-
-// Canonical fixed links between hand-authored stages.
-// entryDirection indicates where in the destination stage the traveler should
-// be placed relative to the destination exit tile.
-export const STATIC_EXIT_CONNECTIONS = {
-    'town-square': {
-        2: { levelId: 'west-gate', exitIndex: 1, entryDirection: 'west'  },
-        4: { levelId: 'inn',       exitIndex: 0, entryDirection: 'north' },
-    },
-    'west-gate': {
-        1: { levelId: 'town-square', exitIndex: 2, entryDirection: 'east' },
-    },
-    'inn': {
-        0: { levelId: 'town-square', exitIndex: 4, entryDirection: 'south' },
-    },
-};
-
-export const STATIC_STAGE_SPAWN_POINTS = Object.freeze({
-    'town-square': Object.freeze({ x: 20, y: 20 }),
-    'west-gate': Object.freeze({ x: 10, y: 4 }),
-    'inn': Object.freeze({ x: 3, y: 9 }),
-});
-
 /**
  * Resolve a transition from a source exit.
  * Static links take precedence; all other exits use deterministic wild links.
  * @param {string} fromLevelId
  * @param {number} fromExitIndex
- * @returns {{ toLevelId: string, toExitIndex: number, entryDirection: ('north'|'east'|'south'|'west'|null) }}
+ * @returns {{ toLevelId: string, toExitIndex: number, toExitId: (string|null), entryDirection: ('north'|'east'|'south'|'west'|null) }}
  */
 export function resolveExitTransition(fromLevelId, fromExitIndex) {
     const staticConn = STATIC_EXIT_CONNECTIONS[fromLevelId]?.[fromExitIndex];
@@ -691,6 +537,7 @@ export function resolveExitTransition(fromLevelId, fromExitIndex) {
         return {
             toLevelId: staticConn.levelId,
             toExitIndex: staticConn.exitIndex,
+            toExitId: staticConn.exitId ?? null,
             entryDirection: CARDINAL_DIRECTIONS.includes(staticConn.entryDirection)
                 ? staticConn.entryDirection
                 : null,
@@ -701,6 +548,7 @@ export function resolveExitTransition(fromLevelId, fromExitIndex) {
     return {
         toLevelId: dynamic.toLevelId,
         toExitIndex: dynamic.toExitIndex,
+        toExitId: null,
         entryDirection: null,
     };
 }
@@ -709,23 +557,29 @@ export * from './combatData.js';
 export * from './resources.js';
 export * from './spawnDefinitions.js';
 export * from './interactableDefinitions.js';
+export * from './world/stageRegistry.js';
+export * from './world/regionRegistry.js';
+export * from './world/tileRegistry.js';
 
 /**
  * Resolve a deterministic spawn position for arriving through an exit.
  * @param {{
  *   toLevelId: string,
- *   toExitIndex: number,
+ *   toExitIndex?: number,
+ *   toExitId?: string|null,
  *   entryDirection?: 'north'|'east'|'south'|'west'|null
  * }} params
  * @returns {{ x:number, y:number, tileX:number, tileY:number, entryDirection:'north'|'east'|'south'|'west'|null }}
  */
-export function resolveExitSpawnPosition({ toLevelId, toExitIndex, entryDirection = null }) {
+export function resolveExitSpawnPosition({ toLevelId, toExitIndex = null, toExitId = null, entryDirection = null }) {
     const { grid, exits } = getStageData(toLevelId);
     if (!grid || !Array.isArray(exits) || exits.length === 0) {
         return null;
     }
 
-    const targetExit = exits.find((e) => e.exitIndex === toExitIndex) ?? exits[0];
+    const targetExit = (typeof toExitId === 'string'
+        ? exits.find((e) => e.id === toExitId)
+        : null) ?? exits.find((e) => e.exitIndex === toExitIndex) ?? exits[0];
     if (!targetExit) return null;
 
     const resolvedDir = CARDINAL_DIRECTIONS.includes(entryDirection)
@@ -749,7 +603,7 @@ export function resolveStageSpawnPosition(levelId) {
     const { grid } = getStageData(levelId);
     if (!grid || grid.length === 0 || !Array.isArray(grid[0])) return null;
 
-    const spawn = STATIC_STAGE_SPAWN_POINTS[levelId] ?? null;
+    const spawn = getStageDefinition(levelId)?.spawnPoint ?? STATIC_STAGE_SPAWN_POINTS[levelId] ?? null;
     const tileX = Number.isFinite(spawn?.x) ? spawn.x : Math.floor(grid[0].length / 2);
     const tileY = Number.isFinite(spawn?.y) ? spawn.y : Math.floor(grid.length / 2);
 
@@ -769,16 +623,20 @@ export function resolveStageSpawnPosition(levelId) {
  * @returns {{ grid: number[][], exits: object[], width: number, height: number }}
  */
 export function getStageData(levelId, options = {}) {
-    const layout = STATIC_STAGE_LAYOUTS[levelId];
-    if (layout) {
+    const stageDefinition = getStageDefinition(levelId);
+    if (stageDefinition?.kind === 'static' && Array.isArray(stageDefinition.tiles)) {
         return {
-            grid:   layout.tiles.map(row => [...row]),
-            exits:  layout.exits.map(e => ({ ...e })),
-            width:  layout.width,
-            height: layout.height,
+            grid: stageDefinition.tiles.map((row) => [...row]),
+            exits: stageDefinition.exits.map((e) => ({ ...e })),
+            width: stageDefinition.width,
+            height: stageDefinition.height,
         };
     }
-    return generateLevelData(levelId, options);
+    return generateLevelData(levelId, {
+        width: stageDefinition?.width ?? options.width,
+        height: stageDefinition?.height ?? options.height,
+        generator: stageDefinition?.generator ?? stageDefinition?.generationConfig?.generator ?? options.generator,
+    });
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -818,7 +676,7 @@ function _oppositeDirection(direction) {
 }
 
 function _isWalkableTile(tile) {
-    return tile === TILE_FLOOR || tile === TILE_EXIT;
+    return isWalkableTile(tile);
 }
 
 function _findArrivalTileNearExit(grid, exit, preferredDirection) {
