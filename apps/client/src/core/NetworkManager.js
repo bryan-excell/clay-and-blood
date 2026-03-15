@@ -442,14 +442,45 @@ class NetworkManager {
 
     /**
      * Request an inventory entry sale.
+     * @param {string} merchantId
      * @param {string} entryId
      * @param {'one'|'all'} mode
      */
-    sendSellEntry(entryId, mode = 'one') {
+    sendSellEntry(merchantId, entryId, mode = 'one') {
         this.send({
             type: MSG.SELL_ENTRY,
+            merchantId: typeof merchantId === 'string' ? merchantId : null,
             entryId: typeof entryId === 'string' ? entryId : null,
             mode: mode === 'all' ? 'all' : 'one',
+        });
+    }
+
+    /**
+     * Request buying one merchant item.
+     * @param {string} merchantId
+     * @param {string} definitionId
+     */
+    sendBuyMerchantItem(merchantId, definitionId) {
+        this.send({
+            type: MSG.BUY_MERCHANT_ITEM,
+            merchantId: typeof merchantId === 'string' ? merchantId : null,
+            definitionId: typeof definitionId === 'string' ? definitionId : null,
+        });
+    }
+
+    sendUpgradeWeaponItem(upgraderId, entryId) {
+        this.send({
+            type: MSG.UPGRADE_WEAPON_ITEM,
+            upgraderId: typeof upgraderId === 'string' ? upgraderId : null,
+            entryId: typeof entryId === 'string' ? entryId : null,
+        });
+    }
+
+    sendUpgradeSpellItem(upgraderId, spellId) {
+        this.send({
+            type: MSG.UPGRADE_SPELL_ITEM,
+            upgraderId: typeof upgraderId === 'string' ? upgraderId : null,
+            spellId: typeof spellId === 'string' ? spellId : null,
         });
     }
 

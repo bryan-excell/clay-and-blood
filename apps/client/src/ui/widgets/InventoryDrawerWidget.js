@@ -364,7 +364,7 @@ export class InventoryDrawerWidget {
         const itemId = item?.definitionId ?? item?.spellId ?? item?.id ?? null;
         const rightClick = pointer?.rightButtonDown?.() || pointer?.button === 2;
         if (rightClick) {
-            if (item?.canDrop || item?.canSell) this._showContextMenu(tabId, item, pointer);
+            if (item?.canDrop) this._showContextMenu(tabId, item, pointer);
             else this._hideContextMenu();
             return;
         }
@@ -374,21 +374,12 @@ export class InventoryDrawerWidget {
 
     _showContextMenu(tabId, item, pointer) {
         this._hideContextMenu();
-        if ((!item?.canDrop && !item?.canSell) || typeof item?.entryId !== 'string') return;
+        if (!item?.canDrop || typeof item?.entryId !== 'string') return;
 
-        const options = [];
-        if (item.canDrop) {
-            options.push(
-                { label: 'Drop 1', action: 'drop', mode: 'one' },
-                { label: 'Drop All', action: 'drop', mode: 'all' },
-            );
-        }
-        if (item.canSell) {
-            options.push(
-                { label: 'Sell 1', action: 'sell', mode: 'one' },
-                { label: 'Sell All', action: 'sell', mode: 'all' },
-            );
-        }
+        const options = [
+            { label: 'Drop 1', action: 'drop', mode: 'one' },
+            { label: 'Drop All', action: 'drop', mode: 'all' },
+        ];
         if (options.length === 0) return;
         const menuX = Phaser.Math.Clamp(
             pointer.worldX + 12 - this._container.x,
@@ -416,11 +407,7 @@ export class InventoryDrawerWidget {
             bg.on('pointerover', () => bg.setFillStyle(0x1f2f48, 1));
             bg.on('pointerout', () => bg.setFillStyle(0x101926, 0.98));
             bg.on('pointerdown', () => {
-                if (option.action === 'sell') {
-                    eventBus.emit('ui:sellEntry', { entryId: item.entryId, mode: option.mode, tabId });
-                } else {
-                    eventBus.emit('ui:dropEntry', { entryId: item.entryId, mode: option.mode, tabId });
-                }
+                eventBus.emit('ui:dropEntry', { entryId: item.entryId, mode: option.mode, tabId });
                 this._hideContextMenu();
             });
             this._container.add(bg);

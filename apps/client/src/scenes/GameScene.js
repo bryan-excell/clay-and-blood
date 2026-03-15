@@ -1130,9 +1130,21 @@ export class GameScene extends Phaser.Scene {
             if (typeof entryId !== 'string' || !entryId) return;
             networkManager.sendDropEntry(entryId, mode === 'all' ? 'all' : 'one');
         });
-        eventBus.on('ui:sellEntry', ({ entryId, mode }) => {
+        eventBus.on('ui:sellEntry', ({ merchantId, entryId, mode }) => {
             if (typeof entryId !== 'string' || !entryId) return;
-            networkManager.sendSellEntry(entryId, mode === 'all' ? 'all' : 'one');
+            networkManager.sendSellEntry(merchantId, entryId, mode === 'all' ? 'all' : 'one');
+        });
+        eventBus.on('ui:buyMerchantItem', ({ merchantId, definitionId }) => {
+            if (typeof merchantId !== 'string' || typeof definitionId !== 'string' || !definitionId) return;
+            networkManager.sendBuyMerchantItem(merchantId, definitionId);
+        });
+        eventBus.on('ui:upgradeWeaponItem', ({ upgraderId, entryId }) => {
+            if (typeof upgraderId !== 'string' || typeof entryId !== 'string') return;
+            networkManager.sendUpgradeWeaponItem(upgraderId, entryId);
+        });
+        eventBus.on('ui:upgradeSpellItem', ({ upgraderId, spellId }) => {
+            if (typeof upgraderId !== 'string' || typeof spellId !== 'string') return;
+            networkManager.sendUpgradeSpellItem(upgraderId, spellId);
         });
 
         // Replicate any equip change for the controlled entity to the server.
@@ -2608,6 +2620,8 @@ export class GameScene extends Phaser.Scene {
     _refreshInteractablesForCurrentLevel() {
         const levelId = gameState.currentLevelId ?? null;
         if (!levelId || this._renderedInteractableLevelId === levelId) return;
+        eventBus.emit('ui:closeMerchantShop');
+        eventBus.emit('ui:closeUpgrader');
 
         for (const entity of this._interactableEntities.values()) {
             entity?.destroy?.();
@@ -2617,7 +2631,7 @@ export class GameScene extends Phaser.Scene {
         this._renderedInteractableLevelId = levelId;
 
         for (const definition of getInteractableDefinitionsForLevel(levelId)) {
-            if (definition.kind !== 'warm_fire') continue;
+            if (definition.kind !== 'warm_fire' && definition.kind !== 'vendor_shop' && definition.kind !== 'weapon_upgrader' && definition.kind !== 'spell_upgrader') continue;
             const x = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
             const y = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
             const entityId = definition.interactableId.replace(/[^a-z0-9_-]/gi, '_');
@@ -2718,10 +2732,24 @@ export class GameScene extends Phaser.Scene {
             this._interactLabel.setText(`${nearest.definition.displayName}\n${nearest.definition.promptText}`);
             this._interactLabel.setPosition(nearest.x, nearest.y - TILE_SIZE * 0.8);
             if (Phaser.Input.Keyboard.JustDown(this._interactKey)) {
-                if (!nearest.definition.interactableId?.startsWith?.('world:')) {
-                    this._pendingWorldResetFxUntilMs = performance.now() + 2000;
+                if (nearest.definition.kind === 'vendor_shop') {
+                    eventBus.emit('ui:openMerchantShop', {
+                        merchantId: nearest.definition.interactableId,
+                        title: nearest.definition.shopTitle ?? nearest.definition.displayName ?? 'Shop',
+                        stock: Array.isArray(nearest.definition.shopStock) ? nearest.definition.shopStock : [],
+                    });
+                } else if (nearest.definition.kind === 'weapon_upgrader' || nearest.definition.kind === 'spell_upgrader') {
+                    eventBus.emit('ui:openUpgrader', {
+                        upgraderId: nearest.definition.interactableId,
+                        type: nearest.definition.kind === 'weapon_upgrader' ? 'weapon' : 'spell',
+                        title: nearest.definition.menuTitle ?? nearest.definition.displayName ?? 'Upgrader',
+                    });
+                } else {
+                    if (!nearest.definition.interactableId?.startsWith?.('world:')) {
+                        this._pendingWorldResetFxUntilMs = performance.now() + 2000;
+                    }
+                    networkManager.sendInteract(nearest.definition.interactableId);
                 }
-                networkManager.sendInteract(nearest.definition.interactableId);
             }
         }
 

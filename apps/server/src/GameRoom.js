@@ -111,6 +111,12 @@ const ITEM_DEFINITIONS = Object.freeze({
     weapon_upgrade_material: Object.freeze({ id: 'weapon_upgrade_material', name: 'Weapon Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true, sellPrice: 10, buyPrice: 20 }),
     spell_upgrade_material: Object.freeze({ id: 'spell_upgrade_material', name: 'Spell Upgrade Material', category: INVENTORY_CATEGORY_RESOURCE, baseSellable: true, baseDroppable: true, sellPrice: 10, buyPrice: 20 }),
 });
+const MAX_UPGRADE_LEVEL = 3;
+const UPGRADE_COST_BY_LEVEL = Object.freeze({
+    0: Object.freeze({ gold: 100, materials: 1 }),
+    1: Object.freeze({ gold: 200, materials: 2 }),
+    2: Object.freeze({ gold: 300, materials: 3 }),
+});
 const SEEDED_WORLD_DROPS = Object.freeze([
     // Spread the test loot across the walkable base of the inn so each pickup is easy to see.
     Object.freeze({ entityKey: 'world:loot_inn_cape', definitionId: 'cape', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 2 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
@@ -126,6 +132,11 @@ const SEEDED_WORLD_DROPS = Object.freeze([
 
 function getItemDefinition(definitionId) {
     return typeof definitionId === 'string' ? ITEM_DEFINITIONS[definitionId] ?? null : null;
+}
+
+function getUpgradeCostForLevel(currentLevel) {
+    const normalized = Number.isFinite(currentLevel) ? Math.max(0, Math.floor(currentLevel)) : 0;
+    return UPGRADE_COST_BY_LEVEL[normalized] ?? null;
 }
 
 function buildInventoryEntry(entryId, definitionId, quantity = 1, upgradeLevel = 0) {
@@ -443,10 +454,35 @@ export class GameRoom {
             }
 
             case MSG.SELL_ENTRY: {
+                const merchantId = typeof data.merchantId === 'string' ? data.merchantId : null;
                 const entryId = typeof data.entryId === 'string' ? data.entryId : null;
                 const mode = data.mode === 'all' ? 'all' : 'one';
-                if (!entryId) break;
-                this._sellInventoryEntry(sessionId, entryId, mode);
+                if (!merchantId || !entryId) break;
+                this._sellInventoryEntry(sessionId, merchantId, entryId, mode);
+                break;
+            }
+
+            case MSG.BUY_MERCHANT_ITEM: {
+                const merchantId = typeof data.merchantId === 'string' ? data.merchantId : null;
+                const definitionId = sanitizeEquipId(data.definitionId);
+                if (!merchantId || !definitionId) break;
+                this._buyMerchantItem(sessionId, merchantId, definitionId);
+                break;
+            }
+
+            case MSG.UPGRADE_WEAPON_ITEM: {
+                const upgraderId = typeof data.upgraderId === 'string' ? data.upgraderId : null;
+                const entryId = typeof data.entryId === 'string' ? data.entryId : null;
+                if (!upgraderId || !entryId) break;
+                this._upgradeWeaponItem(sessionId, upgraderId, entryId);
+                break;
+            }
+
+            case MSG.UPGRADE_SPELL_ITEM: {
+                const upgraderId = typeof data.upgraderId === 'string' ? data.upgraderId : null;
+                const spellId = sanitizeEquipId(data.spellId);
+                if (!upgraderId || !spellId) break;
+                this._upgradeSpellItem(sessionId, upgraderId, spellId);
                 break;
             }
 
@@ -2608,19 +2644,8 @@ export class GameRoom {
             return;
         }
         const definition = getInteractableDefinition(interactableId);
-        if (!definition || definition.kind !== 'warm_fire') return;
-
-        const playerLevelId = player.transform?.levelId ?? null;
-        if (playerLevelId !== definition.levelId) return;
-        const x = player.transform?.x;
-        const y = player.transform?.y;
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-
-        const interactX = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
-        const interactY = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
-        const radius = Number.isFinite(definition.interactionRadius) ? definition.interactionRadius : TILE_SIZE * 1.5;
-        const distSq = (x - interactX) ** 2 + (y - interactY) ** 2;
-        if (distSq > radius * radius) return;
+        if (!definition || !this._playerCanUseInteractable(player, definition)) return;
+        if (definition.kind !== 'warm_fire') return;
 
         this._restorePlayerToFullHealth(sessionId);
         this._resetRespawnableWorldEntities({
@@ -2628,6 +2653,20 @@ export class GameRoom {
             sessionId,
             interactableId,
         });
+    }
+
+    _playerCanUseInteractable(player, definition) {
+        if (!player || !definition) return false;
+        const playerLevelId = player.transform?.levelId ?? null;
+        if (playerLevelId !== definition.levelId) return false;
+        const x = player.transform?.x;
+        const y = player.transform?.y;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+        const interactX = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
+        const interactY = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
+        const radius = Number.isFinite(definition.interactionRadius) ? definition.interactionRadius : TILE_SIZE * 1.5;
+        const distSq = (x - interactX) ** 2 + (y - interactY) ** 2;
+        return distSq <= radius * radius;
     }
 
     _findNearestHostileCombatantInRange(sourceEntityKey, range) {
@@ -3405,9 +3444,14 @@ export class GameRoom {
         return true;
     }
 
-    _sellInventoryEntry(sessionId, entryId, mode = 'one') {
+    _sellInventoryEntry(sessionId, merchantId, entryId, mode = 'one') {
         const player = this.players.get(sessionId);
         if (!player) return false;
+        const merchant = getInteractableDefinition(merchantId);
+        if (!merchant || merchant.kind !== 'vendor_shop' || !this._playerCanUseInteractable(player, merchant)) {
+            this._enqueueToast(sessionId, 'Move closer to the vendor', 1400);
+            return false;
+        }
 
         const entry = this._findInventoryEntry(sessionId, entryId);
         if (!entry || !Number.isFinite(entry.quantity) || entry.quantity <= 0) return false;
@@ -3447,6 +3491,199 @@ export class GameRoom {
         const quantityText = sellQuantity > 1 ? ` x${sellQuantity}` : '';
         const goldText = goldAward > 0 ? ` (+${goldAward} gold)` : '';
         this._enqueueToast(sessionId, `Sold: ${definition.name}${quantityText}${goldText}`, 1400);
+        return true;
+    }
+
+    _buyMerchantItem(sessionId, merchantId, definitionId) {
+        const player = this.players.get(sessionId);
+        if (!player) return false;
+        const merchant = getInteractableDefinition(merchantId);
+        if (!merchant || merchant.kind !== 'vendor_shop' || !this._playerCanUseInteractable(player, merchant)) {
+            this._enqueueToast(sessionId, 'Move closer to the vendor', 1400);
+            return false;
+        }
+
+        const stock = Array.isArray(merchant.shopStock) ? merchant.shopStock : [];
+        if (!stock.includes(definitionId)) {
+            this._enqueueToast(sessionId, 'That item is not sold here', 1400);
+            return false;
+        }
+
+        const definition = getItemDefinition(definitionId);
+        const buyPrice = Math.max(0, Math.floor(definition?.buyPrice ?? 0));
+        const currentGold = Math.max(0, Math.floor(player.inventory?.gold ?? 0));
+        if (!definition || currentGold < buyPrice) {
+            this._enqueueToast(sessionId, 'Not enough gold', 1400);
+            return false;
+        }
+
+        this._updatePlayer(sessionId, (currentPlayer) => {
+            const inventory = currentPlayer.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            return {
+                ...currentPlayer,
+                inventory: {
+                    ...inventory,
+                    gold: Math.max(0, Math.floor(inventory.gold ?? 0) - buyPrice),
+                },
+            };
+        });
+        this._addInventoryEntry(sessionId, definitionId, 1, 0);
+        this._enqueueToast(sessionId, `Bought: ${definition.name} (-${buyPrice} gold)`, 1400);
+        return true;
+    }
+
+    _getTotalInventoryQuantity(sessionId, definitionId, category = null) {
+        const player = this.players.get(sessionId);
+        if (!player || typeof definitionId !== 'string') return 0;
+        return this._inventoryEntries(player.inventory).reduce((sum, entry) => {
+            if (entry.definitionId !== definitionId) return sum;
+            if (category && entry.category !== category) return sum;
+            return sum + (entry.quantity ?? 0);
+        }, 0);
+    }
+
+    _consumeInventoryQuantityByDefinition(sessionId, definitionId, category, amount) {
+        const targetAmount = Number.isFinite(amount) ? Math.max(1, Math.floor(amount)) : 1;
+        let removed = 0;
+        this._updatePlayer(sessionId, (player) => {
+            const inventory = player.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            const entries = this._inventoryEntries(inventory)
+                .map((entry) => ({ ...entry }))
+                .sort((a, b) => a.entryId.localeCompare(b.entryId));
+            let remaining = targetAmount;
+            for (const entry of entries) {
+                if (remaining <= 0) break;
+                if (entry.definitionId !== definitionId || entry.category !== category || entry.quantity <= 0) continue;
+                const take = Math.min(entry.quantity, remaining);
+                entry.quantity -= take;
+                remaining -= take;
+                removed += take;
+            }
+            if (removed <= 0) return player;
+            return {
+                ...player,
+                inventory: {
+                    gold: inventory.gold ?? 0,
+                    nextEntryId: inventory.nextEntryId ?? 1,
+                    entries: entries.filter((entry) => entry.quantity > 0),
+                },
+            };
+        });
+        return removed;
+    }
+
+    _upgradeWeaponItem(sessionId, upgraderId, entryId) {
+        const player = this.players.get(sessionId);
+        if (!player) return false;
+        const upgrader = getInteractableDefinition(upgraderId);
+        if (!upgrader || upgrader.kind !== 'weapon_upgrader' || !this._playerCanUseInteractable(player, upgrader)) {
+            this._enqueueToast(sessionId, 'Move closer to the Weapon Upgrader', 1400);
+            return false;
+        }
+
+        const entry = this._findInventoryEntry(sessionId, entryId);
+        if (!entry || entry.category !== INVENTORY_CATEGORY_WEAPON) return false;
+        const currentLevel = Math.max(0, Math.floor(entry.upgradeLevel ?? 0));
+        if (currentLevel >= MAX_UPGRADE_LEVEL) {
+            this._enqueueToast(sessionId, 'That weapon is already at max upgrade', 1400);
+            return false;
+        }
+        const cost = getUpgradeCostForLevel(currentLevel);
+        if (!cost) return false;
+        const materialCount = this._getTotalInventoryQuantity(sessionId, 'weapon_upgrade_material', INVENTORY_CATEGORY_RESOURCE);
+        const currentGold = Math.max(0, Math.floor(player.inventory?.gold ?? 0));
+        if (materialCount < cost.materials || currentGold < cost.gold) {
+            this._enqueueToast(sessionId, 'Missing upgrade requirements', 1400);
+            return false;
+        }
+
+        let upgraded = false;
+        this._updatePlayer(sessionId, (currentPlayer) => {
+            const inventory = currentPlayer.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            const entries = this._inventoryEntries(inventory).map((candidate) => ({ ...candidate }));
+            const target = entries.find((candidate) => candidate.entryId === entryId);
+            if (!target || target.quantity <= 0 || (target.upgradeLevel ?? 0) !== currentLevel) return currentPlayer;
+            target.quantity -= 1;
+            const nextUpgradeLevel = currentLevel + 1;
+            const mergeTarget = entries.find((candidate) => (
+                candidate.definitionId === target.definitionId &&
+                candidate.category === target.category &&
+                (candidate.upgradeLevel ?? 0) === nextUpgradeLevel
+            ));
+            if (mergeTarget) {
+                mergeTarget.quantity += 1;
+            } else {
+                entries.push(buildInventoryEntry(this._nextInventoryEntryId(inventory), target.definitionId, 1, nextUpgradeLevel));
+            }
+            upgraded = true;
+            return {
+                ...currentPlayer,
+                inventory: {
+                    gold: Math.max(0, Math.floor(inventory.gold ?? 0) - cost.gold),
+                    nextEntryId: (inventory.nextEntryId ?? 1) + (mergeTarget ? 0 : 1),
+                    entries: entries.filter((candidate) => candidate && candidate.quantity > 0),
+                },
+            };
+        });
+        if (!upgraded) return false;
+        this._consumeInventoryQuantityByDefinition(sessionId, 'weapon_upgrade_material', INVENTORY_CATEGORY_RESOURCE, cost.materials);
+        const definition = getItemDefinition(entry.definitionId);
+        this._enqueueToast(sessionId, `Upgraded: ${definition?.name ?? entry.definitionId} +${currentLevel + 1}`, 1400);
+        return true;
+    }
+
+    _upgradeSpellItem(sessionId, upgraderId, spellId) {
+        const player = this.players.get(sessionId);
+        if (!player) return false;
+        const upgrader = getInteractableDefinition(upgraderId);
+        if (!upgrader || upgrader.kind !== 'spell_upgrader' || !this._playerCanUseInteractable(player, upgrader)) {
+            this._enqueueToast(sessionId, 'Move closer to the Spell Upgrader', 1400);
+            return false;
+        }
+
+        const currentEntry = Array.isArray(player.spellbook?.knownSpells)
+            ? player.spellbook.knownSpells.find((entry) => entry.spellId === spellId)
+            : null;
+        const currentLevel = Math.max(0, Math.floor(currentEntry?.upgradeLevel ?? -1));
+        if (!currentEntry) return false;
+        if (currentLevel >= MAX_UPGRADE_LEVEL) {
+            this._enqueueToast(sessionId, 'That spell is already at max upgrade', 1400);
+            return false;
+        }
+        const cost = getUpgradeCostForLevel(currentLevel);
+        if (!cost) return false;
+        const materialCount = this._getTotalInventoryQuantity(sessionId, 'spell_upgrade_material', INVENTORY_CATEGORY_RESOURCE);
+        const currentGold = Math.max(0, Math.floor(player.inventory?.gold ?? 0));
+        if (materialCount < cost.materials || currentGold < cost.gold) {
+            this._enqueueToast(sessionId, 'Missing upgrade requirements', 1400);
+            return false;
+        }
+
+        let upgraded = false;
+        this._updatePlayer(sessionId, (currentPlayer) => {
+            const inventory = currentPlayer.inventory ?? { gold: 0, entries: [], nextEntryId: 1 };
+            const spellbook = currentPlayer.spellbook ?? { knownSpells: [] };
+            const knownSpells = Array.isArray(spellbook.knownSpells)
+                ? spellbook.knownSpells.map((entry) => ({ ...entry }))
+                : [];
+            const target = knownSpells.find((entry) => entry.spellId === spellId);
+            if (!target || (target.upgradeLevel ?? 0) !== currentLevel) return currentPlayer;
+            target.upgradeLevel = currentLevel + 1;
+            upgraded = true;
+            return {
+                ...currentPlayer,
+                inventory: {
+                    ...inventory,
+                    gold: Math.max(0, Math.floor(inventory.gold ?? 0) - cost.gold),
+                },
+                spellbook: {
+                    knownSpells,
+                },
+            };
+        });
+        if (!upgraded) return false;
+        this._consumeInventoryQuantityByDefinition(sessionId, 'spell_upgrade_material', INVENTORY_CATEGORY_RESOURCE, cost.materials);
+        this._enqueueToast(sessionId, `Upgraded spell: ${spellId} +${currentLevel + 1}`, 1400);
         return true;
     }
 

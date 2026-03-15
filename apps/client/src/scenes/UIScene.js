@@ -5,6 +5,8 @@ import { HpBarWidget } from '../ui/widgets/HpBarWidget.js';
 import { InventoryDrawerWidget, DRAWER_TOTAL_W } from '../ui/widgets/InventoryDrawerWidget.js';
 import { RadialKitWidget } from '../ui/widgets/RadialKitWidget.js';
 import { ToastFeedWidget } from '../ui/widgets/ToastFeedWidget.js';
+import { MerchantShopWidget } from '../ui/widgets/MerchantShopWidget.js';
+import { UpgraderWidget } from '../ui/widgets/UpgraderWidget.js';
 import { GAME_FONT_FAMILY } from '../config.js';
 
 export class UIScene extends Phaser.Scene {
@@ -26,7 +28,13 @@ export class UIScene extends Phaser.Scene {
         this._equippedSpellText = null;
         this._equippedConsumableText = null;
         this._toastFeed = null;
+        this._merchantShop = null;
+        this._upgrader = null;
         this._unsubscribeToast = null;
+        this._unsubscribeOpenShop = null;
+        this._unsubscribeCloseShop = null;
+        this._unsubscribeOpenUpgrader = null;
+        this._unsubscribeCloseUpgrader = null;
     }
 
     create() {
@@ -65,6 +73,25 @@ export class UIScene extends Phaser.Scene {
             color: '#c5deb0',
         }).setOrigin(0, 0);
         this._toastFeed = new ToastFeedWidget(this);
+        this._merchantShop = new MerchantShopWidget(this);
+        this._merchantShop.hide();
+        this._merchantShop.setPosition(this.scale.width / 2, this.scale.height / 2);
+        this._upgrader = new UpgraderWidget(this);
+        this._upgrader.hide();
+        this._upgrader.setPosition(this.scale.width / 2, this.scale.height / 2);
+        this.events.on('merchant:sell', ({ merchantId, entryId, mode }) => {
+            eventBus.emit('ui:sellEntry', { merchantId, entryId, mode });
+        });
+        this.events.on('merchant:buy', ({ merchantId, definitionId }) => {
+            eventBus.emit('ui:buyMerchantItem', { merchantId, definitionId });
+        });
+        this.events.on('upgrader:upgrade', ({ upgraderId, type, entryId, spellId }) => {
+            if (type === 'weapon') {
+                eventBus.emit('ui:upgradeWeaponItem', { upgraderId, entryId });
+            } else if (type === 'spell') {
+                eventBus.emit('ui:upgradeSpellItem', { upgraderId, spellId });
+            }
+        });
 
         // Inventory drawer — equip actions are emitted over the event bus so
         // GameScene can route them to the controlled entity's LoadoutComponent.
@@ -98,7 +125,13 @@ export class UIScene extends Phaser.Scene {
         this._onEscKeyDown = () => {
             if (this._escDebounceActive) return;
             this._escDebounceActive = true;
-            this._toggleDrawer();
+            if (uiStateStore.get('merchantShopOpen')) {
+                this._closeMerchantShop();
+            } else if (uiStateStore.get('upgraderOpen')) {
+                this._closeUpgrader();
+            } else {
+                this._toggleDrawer();
+            }
             this.time.delayedCall(200, () => {
                 this._escDebounceActive = false;
             });
@@ -119,6 +152,10 @@ export class UIScene extends Phaser.Scene {
         this._unsubscribeToast = eventBus.on('toast:enqueue', ({ message, durationMs }) => {
             this._toastFeed?.enqueue(message, durationMs);
         });
+        this._unsubscribeOpenShop = eventBus.on('ui:openMerchantShop', (context) => this._openMerchantShop(context));
+        this._unsubscribeCloseShop = eventBus.on('ui:closeMerchantShop', () => this._closeMerchantShop());
+        this._unsubscribeOpenUpgrader = eventBus.on('ui:openUpgrader', (context) => this._openUpgrader(context));
+        this._unsubscribeCloseUpgrader = eventBus.on('ui:closeUpgrader', () => this._closeUpgrader());
 
         // Subscribe to the state store.
         this._unsubscribeStore = uiStateStore.subscribe((state) => {
@@ -170,6 +207,13 @@ export class UIScene extends Phaser.Scene {
                 this._onCycleConsumableKeyDown = null;
             }
             this._unsubscribeToast?.();
+            this._unsubscribeOpenShop?.();
+            this._unsubscribeCloseShop?.();
+            this._unsubscribeOpenUpgrader?.();
+            this._unsubscribeCloseUpgrader?.();
+            this.events.off('merchant:sell');
+            this.events.off('merchant:buy');
+            this.events.off('upgrader:upgrade');
             this._hpBar?.destroy();
             this._staminaBar?.destroy();
             this._manaBar?.destroy();
@@ -177,6 +221,8 @@ export class UIScene extends Phaser.Scene {
             this._equippedSpellText?.destroy();
             this._equippedConsumableText?.destroy();
             this._toastFeed?.destroy();
+            this._merchantShop?.destroy();
+            this._upgrader?.destroy();
             this._quickRadialWidget?.destroy();
             // Clean up drawer state in the store.
             uiStateStore.set('drawerOpen', false);
@@ -184,6 +230,12 @@ export class UIScene extends Phaser.Scene {
             uiStateStore.set('pendingSlotAssignment', null);
             uiStateStore.set('quickRadialOpen', false);
             uiStateStore.set('quickRadialHover', null);
+            uiStateStore.set('merchantShopOpen', false);
+            uiStateStore.set('merchantShopContext', null);
+            uiStateStore.set('merchantShopBounds', null);
+            uiStateStore.set('upgraderOpen', false);
+            uiStateStore.set('upgraderContext', null);
+            uiStateStore.set('upgraderBounds', null);
         });
     }
 
@@ -212,6 +264,20 @@ export class UIScene extends Phaser.Scene {
         this._drawer?.setHeight(height);
         this._quickRadialWidget?.setPosition(width / 2, height / 2);
         this._toastFeed?.setPosition(width - 24, height - 24);
+        this._merchantShop?.setPosition(width / 2, height / 2);
+        this._upgrader?.setPosition(width / 2, height / 2);
+        uiStateStore.set('merchantShopBounds', {
+            x: width / 2 - (this._merchantShop?.width ?? 0) / 2,
+            y: height / 2 - (this._merchantShop?.height ?? 0) / 2,
+            width: this._merchantShop?.width ?? 0,
+            height: this._merchantShop?.height ?? 0,
+        });
+        uiStateStore.set('upgraderBounds', {
+            x: width / 2 - (this._upgrader?.width ?? 0) / 2,
+            y: height / 2 - (this._upgrader?.height ?? 0) / 2,
+            width: this._upgrader?.width ?? 0,
+            height: this._upgrader?.height ?? 0,
+        });
     }
 
     // ------------------------------------------------------------------
@@ -219,6 +285,7 @@ export class UIScene extends Phaser.Scene {
     // ------------------------------------------------------------------
 
     _toggleDrawer() {
+        if (uiStateStore.get('merchantShopOpen') || uiStateStore.get('upgraderOpen')) return;
         if (!this._drawer) return;
         this._drawer.toggle();
         const open = this._drawer.isOpen;
@@ -228,7 +295,7 @@ export class UIScene extends Phaser.Scene {
     }
 
     _showQuickRadial() {
-        if (this._drawer?.isOpen) return;
+        if (this._drawer?.isOpen || uiStateStore.get('merchantShopOpen') || uiStateStore.get('upgraderOpen')) return;
         const loadout = uiStateStore.get('controlledEntity')?.loadout ?? null;
         this._quickRadialWidget?.refresh(loadout, { hoverSelection: uiStateStore.get('quickRadialHover') });
         this._quickRadialWidget?.show();
@@ -252,6 +319,68 @@ export class UIScene extends Phaser.Scene {
         uiStateStore.set('quickRadialHover', null);
     }
 
+    _openMerchantShop(context) {
+        if (uiStateStore.get('upgraderOpen')) this._closeUpgrader();
+        if (this._drawer?.isOpen) {
+            this._drawer.close();
+            uiStateStore.set('drawerOpen', false);
+            uiStateStore.set('drawerWidth', 0);
+            uiStateStore.set('pendingSlotAssignment', null);
+        }
+        this._quickRadialWidget?.hide();
+        uiStateStore.patch({
+            merchantShopOpen: true,
+            merchantShopContext: {
+                merchantId: context?.merchantId ?? null,
+                title: context?.title ?? 'Shop',
+                stock: Array.isArray(context?.stock) ? context.stock : [],
+            },
+            quickRadialOpen: false,
+            quickRadialHover: null,
+        });
+        this._merchantShop?.show();
+        this._renderState();
+    }
+
+    _closeMerchantShop() {
+        this._merchantShop?.hide();
+        uiStateStore.patch({
+            merchantShopOpen: false,
+            merchantShopContext: null,
+        });
+    }
+
+    _openUpgrader(context) {
+        if (uiStateStore.get('merchantShopOpen')) this._closeMerchantShop();
+        if (this._drawer?.isOpen) {
+            this._drawer.close();
+            uiStateStore.set('drawerOpen', false);
+            uiStateStore.set('drawerWidth', 0);
+            uiStateStore.set('pendingSlotAssignment', null);
+        }
+        this._quickRadialWidget?.hide();
+        uiStateStore.patch({
+            upgraderOpen: true,
+            upgraderContext: {
+                upgraderId: context?.upgraderId ?? null,
+                type: context?.type ?? null,
+                title: context?.title ?? 'Upgrader',
+            },
+            quickRadialOpen: false,
+            quickRadialHover: null,
+        });
+        this._upgrader?.show();
+        this._renderState();
+    }
+
+    _closeUpgrader() {
+        this._upgrader?.hide();
+        uiStateStore.patch({
+            upgraderOpen: false,
+            upgraderContext: null,
+        });
+    }
+
     // ------------------------------------------------------------------
     // State rendering
     // ------------------------------------------------------------------
@@ -271,6 +400,8 @@ export class UIScene extends Phaser.Scene {
 
         if (!hasEntity) {
             this._drawer?.update(null);
+            this._merchantShop?.hide();
+            this._upgrader?.hide();
             return;
         }
 
@@ -282,6 +413,18 @@ export class UIScene extends Phaser.Scene {
         const consumableSlot = controlled.loadout?.consumableSlots?.[controlled.loadout?.activeConsumableSlotIndex ?? 0] ?? null;
         this._equippedConsumableText?.setText(`Q ${consumableSlot?.name ?? 'Nothing'}${consumableSlot?.id && consumableSlot?.id !== 'nothing' ? ` x${consumableSlot?.quantity ?? 0}` : ''}`);
         this._drawer?.update(controlled);
+        if (state.merchantShopOpen) {
+            this._merchantShop?.show();
+            this._merchantShop?.update(controlled, state.merchantShopContext);
+        } else {
+            this._merchantShop?.hide();
+        }
+        if (state.upgraderOpen) {
+            this._upgrader?.show();
+            this._upgrader?.update(controlled, state.upgraderContext);
+        } else {
+            this._upgrader?.hide();
+        }
         this._quickRadialWidget?.refresh(controlled.loadout ?? null, {
             hoverSelection: uiStateStore.get('quickRadialHover'),
         });

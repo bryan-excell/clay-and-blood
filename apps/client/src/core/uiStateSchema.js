@@ -32,5 +32,11 @@ export function createDefaultUiState() {
         pendingSlotAssignment: null,
         quickRadialOpen: false,
         quickRadialHover: null,
+        merchantShopOpen: false,
+        merchantShopContext: null,
+        merchantShopBounds: null,
+        upgraderOpen: false,
+        upgraderContext: null,
+        upgraderBounds: null,
     };
 }

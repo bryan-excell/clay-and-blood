@@ -355,6 +355,9 @@ export const MSG = {
     PLAYER_EQUIP:   'player_equip',
     DROP_ENTRY:     'drop_entry',
     SELL_ENTRY:     'sell_entry',
+    BUY_MERCHANT_ITEM: 'buy_merchant_item',
+    UPGRADE_WEAPON_ITEM: 'upgrade_weapon_item',
+    UPGRADE_SPELL_ITEM: 'upgrade_spell_item',
     USE_CONSUMABLE: 'use_consumable',
     INTERACT_REQUEST:'interact_request',
     POSSESS_REQUEST:'possess_request',
@@ -536,7 +539,8 @@ export const STATIC_STAGE_LAYOUTS = (() => {
     const layouts = {};
 
     // Town Square: 40×40, open floor, one exit per cardinal side,
-    // plus a small inn building in the northwest area.
+    // plus a small inn building in the northwest area and a vendor shop
+    // in the northeast area.
     {
         const w = 40, h = 40;
         const tiles = _emptyRoom(w, h);
@@ -563,6 +567,18 @@ export const STATIC_STAGE_LAYOUTS = (() => {
         }
         // Door on south wall — stepping on this exits to the Inn.
         tiles[9][7] = 2; // exitIndex 4
+
+        // Small vendor building in the NE area (x=29–35, y=3–9).
+        for (let bx = 29; bx <= 35; bx++) {
+            tiles[3][bx] = 1;
+            tiles[9][bx] = 1;
+        }
+        for (let by = 4; by <= 8; by++) {
+            tiles[by][29] = 1;
+            tiles[by][35] = 1;
+        }
+        // Door opening on the south wall into the town square.
+        tiles[9][32] = 0;
 
         layouts['town-square'] = {
             width: w, height: h, tiles,

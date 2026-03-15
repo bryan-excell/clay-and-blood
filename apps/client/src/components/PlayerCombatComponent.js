@@ -384,8 +384,30 @@ export class PlayerCombatComponent extends Component {
     }
 
     _isPointerInsideUiDrawer(pointer) {
-        if (!uiStateStore.get('drawerOpen')) return false;
-        return pointer.x < (uiStateStore.get('drawerWidth') ?? 0);
+        if (uiStateStore.get('drawerOpen') && pointer.x < (uiStateStore.get('drawerWidth') ?? 0)) {
+            return true;
+        }
+        if (uiStateStore.get('merchantShopOpen')) {
+            const bounds = uiStateStore.get('merchantShopBounds');
+            if (bounds
+                && pointer.x >= bounds.x
+                && pointer.x <= bounds.x + bounds.width
+                && pointer.y >= bounds.y
+                && pointer.y <= bounds.y + bounds.height) {
+                return true;
+            }
+        }
+        if (uiStateStore.get('upgraderOpen')) {
+            const bounds = uiStateStore.get('upgraderBounds');
+            if (bounds
+                && pointer.x >= bounds.x
+                && pointer.x <= bounds.x + bounds.width
+                && pointer.y >= bounds.y
+                && pointer.y <= bounds.y + bounds.height) {
+                return true;
+            }
+        }
+        return false;
     }
 
     handlePrimaryInput({ down, held, up, targetX, targetY }) {
