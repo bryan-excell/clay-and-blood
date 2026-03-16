@@ -26,6 +26,14 @@ export function getStageDefinition(levelId) {
         height: definition.height,
         tiles: Array.isArray(definition.tiles) ? definition.tiles.map((row) => [...row]) : undefined,
         exits: Array.isArray(definition.exits) ? definition.exits.map((exit) => ({ ...exit })) : undefined,
+        terrainFeatures: Array.isArray(definition.terrainFeatures)
+            ? definition.terrainFeatures.map((feature) => ({
+                ...feature,
+                cells: Array.isArray(feature.cells) ? feature.cells.map((cell) => ({ ...cell })) : undefined,
+                rect: feature.rect ? { ...feature.rect } : null,
+                tags: Array.isArray(feature.tags) ? [...feature.tags] : [],
+            }))
+            : [],
         spawnPoint: definition.spawnPoint ? { ...definition.spawnPoint } : null,
         connections: Array.isArray(definition.exits)
             ? Object.fromEntries(

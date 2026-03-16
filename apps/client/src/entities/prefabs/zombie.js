@@ -2,6 +2,7 @@ import { TransformComponent } from '../../components/TransformComponent.js';
 import { CircleComponent } from '../../components/CircleComponent.js';
 import { StatsComponent } from '../../components/StatsComponent.js';
 import { VisibilityComponent } from '../../components/VisibilityComponent.js';
+import { STAGE_RENDER_DEPTH } from '../../config.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 /**
@@ -21,7 +22,9 @@ export function createZombie(scene, config = {}) {
     zombie.type = 'zombie';
 
     zombie.addComponent(new TransformComponent(x, y));
-    zombie.addComponent(new CircleComponent(radius, color, 1, strokeColor, 4));
+    const circle = new CircleComponent(radius, color, 1, strokeColor, 4);
+    zombie.addComponent(circle);
+    circle.gameObject?.setDepth(STAGE_RENDER_DEPTH.actors);
     zombie.addComponent(new StatsComponent({
         hp: ARCHETYPE_CONFIG.zombie.resources.hp.max,
         hpMax: ARCHETYPE_CONFIG.zombie.resources.hp.max,

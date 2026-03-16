@@ -12,7 +12,7 @@ import { LoadoutComponent } from '../../components/LoadoutComponent.js';
 import { InventoryComponent } from '../../components/InventoryComponent.js';
 import { SpellbookComponent } from '../../components/SpellbookComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
-import { PLAYER_RADIUS, COLOR_PLAYER } from '../../config.js';
+import { PLAYER_RADIUS, COLOR_PLAYER, STAGE_RENDER_DEPTH } from '../../config.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 /**
@@ -43,7 +43,9 @@ export function createPlayer(scene, config = {}) {
 
     // 2. Add the visual representation (creates the Phaser game object)
     // Warm torchlight fill with dark outline
-    player.addComponent(new CircleComponent(radius, color, 1, 0x5c3a00, 3));
+    const circle = new CircleComponent(radius, color, 1, 0x5c3a00, 3);
+    player.addComponent(circle);
+    circle.gameObject?.setDepth(STAGE_RENDER_DEPTH.actors);
 
     // 3. Add control, authority, and resolved intent data
     player.addComponent(new ControlComponent({ controlMode, controllerId }));
@@ -91,9 +93,8 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new VisibilityComponent(ARCHETYPE_CONFIG.player.sightRadius));
 
     // Set up camera following
-    const objectComponent = player.getComponent('circle');
-    if (objectComponent && objectComponent.gameObject) {
-        scene.cameras.main.startFollow(objectComponent.gameObject);
+    if (circle.gameObject) {
+        scene.cameras.main.startFollow(circle.gameObject);
     }
 
     return player;

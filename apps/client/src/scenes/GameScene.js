@@ -2506,6 +2506,7 @@ export class GameScene extends Phaser.Scene {
         const cam = this.cameras.main;
         const zoomT = 1 - Math.pow(0.01, delta / 150);
         cam.setZoom(Phaser.Math.Linear(cam.zoom, this.targetZoom, zoomT));
+        this.levelManager?.update?.(cam);
 
         const renderTick = this._latestServerTick > 0
             ? (this._latestServerTick + ((performance.now() - this._latestServerTickAtMs) / SERVER_TICK_MS)) - REMOTE_INTERPOLATION_DELAY_TICKS

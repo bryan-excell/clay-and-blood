@@ -1,5 +1,6 @@
 import { TransformComponent } from '../../components/TransformComponent.js';
 import { CircleComponent } from '../../components/CircleComponent.js';
+import { STAGE_RENDER_DEPTH } from '../../config.js';
 
 export function createLoot(scene, config = {}) {
     const {
@@ -13,10 +14,12 @@ export function createLoot(scene, config = {}) {
     const loot = scene.entityFactory.createEntity(id);
     loot.type = 'loot';
     loot.addComponent(new TransformComponent(x, y));
-    loot.addComponent(new CircleComponent(radius, color, 0.95, 0xfff0bc, 2));
+    const circleComponent = new CircleComponent(radius, color, 0.95, 0xfff0bc, 2);
+    loot.addComponent(circleComponent);
 
     const circle = loot.getComponent('circle');
     if (circle?.gameObject) {
+        circle.gameObject.setDepth(STAGE_RENDER_DEPTH.interactables);
         circle.gameObject.setAlpha(0.85);
         scene.tweens.add({
             targets: circle.gameObject,

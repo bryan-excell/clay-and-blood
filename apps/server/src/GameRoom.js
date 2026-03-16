@@ -84,6 +84,7 @@ const EQUIP_ID_PATTERN = /^[a-z0-9_-]{1,32}$/i;
 const ENTITY_KEY_PATTERN = /^(player:[a-z0-9-]{1,64}|world:[a-z0-9_-]{1,64})$/i;
 const SOLID_PROJECTILE_TILES = new Set([1, 3]); // wall + void
 const PROJECTILE_MIN_SPEED = 0.001;
+const MAX_CACHED_STAGE_GRIDS = 100;
 const SPRINT_STAMINA_DRAIN_PER_SEC = MOVEMENT_RESOURCE_CONFIG.sprint.staminaDrainPerSec;
 const DASH_STAMINA_COST = MOVEMENT_RESOURCE_CONFIG.dash.staminaCost;
 const ACTIVE_EFFECT_HEALING_GEM = 'healing_gem_regen';
@@ -346,6 +347,7 @@ export class GameRoom {
         this.pendingSpellEffects = new Map(); // effectId -> { id, spellId, sourceEntityKey, sourceTeamId, levelId, x, y, executeAtMs, damage, poiseDamage, radius }
         // levelId -> grid (2-D number array, cached)
         this.grids   = new Map();
+        this.gridCacheOrder = [];
         this.tickCount = 0;
         // Lag-compensation history: array of { tick, positions: Map<sessionId,{x,y,levelId}> }
 
@@ -4113,6 +4115,16 @@ export class GameRoom {
         if (!this.grids.has(levelId)) {
             const { grid } = getStageData(levelId);
             this.grids.set(levelId, grid);
+            this.gridCacheOrder = this.gridCacheOrder.filter((id) => id !== levelId);
+            this.gridCacheOrder.push(levelId);
+            while (this.grids.size > MAX_CACHED_STAGE_GRIDS) {
+                const oldest = this.gridCacheOrder.shift();
+                if (!oldest) break;
+                this.grids.delete(oldest);
+            }
+        } else {
+            this.gridCacheOrder = this.gridCacheOrder.filter((id) => id !== levelId);
+            this.gridCacheOrder.push(levelId);
         }
         return this.grids.get(levelId);
     }

@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { eventBus } from '../core/EventBus.js';
-import { TILE_SIZE } from '../config.js';
+import { STAGE_RENDER_DEPTH, TILE_SIZE } from '../config.js';
 
 // The darkness rectangle must be larger than the world-space area visible at
 // minimum zoom (0.15) on a large monitor.  1920 / 0.15 ≈ 12 800 px wide, so
@@ -67,7 +67,7 @@ export class LightingRenderer {
         // Large world-space darkness rectangle — repositioned in onLevelChanged()
         this._darkness = scene.add
             .rectangle(0, 0, DARKNESS_SIZE, DARKNESS_SIZE, 0x000000, ambientAlpha)
-            .setDepth(50)
+            .setDepth(STAGE_RENDER_DEPTH.darkness)
             .setOrigin(0.5, 0.5);
 
         // Mask Graphics — NOT in the display list.

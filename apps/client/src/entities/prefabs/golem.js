@@ -12,6 +12,7 @@ import { LoadoutComponent } from '../../components/LoadoutComponent.js';
 import { InventoryComponent } from '../../components/InventoryComponent.js';
 import { SpellbookComponent } from '../../components/SpellbookComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
+import { STAGE_RENDER_DEPTH } from '../../config.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 /**
@@ -34,7 +35,9 @@ export function createGolem(scene, config = {}) {
     golem.type = 'golem';
 
     golem.addComponent(new TransformComponent(x, y));
-    golem.addComponent(new CircleComponent(radius, color, 1, 0x2f3238, 4));
+    const circle = new CircleComponent(radius, color, 1, 0x2f3238, 4);
+    golem.addComponent(circle);
+    circle.gameObject?.setDepth(STAGE_RENDER_DEPTH.actors);
     golem.addComponent(new ControlComponent({ controlMode, controllerId }));
     golem.addComponent(new AuthorityComponent({ authority, ownerId }));
     golem.addComponent(new IntentComponent());

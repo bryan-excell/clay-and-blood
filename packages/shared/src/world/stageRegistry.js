@@ -12,6 +12,27 @@ function cloneExit(exit) {
     };
 }
 
+function cloneTerrainFeature(feature) {
+    if (!feature || typeof feature !== 'object') return null;
+    return {
+        ...feature,
+        cells: Array.isArray(feature.cells)
+            ? feature.cells
+                .filter((cell) => Number.isFinite(cell?.x) && Number.isFinite(cell?.y))
+                .map((cell) => ({ x: cell.x, y: cell.y }))
+            : undefined,
+        rect: feature.rect && typeof feature.rect === 'object'
+            ? {
+                x: feature.rect.x,
+                y: feature.rect.y,
+                width: feature.rect.width,
+                height: feature.rect.height,
+            }
+            : null,
+        tags: Array.isArray(feature.tags) ? [...feature.tags] : [],
+    };
+}
+
 function fnv1a32(input) {
     let hash = 0x811c9dc5;
     for (let i = 0; i < input.length; i++) {
@@ -54,6 +75,9 @@ function cloneStageDefinition(definition) {
         tags: Array.isArray(definition.tags) ? [...definition.tags] : [],
         tiles: Array.isArray(definition.tiles) ? definition.tiles.map((row) => [...row]) : undefined,
         exits: Array.isArray(definition.exits) ? definition.exits.map(cloneExit) : undefined,
+        terrainFeatures: Array.isArray(definition.terrainFeatures)
+            ? definition.terrainFeatures.map(cloneTerrainFeature).filter(Boolean)
+            : [],
         spawnPoint: definition.spawnPoint ? { ...definition.spawnPoint } : null,
         connectionsByExitId: definition.connectionsByExitId
             ? Object.fromEntries(
@@ -129,6 +153,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
                 Object.freeze({ id: 'inn-door', x: 7, y: 9, exitIndex: 4, side: 'interior' }),
                 Object.freeze({ id: 'shop-door', x: 32, y: 9, exitIndex: 5, side: 'interior' }),
             ]),
+            terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: 20, y: 20 }),
             connectionsByExitId: Object.freeze({
                 'west-gate': Object.freeze({ levelId: 'west-gate', exitId: 'east-road', exitIndex: 1, entryDirection: 'west' }),
@@ -160,6 +185,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
                 Object.freeze({ id: 'west-road', x: 0, y: midY, exitIndex: 0, side: 'west' }),
                 Object.freeze({ id: 'east-road', x: w - 1, y: midY, exitIndex: 1, side: 'east' }),
             ]),
+            terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: 10, y: 4 }),
             connectionsByExitId: Object.freeze({
                 'east-road': Object.freeze({ levelId: 'town-square', exitId: 'west-gate', exitIndex: 2, entryDirection: 'east' }),
@@ -199,6 +225,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             exits: Object.freeze([
                 Object.freeze({ id: 'front-door', x: 5, y: 11, exitIndex: 0, side: 'south' }),
             ]),
+            terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: 3, y: 9 }),
             connectionsByExitId: Object.freeze({
                 'front-door': Object.freeze({ levelId: 'town-square', exitId: 'inn-door', exitIndex: 4, entryDirection: 'south' }),
@@ -227,6 +254,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             exits: Object.freeze([
                 Object.freeze({ id: 'front-door', x: Math.floor(w / 2), y: h - 1, exitIndex: 0, side: 'south' }),
             ]),
+            terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: Math.floor(w / 2), y: h - 2 }),
             connectionsByExitId: Object.freeze({
                 'front-door': Object.freeze({ levelId: 'town-square', exitId: 'shop-door', exitIndex: 5, entryDirection: 'south' }),
@@ -248,6 +276,7 @@ export const DEFAULT_STAGE_DEFINITION = Object.freeze({
     generationConfig: Object.freeze({ generator: 'cave' }),
     regionId: 'western-wilds',
     tags: Object.freeze(['procedural', 'wilds']),
+    terrainFeatures: Object.freeze([]),
 });
 
 export function getStageDefinition(stageId) {
