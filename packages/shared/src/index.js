@@ -8,6 +8,7 @@ import {
     TILE_FLOOR,
     TILE_VOID,
     TILE_WALL,
+    getTileSpeedMultiplier,
     isSolidTile,
     isWalkableTile,
 } from './world/tileRegistry.js';
@@ -337,6 +338,15 @@ export function stepPlayerKinematics(state, input, dtMs, grid) {
     return { x, y, vx, vy, dashVx, dashVy, dashTimeLeftMs };
 }
 export const PLAYER_HEALTH_MAX = 100;
+
+export function getTerrainMovementMultiplierAtWorldPosition(grid, x, y) {
+    if (!Array.isArray(grid) || grid.length === 0 || !Array.isArray(grid[0])) return 1;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 1;
+    const tileX = Math.floor(x / TILE_SIZE);
+    const tileY = Math.floor(y / TILE_SIZE);
+    if (tileY < 0 || tileY >= grid.length || tileX < 0 || tileX >= grid[0].length) return 1;
+    return getTileSpeedMultiplier(grid[tileY][tileX]);
+}
 
 // Projectile constants
 export const BULLET_DAMAGE = 10;

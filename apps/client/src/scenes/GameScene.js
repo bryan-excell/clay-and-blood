@@ -25,6 +25,7 @@ import { getLevelDisplayName } from '../world/StageDefinitions.js';
 import {
     ARCHETYPE_CONFIG,
     TEAM_IDS,
+    getTerrainMovementMultiplierAtWorldPosition,
     getExitDestination,
     getInteractableDefinitionsForLevel,
     dashStateFromInput,
@@ -2347,6 +2348,12 @@ export class GameScene extends Phaser.Scene {
 
         const levelData = gameState.levels?.[gameState.currentLevelId];
         const grid = levelData?.grid ?? null;
+        const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(
+            grid,
+            transform.position.x,
+            transform.position.y
+        );
+        const effectiveMoveSpeedMultiplier = (movementInfluence?.speedMultiplier ?? 1) * terrainMoveSpeedMultiplier;
         const input = intent ? {
             up: (intent.moveY ?? 0) < -0.0001,
             down: (intent.moveY ?? 0) > 0.0001,
@@ -2354,7 +2361,7 @@ export class GameScene extends Phaser.Scene {
             right: (intent.moveX ?? 0) > 0.0001,
             sprint: !!intent.wantsSprint,
             dash: !!intent.wantsDash,
-            moveSpeedMultiplier: movementInfluence?.speedMultiplier ?? 1,
+            moveSpeedMultiplier: effectiveMoveSpeedMultiplier,
             attackPushVx: movementInfluence?.attackPushVx ?? 0,
             attackPushVy: movementInfluence?.attackPushVy ?? 0,
         } : (keyboard?.inputState ?? {

@@ -11,6 +11,7 @@ import {
     PLAYER_RADIUS,
     PLAYER_SPEED,
     stepPlayerKinematics,
+    getTerrainMovementMultiplierAtWorldPosition,
     dashStateFromInput,
     resolvePlayerCollisions,
     BULLET_DAMAGE,
@@ -1407,6 +1408,11 @@ export class GameRoom {
             if (entity?.kind !== 'zombie') continue;
             if (entity.controllerSessionId) continue;
             const grid = this._getGrid(entity.levelId ?? 'west-gate');
+            const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(
+                grid,
+                entity.x,
+                entity.y
+            );
             const stepped = stepPlayerKinematics(
                 {
                     x: entity.x,
@@ -1415,7 +1421,12 @@ export class GameRoom {
                     dashVy: entity.motion?.dashVy ?? 0,
                     dashTimeLeftMs: entity.motion?.dashTimeLeftMs ?? 0,
                 },
-                entity.intent ?? this._zombieIdleIntent(),
+                {
+                    ...(entity.intent ?? this._zombieIdleIntent()),
+                    moveSpeedMultiplier: (Number.isFinite(entity.intent?.moveSpeedMultiplier)
+                        ? entity.intent.moveSpeedMultiplier
+                        : 1) * terrainMoveSpeedMultiplier,
+                },
                 TICK_MS,
                 grid
             );

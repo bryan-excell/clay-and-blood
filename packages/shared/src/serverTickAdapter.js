@@ -1,4 +1,7 @@
-import { stepPlayerKinematics } from './index.js';
+import {
+    getTerrainMovementMultiplierAtWorldPosition,
+    stepPlayerKinematics,
+} from './index.js';
 
 /**
  * Phase 1: capture input/intent entries from server player state.
@@ -9,12 +12,23 @@ import { stepPlayerKinematics } from './index.js';
 export function phaseInputIntent(players, getGrid) {
     const entries = [];
     for (const [sessionId, player] of players.entries()) {
+        const grid = getGrid(player.transform.levelId);
+        const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(
+            grid,
+            player.transform?.x,
+            player.transform?.y
+        );
         entries.push({
             sessionId,
             player,
-            intent: player.intent,
+            intent: {
+                ...(player.intent ?? {}),
+                moveSpeedMultiplier: (Number.isFinite(player.intent?.moveSpeedMultiplier)
+                    ? player.intent.moveSpeedMultiplier
+                    : 1) * terrainMoveSpeedMultiplier,
+            },
             motion: player.motion,
-            grid: getGrid(player.transform.levelId),
+            grid,
         });
     }
     return entries;

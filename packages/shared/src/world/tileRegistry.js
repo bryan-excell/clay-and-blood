@@ -107,3 +107,8 @@ export function tileHasTag(tileType, tag) {
     if (typeof tag !== 'string' || tag.length === 0) return false;
     return getTileProperties(tileType).tags.includes(tag);
 }
+
+export function getTileSpeedMultiplier(tileType) {
+    const multiplier = getTileProperties(tileType).speedMultiplier;
+    return Number.isFinite(multiplier) ? Math.max(0, multiplier) : 1;
+}
