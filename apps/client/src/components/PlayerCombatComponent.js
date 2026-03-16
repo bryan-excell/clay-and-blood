@@ -851,6 +851,7 @@ export class PlayerCombatComponent extends Component {
         for (const entity of candidates) {
             if (!entity || entity.id === this.entity?.id) continue;
             if (entity.type === 'exit') continue;
+            if (typeof scene?.canLocalObserverSeeEntity === 'function' && !scene.canLocalObserverSeeEntity(entity)) continue;
             const circle = entity.getComponent('circle');
             const transform = entity.getComponent('transform');
             const cx = Number.isFinite(circle?.gameObject?.x) ? circle.gameObject.x : transform?.position?.x;

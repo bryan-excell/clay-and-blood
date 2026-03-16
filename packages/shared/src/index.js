@@ -570,6 +570,7 @@ export * from './interactableDefinitions.js';
 export * from './world/stageRegistry.js';
 export * from './world/regionRegistry.js';
 export * from './world/tileRegistry.js';
+export * from './world/vision.js';
 
 /**
  * Resolve a deterministic spawn position for arriving through an exit.

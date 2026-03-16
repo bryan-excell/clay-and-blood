@@ -22,6 +22,7 @@ import {
     ARROW_BASE_PENETRATION,
     ARCHETYPE_CONFIG,
     TEAM_IDS,
+    canObserverDetectTarget,
     REACTION_CONFIG,
     MOVEMENT_RESOURCE_CONFIG,
     PROJECTILE_RESOURCE_COST,
@@ -30,6 +31,7 @@ import {
     resolveMeleeAttackProfile,
     PROJECTILE_POISE_DAMAGE,
     resolveSpellConfig,
+    createVisionContext,
     isDraggableWorldKind,
     getWorldSpawnDefinitions,
     getWorldSpawnDefinition,
@@ -1590,6 +1592,7 @@ export class GameRoom {
         if (!isDraggableWorldKind(target.kind ?? null)) return false;
         if ((sourceCombatant.levelId ?? null) !== (target.levelId ?? null)) return false;
         if (target.controllerSessionId) return false;
+        if (!this._canEntitySeeEntity(sourceCombatant.entityKey, targetEntityKey)) return false;
         const ignoreEffectId = typeof options.ignoreEffectId === 'string' ? options.ignoreEffectId : null;
         const bySource = this._findTractionEffectBySource(sourceCombatant.entityKey);
         if (bySource && bySource.id !== ignoreEffectId) return false;
@@ -2698,6 +2701,7 @@ export class GameRoom {
             const dy = target.y - source.y;
             const distSq = dx * dx + dy * dy;
             if (distSq > rangeSq) continue;
+            if (!this._canEntitySeeEntity(source.entityKey, target.entityKey)) continue;
             if (!best || distSq < best.distSq) {
                 best = { entityKey: target.entityKey, distSq };
             }
@@ -3956,6 +3960,45 @@ export class GameRoom {
         return ARCHETYPE_CONFIG.player.sightRadius;
     }
 
+    _createVisionContextForEntityKey(entityKey) {
+        if (typeof entityKey !== 'string') return createVisionContext();
+
+        if (entityKey.startsWith('player:')) {
+            const sessionId = entityKey.slice('player:'.length);
+            return createVisionContext({
+                sightRadius: this._resolveSightRadiusForPlayer(sessionId),
+            });
+        }
+
+        if (entityKey.startsWith('world:')) {
+            const entity = this.worldEntities.get(entityKey);
+            const archetype = resolveArchetypeConfig(entity?.kind ?? null);
+            return createVisionContext({
+                sightRadius: Number.isFinite(archetype?.sightRadius)
+                    ? archetype.sightRadius
+                    : ARCHETYPE_CONFIG.player.sightRadius,
+            });
+        }
+
+        return createVisionContext();
+    }
+
+    _canEntitySeeEntity(observerEntityKey, targetEntityKey) {
+        const observer = this._getCombatantByEntityKey(observerEntityKey);
+        const target = this._getCombatantByEntityKey(targetEntityKey);
+        if (!observer || !target) return false;
+        if ((observer.levelId ?? null) !== (target.levelId ?? null)) return false;
+
+        const grid = this._getGrid(observer.levelId ?? 'inn');
+        const result = canObserverDetectTarget(
+            grid,
+            observer,
+            target,
+            this._createVisionContextForEntityKey(observerEntityKey),
+        );
+        return result.visible === true;
+    }
+
     _getWorldEntityTeamId(entity) {
         return entity?.teamId ?? this._defaultTeamForKind(entity?.kind ?? null);
     }
@@ -3983,6 +4026,7 @@ export class GameRoom {
         if (!this._isCombatantDamageable(target)) return false;
         if ((sourceCombatant.levelId ?? null) !== (target.levelId ?? null)) return false;
         if (!this._canDamage(sourceCombatant.teamId, target.teamId)) return false;
+        if (!this._canEntitySeeEntity(sourceCombatant.entityKey, targetEntityKey)) return false;
         return true;
     }
 

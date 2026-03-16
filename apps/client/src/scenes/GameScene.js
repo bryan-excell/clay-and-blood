@@ -19,15 +19,19 @@ import { uiStateStore } from '../core/UiStateStore.js';
 import {
     GAME_FONT_FAMILY,
     PLAYER_RADIUS,
+    STAGE_RENDER_DEPTH,
     TILE_SIZE,
 } from '../config.js';
 import { getLevelDisplayName } from '../world/StageDefinitions.js';
 import {
     ARCHETYPE_CONFIG,
     TEAM_IDS,
+    canObserverDetectTarget,
+    createVisionContext,
     getTerrainMovementMultiplierAtWorldPosition,
     getExitDestination,
     getInteractableDefinitionsForLevel,
+    hasLineOfSight,
     dashStateFromInput,
     stepPlayerKinematics,
     resolveMeleeAttackProfile,
@@ -361,6 +365,73 @@ export class GameScene extends Phaser.Scene {
         return world;
     }
 
+    _createLocalVisionContext() {
+        const controlled = this.getLocallyControlledEntity?.();
+        const visibility = controlled?.getComponent?.('visibility');
+        const fallbackSightRadius = uiStateStore.get('controlledEntity')?.sightRadius;
+        const sightRadius = Number.isFinite(visibility?.radius)
+            ? visibility.radius
+            : (Number.isFinite(fallbackSightRadius) ? fallbackSightRadius : ARCHETYPE_CONFIG.player.sightRadius);
+        return createVisionContext({ sightRadius });
+    }
+
+    _resolveLocalVisionObserver() {
+        const controlled = this.getLocallyControlledEntity?.();
+        const transform = controlled?.getComponent?.('transform');
+        const levelId = transform?.levelId ?? gameState.currentLevelId ?? null;
+        if (!Number.isFinite(transform?.position?.x) || !Number.isFinite(transform?.position?.y) || !levelId) return null;
+        return {
+            entity: controlled,
+            x: transform.position.x,
+            y: transform.position.y,
+            levelId,
+        };
+    }
+
+    _resolveEntityVisionAnchor(entity) {
+        const transform = entity?.getComponent?.('transform');
+        const levelId = transform?.levelId ?? gameState.currentLevelId ?? null;
+        const circle = entity?.getComponent?.('circle');
+        const rect = entity?.getComponent?.('rectangle');
+        const x = Number.isFinite(circle?.gameObject?.x)
+            ? circle.gameObject.x
+            : (Number.isFinite(rect?.gameObject?.x) ? rect.gameObject.x : transform?.position?.x);
+        const y = Number.isFinite(circle?.gameObject?.y)
+            ? circle.gameObject.y
+            : (Number.isFinite(rect?.gameObject?.y) ? rect.gameObject.y : transform?.position?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !levelId) return null;
+        return { x, y, levelId };
+    }
+
+    canLocalObserverSeePosition(x, y, levelId = gameState.currentLevelId ?? null) {
+        const observer = this._resolveLocalVisionObserver();
+        const grid = this.levelManager?.currentLevel?.grid ?? null;
+        if (!observer || !grid) return false;
+        if (levelId && observer.levelId !== levelId) return false;
+        return hasLineOfSight(
+            grid,
+            observer.x,
+            observer.y,
+            x,
+            y,
+            this._createLocalVisionContext(),
+        );
+    }
+
+    canLocalObserverSeeEntity(entity) {
+        const observer = this._resolveLocalVisionObserver();
+        const target = this._resolveEntityVisionAnchor(entity);
+        const grid = this.levelManager?.currentLevel?.grid ?? null;
+        if (!observer || !target || !grid) return false;
+        if (observer.levelId !== target.levelId) return false;
+        return canObserverDetectTarget(
+            grid,
+            observer,
+            target,
+            this._createLocalVisionContext(),
+        ).visible === true;
+    }
+
     _getEquippedSpellIdForHover() {
         const controlled = this.getLocallyControlledEntity?.();
         const loadout = controlled?.getComponent?.('loadout');
@@ -384,6 +455,7 @@ export class GameScene extends Phaser.Scene {
         const rectGo = entity.getComponent?.('rectangle')?.gameObject;
         if (circleGo && !circleGo.visible) return false;
         if (rectGo && !rectGo.visible) return false;
+        if (!this.canLocalObserverSeeEntity(entity)) return false;
         return entity.type === 'golem' || entity.type === 'zombie' || entity.type === 'corpse';
     }
 
@@ -595,6 +667,7 @@ export class GameScene extends Phaser.Scene {
         let bestDistSq = Infinity;
 
         for (const entity of candidates) {
+            if (!this.canLocalObserverSeeEntity(entity)) continue;
             const circle = entity.getComponent('circle');
             const go = circle?.gameObject;
             if (!go || !go.visible) continue;
@@ -1978,6 +2051,7 @@ export class GameScene extends Phaser.Scene {
         if (this.remotePlayers.has(sessionId)) return;
         const circle = this.add.circle(x, y, PLAYER_RADIUS, 0x6688cc, 0.9);
         circle.setStrokeStyle(3, 0x223355);
+        circle.setDepth(STAGE_RENDER_DEPTH.actors);
         const isVisible = stageId === gameState.currentLevelId;
         circle.setVisible(isVisible);
         this.lightingRenderer?.maskGameObject(circle);
@@ -2699,6 +2773,7 @@ export class GameScene extends Phaser.Scene {
             const x = definition.tileX * TILE_SIZE + TILE_SIZE / 2;
             const y = definition.tileY * TILE_SIZE + TILE_SIZE / 2;
             const radius = Number.isFinite(definition.interactionRadius) ? definition.interactionRadius : TILE_SIZE * 1.5;
+            if (!this.canLocalObserverSeePosition(x, y, gameState.currentLevelId)) continue;
             const dx = x - px;
             const dy = y - py;
             const distSq = dx * dx + dy * dy;
@@ -2710,6 +2785,7 @@ export class GameScene extends Phaser.Scene {
         for (const entity of this.entityManager.getEntitiesByType('loot')) {
             const transform = entity?.getComponent?.('transform');
             if (!transform || (transform.levelId ?? gameState.currentLevelId) !== gameState.currentLevelId) continue;
+            if (!this.canLocalObserverSeeEntity(entity)) continue;
             const circle = entity?.getComponent?.('circle')?.gameObject;
             const x = Number.isFinite(circle?.x) ? circle.x : transform.position.x;
             const y = Number.isFinite(circle?.y) ? circle.y : transform.position.y;
