@@ -1,6 +1,14 @@
 import { tileHasTag } from './tileRegistry.js';
+import { resolveArchetypeConfig } from '../combatData.js';
 
 const TILE_SIZE = 64;
+const DEFAULT_VISION_PROFILE = Object.freeze({
+    sightRadius: 300,
+    ignoreConcealment: false,
+    ignoreWalls: false,
+    observerTags: Object.freeze([]),
+    targetTags: Object.freeze([]),
+});
 
 const DEFAULT_VISION_CONTEXT = Object.freeze({
     sightRadius: 300,
@@ -44,6 +52,46 @@ export function createVisionContext(options = {}) {
         observerTags: Array.isArray(options.observerTags) ? [...options.observerTags] : [],
         targetTags: Array.isArray(options.targetTags) ? [...options.targetTags] : [],
     };
+}
+
+export function createVisionProfile(options = {}) {
+    return {
+        sightRadius: options.sightRadius === Infinity
+            ? Infinity
+            : (Number.isFinite(options.sightRadius) ? Math.max(0, options.sightRadius) : DEFAULT_VISION_PROFILE.sightRadius),
+        ignoreConcealment: options.ignoreConcealment === true,
+        ignoreWalls: options.ignoreWalls === true,
+        observerTags: Array.isArray(options.observerTags) ? [...options.observerTags] : [],
+        targetTags: Array.isArray(options.targetTags) ? [...options.targetTags] : [],
+    };
+}
+
+export function resolveVisionProfileForKind(kind, overrides = {}) {
+    const archetype = resolveArchetypeConfig(kind);
+    return createVisionProfile({
+        sightRadius: Number.isFinite(overrides.sightRadius)
+            ? overrides.sightRadius
+            : (Number.isFinite(archetype?.sightRadius) ? archetype.sightRadius : DEFAULT_VISION_PROFILE.sightRadius),
+        ignoreConcealment: overrides.ignoreConcealment === true,
+        ignoreWalls: overrides.ignoreWalls === true,
+        observerTags: Array.isArray(overrides.observerTags) ? overrides.observerTags : [],
+        targetTags: Array.isArray(overrides.targetTags) ? overrides.targetTags : [],
+    });
+}
+
+export function createVisionContextFromProfile(profile, modifiers = {}) {
+    const resolvedProfile = createVisionProfile(profile);
+    return createVisionContext({
+        sightRadius: resolvedProfile.sightRadius,
+        ignoreConcealment: resolvedProfile.ignoreConcealment,
+        ignoreWalls: resolvedProfile.ignoreWalls,
+        observerTags: resolvedProfile.observerTags,
+        targetTags: resolvedProfile.targetTags,
+        rayCount: modifiers.rayCount,
+        ambientLightMultiplier: modifiers.ambientLightMultiplier,
+        sightRadiusMultiplier: modifiers.sightRadiusMultiplier,
+        extraSightRadius: modifiers.extraSightRadius,
+    });
 }
 
 export function tileAtWorldPosition(grid, x, y) {

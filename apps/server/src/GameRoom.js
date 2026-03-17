@@ -32,6 +32,8 @@ import {
     PROJECTILE_POISE_DAMAGE,
     resolveSpellConfig,
     createVisionContext,
+    createVisionContextFromProfile,
+    resolveVisionProfileForKind,
     isDraggableWorldKind,
     getWorldSpawnDefinitions,
     getWorldSpawnDefinition,
@@ -649,6 +651,7 @@ export class GameRoom {
                         existing: this.worldEntities.get(targetEntityKey) ?? null,
                     });
                 }
+                if (!this._canEntitySeeEntity(`player:${sessionId}`, targetEntityKey)) break;
                 target.teamId = target.teamId ?? this._defaultTeamForKind(target.kind);
                 target.hitRadius = Number.isFinite(target.hitRadius)
                     ? target.hitRadius
@@ -3965,19 +3968,21 @@ export class GameRoom {
 
         if (entityKey.startsWith('player:')) {
             const sessionId = entityKey.slice('player:'.length);
-            return createVisionContext({
+            const profile = resolveVisionProfileForKind('player', {
                 sightRadius: this._resolveSightRadiusForPlayer(sessionId),
             });
+            return createVisionContextFromProfile(profile);
         }
 
         if (entityKey.startsWith('world:')) {
             const entity = this.worldEntities.get(entityKey);
             const archetype = resolveArchetypeConfig(entity?.kind ?? null);
-            return createVisionContext({
+            const profile = resolveVisionProfileForKind(entity?.kind ?? null, {
                 sightRadius: Number.isFinite(archetype?.sightRadius)
                     ? archetype.sightRadius
                     : ARCHETYPE_CONFIG.player.sightRadius,
             });
+            return createVisionContextFromProfile(profile);
         }
 
         return createVisionContext();
