@@ -2462,8 +2462,7 @@ export class GameScene extends Phaser.Scene {
         this._localDashState.dashVy = stepped.dashVy;
         this._localDashState.dashTimeLeftMs = stepped.dashTimeLeftMs;
 
-        transform.position.x = newX;
-        transform.position.y = newY;
+        transform.setPosition(newX, newY);
         circle.gameObject.setPosition(newX, newY);
 
         this._checkManualExitOverlap(controlled, newX, newY);
@@ -2474,6 +2473,8 @@ export class GameScene extends Phaser.Scene {
         if (!this.exitManager?.canEntityUseExits(controlledEntity)) return;
         const exits = this.entityManager.getEntitiesByType('exit');
         let overlappingExitIndex = null;
+        let overlappingExitId = null;
+        let overlappingExitBounds = null;
 
         for (const exitEntity of exits) {
             const rect = exitEntity.getComponent('rectangle');
@@ -2491,6 +2492,8 @@ export class GameScene extends Phaser.Scene {
             const dy = entityY - nearY;
             if (dx * dx + dy * dy <= PLAYER_RADIUS * PLAYER_RADIUS) {
                 overlappingExitIndex = exitComp.exitIndex;
+                overlappingExitId = exitComp.exitId ?? null;
+                overlappingExitBounds = { x: ex, y: ey, width: rect.width, height: rect.height };
                 break;
             }
         }
@@ -2498,11 +2501,17 @@ export class GameScene extends Phaser.Scene {
         this.exitManager.updateDebounceState(
             controlledEntity,
             overlappingExitIndex,
+            overlappingExitId,
             gameState.currentLevelId
         );
 
         if (overlappingExitIndex != null) {
-            this.exitManager.handleExit(controlledEntity, overlappingExitIndex);
+            this.exitManager.handleExit(
+                controlledEntity,
+                overlappingExitIndex,
+                overlappingExitId,
+                overlappingExitBounds
+            );
         }
     }
 

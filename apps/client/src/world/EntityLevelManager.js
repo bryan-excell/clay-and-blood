@@ -147,11 +147,15 @@ export class EntityLevelManager {
             levelId: level2Id,
             exitIndex: exit2Index,
             exitId: level2Exit.id ?? null,
+            arrivalDirection: null,
+            entryDirection: null,
         };
         level2.exitConnections[exit2Index] = {
             levelId: level1Id,
             exitIndex: exit1Index,
             exitId: level1Exit.id ?? null,
+            arrivalDirection: null,
+            entryDirection: null,
         };
 
         this._stageResidency.rememberConnection(level1Id, exit1Index, level1.exitConnections[exit1Index], level1.kind);

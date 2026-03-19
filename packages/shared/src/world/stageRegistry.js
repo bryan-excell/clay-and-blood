@@ -10,7 +10,17 @@ import {
 function cloneExit(exit) {
     return {
         ...exit,
-        entryDirection: typeof exit?.entryDirection === 'string' ? exit.entryDirection : null,
+    };
+}
+
+function cloneConnection(connection) {
+    if (!connection || typeof connection !== 'object') return null;
+    const arrivalDirection = typeof connection.arrivalDirection === 'string'
+        ? connection.arrivalDirection
+        : (typeof connection.entryDirection === 'string' ? connection.entryDirection : null);
+    return {
+        ...connection,
+        arrivalDirection,
     };
 }
 
@@ -83,7 +93,8 @@ function cloneStageDefinition(definition) {
         spawnPoint: definition.spawnPoint ? { ...definition.spawnPoint } : null,
         connectionsByExitId: definition.connectionsByExitId
             ? Object.fromEntries(
-                Object.entries(definition.connectionsByExitId).map(([exitId, connection]) => [exitId, { ...connection }])
+                Object.entries(definition.connectionsByExitId)
+                    .map(([exitId, connection]) => [exitId, cloneConnection(connection)])
             )
             : {},
         generationConfig: definition.generationConfig ? { ...definition.generationConfig } : undefined,
@@ -188,9 +199,9 @@ const AUTHORED_STAGE_DEFINITIONS = {
             terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: 20, y: 20 }),
             connectionsByExitId: Object.freeze({
-                'west-gate': Object.freeze({ levelId: 'west-gate', exitId: 'east-road', exitIndex: 1, entryDirection: 'west' }),
-                'inn-door': Object.freeze({ levelId: 'inn', exitId: 'front-door', exitIndex: 0, entryDirection: 'north' }),
-                'shop-door': Object.freeze({ levelId: 'shop-1', exitId: 'front-door', exitIndex: 0, entryDirection: 'north' }),
+                'west-gate': Object.freeze({ levelId: 'west-gate', exitId: 'east-road', exitIndex: 1, arrivalDirection: 'west' }),
+                'inn-door': Object.freeze({ levelId: 'inn', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
+                'shop-door': Object.freeze({ levelId: 'shop-1', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
             }),
         });
     })(),
@@ -220,7 +231,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: 10, y: 4 }),
             connectionsByExitId: Object.freeze({
-                'east-road': Object.freeze({ levelId: 'town-square', exitId: 'west-gate', exitIndex: 2, entryDirection: 'east' }),
+                'east-road': Object.freeze({ levelId: 'town-square', exitId: 'west-gate', exitIndex: 2, arrivalDirection: 'east' }),
             }),
         });
     })(),
@@ -260,7 +271,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: 3, y: 9 }),
             connectionsByExitId: Object.freeze({
-                'front-door': Object.freeze({ levelId: 'town-square', exitId: 'inn-door', exitIndex: 4, entryDirection: 'south' }),
+                'front-door': Object.freeze({ levelId: 'town-square', exitId: 'inn-door', exitIndex: 4, arrivalDirection: 'south' }),
             }),
         });
     })(),
@@ -289,7 +300,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             terrainFeatures: Object.freeze([]),
             spawnPoint: Object.freeze({ x: Math.floor(w / 2), y: h - 2 }),
             connectionsByExitId: Object.freeze({
-                'front-door': Object.freeze({ levelId: 'town-square', exitId: 'shop-door', exitIndex: 5, entryDirection: 'south' }),
+                'front-door': Object.freeze({ levelId: 'town-square', exitId: 'shop-door', exitIndex: 5, arrivalDirection: 'south' }),
             }),
         });
     })(),
@@ -386,7 +397,8 @@ export const STATIC_EXIT_CONNECTIONS = new Proxy({}, {
                 levelId: connection.levelId,
                 exitId: connection.exitId ?? null,
                 exitIndex: Number.isInteger(connection.exitIndex) ? connection.exitIndex : null,
-                entryDirection: connection.entryDirection ?? null,
+                arrivalDirection: connection.arrivalDirection ?? null,
+                entryDirection: connection.arrivalDirection ?? null,
             };
         }
         return connections;

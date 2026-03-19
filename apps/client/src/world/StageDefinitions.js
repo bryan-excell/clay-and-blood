@@ -45,7 +45,8 @@ export function getStageDefinition(levelId) {
                             levelId: connection.levelId,
                             exitId: connection.exitId ?? null,
                             exitIndex: Number.isInteger(connection.exitIndex) ? connection.exitIndex : null,
-                            entryDirection: connection.entryDirection ?? null,
+                            arrivalDirection: connection.arrivalDirection ?? null,
+                            entryDirection: connection.arrivalDirection ?? null,
                         }];
                     })
                     .filter(Boolean)

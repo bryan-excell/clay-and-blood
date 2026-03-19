@@ -1,4 +1,4 @@
-import { PLAYER_RADIUS, COLOR_PLAYER } from "../config.js";
+import { PLAYER_RADIUS, COLOR_PLAYER, TILE_SIZE } from "../config.js";
 import { gameState } from "../core/GameState.js";
 import { CircleComponent } from "../components/CircleComponent.js";
 import { KeyboardInputComponent } from "../components/KeyboardInputComponent.js";
@@ -11,7 +11,7 @@ import { AuthorityComponent } from "../components/AuthorityComponent.js";
 import { IntentComponent } from "../components/IntentComponent.js";
 import { ExitTraversalComponent } from "../components/ExitTraversalComponent.js";
 import { networkManager } from "../core/NetworkManager.js";
-import { resolveExitTransition, resolveExitSpawnPosition } from '@clay-and-blood/shared';
+import { getExitApproachDirection, resolveExitTransition, resolveExitSpawnPosition } from '@clay-and-blood/shared';
 
 /**
  * Manages transitions between levels via exits
@@ -25,25 +25,27 @@ export class ExitManager {
         this.scene = scene;
         this.canTransition = true;
         this._cooldownUntilMs = 0;
-        this._blockedExit = null; // { entityId, levelId, exitIndex } until entity leaves this exit
+        this._blockedExit = null; // { entityId, levelId, exitIndex, exitId } until entity leaves this exit
     }
 
     /**
      * Handle locally-controlled entity interaction with an exit.
      * @param {Entity} controlledEntity
      * @param {number} exitIndex
+     * @param {string|null} exitId
+     * @param {{x:number,y:number,width:number,height:number}|null} exitBounds
      */
-    handleExit(controlledEntity, exitIndex) {
+    handleExit(controlledEntity, exitIndex, exitId = null, exitBounds = null) {
         if (!this.canTransition) return;
         if (!this.canEntityUseExits(controlledEntity)) return;
         const now = performance.now();
         if (now < this._cooldownUntilMs) return;
 
         const currentLevelId = gameState.currentLevelId;
-        if (this._isBlockedExit(controlledEntity, currentLevelId, exitIndex)) return;
+        if (this._isBlockedExit(controlledEntity, currentLevelId, exitIndex, exitId)) return;
 
         this.canTransition = false;
-        console.log(`Entity ${controlledEntity?.id} using exit ${exitIndex}`);
+        console.log(`Entity ${controlledEntity?.id} using exit ${exitId ?? exitIndex}`);
 
         const currentLevel = gameState.levels[currentLevelId];
 
@@ -56,14 +58,16 @@ export class ExitManager {
         let targetLevelId;
         let targetExitIndex;
         let targetExitId = null;
-        let entryDirection = null;
+        let arrivalDirection = null;
+
+        const approachDirection = this._getApproachDirection(controlledEntity, currentLevel, exitIndex, exitId, exitBounds);
 
         if (!currentLevel.exitConnections || !currentLevel.exitConnections[exitIndex]) {
-            const resolved = resolveExitTransition(currentLevelId, exitIndex);
+            const resolved = resolveExitTransition(currentLevelId, exitIndex, exitId);
             targetLevelId = resolved.toLevelId;
             targetExitIndex = resolved.toExitIndex;
             targetExitId = resolved.toExitId ?? null;
-            entryDirection = resolved.entryDirection ?? null;
+            arrivalDirection = resolved.arrivalDirection ?? resolved.entryDirection ?? null;
 
             this.scene.levelManager.connectLevels(
                 currentLevelId,
@@ -76,7 +80,7 @@ export class ExitManager {
             targetLevelId = connection.levelId;
             targetExitIndex = connection.exitIndex;
             targetExitId = connection.exitId ?? null;
-            entryDirection = connection.entryDirection ?? null;
+            arrivalDirection = connection.arrivalDirection ?? connection.entryDirection ?? null;
         }
 
         const targetLevel = this.scene.levelManager.getLevel(targetLevelId);
@@ -94,8 +98,12 @@ export class ExitManager {
         const finalPos = this.positionEntityAtExit(
             controlledEntity,
             targetLevel,
-            targetExitIndex,
-            entryDirection
+            {
+                exitIndex: targetExitIndex,
+                exitId: targetExit.id ?? targetExitId ?? null,
+                approachDirection,
+                arrivalDirection,
+            }
         );
 
         if (finalPos) {
@@ -103,9 +111,11 @@ export class ExitManager {
                 entityKey: this.getEntityNetworkKey(controlledEntity),
                 fromLevelId: currentLevelId,
                 fromExitIndex: exitIndex,
+                fromExitId: exitId ?? null,
                 toExitIndex: targetExit.exitIndex,
                 toExitId: targetExit.id ?? targetExitId ?? null,
-                entryDirection,
+                approachDirection,
+                arrivalDirection: finalPos.arrivalDirection ?? arrivalDirection ?? null,
             });
         }
 
@@ -115,6 +125,7 @@ export class ExitManager {
             entityId: controlledEntity?.id ?? null,
             levelId: targetLevelId,
             exitIndex: targetExitIndex,
+            exitId: targetExit.id ?? targetExitId ?? null,
         };
         this.canTransition = true;
     }
@@ -123,14 +134,15 @@ export class ExitManager {
      * Position an entity near the destination exit tile using deterministic rules.
      * @param {Entity} entity
      * @param {object} targetLevel
-     * @param {number} exitIndex
-     * @param {'north'|'east'|'south'|'west'|null} entryDirection
-     * @returns {{x:number,y:number}|null}
+     * @param {{ exitIndex:number, exitId?:string|null, approachDirection?:'north'|'east'|'south'|'west'|null, arrivalDirection?:'north'|'east'|'south'|'west'|null }} options
+     * @returns {{x:number,y:number,arrivalDirection:'north'|'east'|'south'|'west'|null}|null}
      */
-    positionEntityAtExit(entity, targetLevel, exitIndex, entryDirection = null) {
-        const targetExit = targetLevel.exits.find((e) => e.exitIndex === exitIndex);
+    positionEntityAtExit(entity, targetLevel, options = {}) {
+        const targetExit = (typeof options.exitId === 'string'
+            ? targetLevel.exits.find((e) => e.id === options.exitId)
+            : null) ?? targetLevel.exits.find((e) => e.exitIndex === options.exitIndex);
         if (!targetExit) {
-            console.error(`Exit ${exitIndex} not found in target level`);
+            console.error(`Exit ${options.exitId ?? options.exitIndex} not found in target level`);
             return null;
         }
 
@@ -138,7 +150,8 @@ export class ExitManager {
             toLevelId: targetLevel.id,
             toExitIndex: targetExit.exitIndex,
             toExitId: targetExit.id ?? null,
-            entryDirection,
+            approachDirection: options.approachDirection ?? null,
+            arrivalDirection: options.arrivalDirection ?? null,
         });
         if (!spawn) return null;
 
@@ -184,7 +197,7 @@ export class ExitManager {
             visualComponent.gameObject.setPosition(safeX, safeY);
         }
 
-        return { x: safeX, y: safeY };
+        return { x: safeX, y: safeY, arrivalDirection: spawn.arrivalDirection ?? spawn.entryDirection ?? null };
     }
 
     canEntityUseExits(entity) {
@@ -193,7 +206,7 @@ export class ExitManager {
         return !!traversal?.canUseExits;
     }
 
-    updateDebounceState(entity, overlappingExitIndex, levelId) {
+    updateDebounceState(entity, overlappingExitIndex, overlappingExitId, levelId) {
         if (!this._blockedExit) return;
         if (!entity?.id || this._blockedExit.entityId !== entity.id) return;
         if (this._blockedExit.levelId !== levelId) {
@@ -202,16 +215,52 @@ export class ExitManager {
         }
 
         // Rearm once the entity is no longer inside the arrival exit trigger.
-        if (overlappingExitIndex == null || overlappingExitIndex !== this._blockedExit.exitIndex) {
+        const stillInsideSameExit = (typeof this._blockedExit.exitId === 'string' && overlappingExitId === this._blockedExit.exitId)
+            || (overlappingExitIndex != null && overlappingExitIndex === this._blockedExit.exitIndex);
+        if (!stillInsideSameExit) {
             this._blockedExit = null;
         }
     }
 
-    _isBlockedExit(entity, levelId, exitIndex) {
+    _isBlockedExit(entity, levelId, exitIndex, exitId = null) {
         if (!this._blockedExit) return false;
+        const sameExit = (typeof exitId === 'string' && this._blockedExit.exitId === exitId)
+            || this._blockedExit.exitIndex === exitIndex;
         return this._blockedExit.entityId === entity?.id &&
             this._blockedExit.levelId === levelId &&
-            this._blockedExit.exitIndex === exitIndex;
+            sameExit;
+    }
+
+    _getApproachDirection(controlledEntity, currentLevel, exitIndex, exitId = null, exitBounds = null) {
+        const transform = controlledEntity?.getComponent('transform');
+        if (!transform) return null;
+
+        let bounds = exitBounds;
+        if (!bounds) {
+            const exit = (typeof exitId === 'string'
+                ? currentLevel?.exits?.find((candidate) => candidate.id === exitId)
+                : null) ?? currentLevel?.exits?.find((candidate) => candidate.exitIndex === exitIndex);
+            if (exit) {
+                bounds = {
+                    x: exit.x * TILE_SIZE + TILE_SIZE / 2,
+                    y: exit.y * TILE_SIZE + TILE_SIZE / 2,
+                    width: TILE_SIZE,
+                    height: TILE_SIZE,
+                };
+            }
+        }
+        if (!bounds) return null;
+
+        return getExitApproachDirection({
+            currentX: transform.position.x,
+            currentY: transform.position.y,
+            previousX: transform.previousPosition?.x,
+            previousY: transform.previousPosition?.y,
+            exitX: bounds.x,
+            exitY: bounds.y,
+            exitWidth: bounds.width,
+            exitHeight: bounds.height,
+        });
     }
 
     getEntityNetworkKey(entity) {

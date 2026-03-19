@@ -1,7 +1,9 @@
 import {
     MSG,
-    STATIC_EXIT_CONNECTIONS,
     getStageData,
+    getStageDefinition,
+    getExitById,
+    getExitByIndex,
     resolveExitTransition,
     resolveExitSpawnPosition,
     resolveStageSpawnPosition,
@@ -931,24 +933,31 @@ export class GameRoom {
                     ? data.levelId
                     : (movingWorldEntity?.levelId ?? player.transform.levelId ?? 'town-square');
                 let toExitIndex = Number.isInteger(data.toExitIndex) ? data.toExitIndex : null;
+                const fromExitId = typeof data.fromExitId === 'string' ? data.fromExitId : null;
                 let toExitId = typeof data.toExitId === 'string' ? data.toExitId : null;
-                let entryDirection = sanitizeDirection(data.entryDirection);
+                const approachDirection = sanitizeDirection(data.approachDirection);
+                let arrivalDirection = sanitizeDirection(data.arrivalDirection);
 
+                const sourceExit = fromLevelId
+                    ? ((typeof fromExitId === 'string'
+                        ? getExitById(fromLevelId, fromExitId)
+                        : null) ?? (Number.isInteger(fromExitIndex) ? getExitByIndex(fromLevelId, fromExitIndex) : null))
+                    : null;
                 const hasCanonicalStaticLink = !!(
                     fromLevelId &&
-                    Number.isInteger(fromExitIndex) &&
-                    STATIC_EXIT_CONNECTIONS[fromLevelId]?.[fromExitIndex]
+                    sourceExit?.id &&
+                    getStageDefinition(fromLevelId)?.connectionsByExitId?.[sourceExit.id]
                 );
 
                 // Only canonicalize deterministic/static links on the server.
                 // For dynamic wild links, the client may have created a runtime
                 // bidirectional connection that the server does not store.
                 if (hasCanonicalStaticLink) {
-                    const resolved = resolveExitTransition(fromLevelId, fromExitIndex);
+                    const resolved = resolveExitTransition(fromLevelId, fromExitIndex, fromExitId);
                     levelId = resolved.toLevelId;
                     toExitIndex = resolved.toExitIndex;
                     toExitId = resolved.toExitId ?? null;
-                    if (!entryDirection) entryDirection = resolved.entryDirection;
+                    if (!arrivalDirection) arrivalDirection = resolved.arrivalDirection ?? resolved.entryDirection ?? null;
                 }
 
                 const grid = this._getGrid(levelId);
@@ -962,11 +971,13 @@ export class GameRoom {
                         toLevelId: levelId,
                         toExitIndex,
                         toExitId,
-                        entryDirection,
+                        approachDirection,
+                        arrivalDirection,
                     });
                     if (spawn) {
                         x = spawn.x;
                         y = spawn.y;
+                        arrivalDirection = spawn.arrivalDirection ?? spawn.entryDirection ?? arrivalDirection;
                     }
                 }
 
@@ -986,7 +997,7 @@ export class GameRoom {
                         const nextTargetPos = target && sourceCombatant
                             ? this._resolveTractionTargetPosition(traction, sourceCombatant, target, {
                                 levelId,
-                                preferredDirection: entryDirection,
+                                preferredDirection: arrivalDirection,
                             })
                             : null;
                         if (target && nextTargetPos) {
@@ -1015,7 +1026,7 @@ export class GameRoom {
                         const nextTargetPos = target && sourceCombatant
                             ? this._resolveTractionTargetPosition(traction, sourceCombatant, target, {
                                 levelId,
-                                preferredDirection: entryDirection,
+                                preferredDirection: arrivalDirection,
                             })
                             : null;
                         if (target && nextTargetPos) {

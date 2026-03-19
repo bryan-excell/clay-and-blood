@@ -1,7 +1,8 @@
 import {
-    STATIC_EXIT_CONNECTIONS,
     STATIC_STAGE_SPAWN_POINTS,
     getStageDefinition,
+    getExitById,
+    getExitByIndex,
 } from './world/stageRegistry.js';
 import {
     TILE_EXIT,
@@ -539,18 +540,26 @@ export function generateLevelData(levelId, options = {}) {
  * Static links take precedence; all other exits use deterministic wild links.
  * @param {string} fromLevelId
  * @param {number} fromExitIndex
- * @returns {{ toLevelId: string, toExitIndex: number, toExitId: (string|null), entryDirection: ('north'|'east'|'south'|'west'|null) }}
+ * @returns {{ toLevelId: string, toExitIndex: number, toExitId: (string|null), arrivalDirection: ('north'|'east'|'south'|'west'|null), entryDirection: ('north'|'east'|'south'|'west'|null) }}
  */
-export function resolveExitTransition(fromLevelId, fromExitIndex) {
-    const staticConn = STATIC_EXIT_CONNECTIONS[fromLevelId]?.[fromExitIndex];
+export function resolveExitTransition(fromLevelId, fromExitIndex, fromExitId = null) {
+    const stageDefinition = getStageDefinition(fromLevelId);
+    const sourceExit = (typeof fromExitId === 'string'
+        ? getExitById(fromLevelId, fromExitId)
+        : null) ?? (Number.isInteger(fromExitIndex) ? getExitByIndex(fromLevelId, fromExitIndex) : null);
+    const staticConn = sourceExit?.id
+        ? stageDefinition?.connectionsByExitId?.[sourceExit.id]
+        : null;
     if (staticConn) {
+        const resolvedArrivalDirection = CARDINAL_DIRECTIONS.includes(staticConn.arrivalDirection)
+            ? staticConn.arrivalDirection
+            : null;
         return {
             toLevelId: staticConn.levelId,
             toExitIndex: staticConn.exitIndex,
             toExitId: staticConn.exitId ?? null,
-            entryDirection: CARDINAL_DIRECTIONS.includes(staticConn.entryDirection)
-                ? staticConn.entryDirection
-                : null,
+            arrivalDirection: resolvedArrivalDirection,
+            entryDirection: resolvedArrivalDirection,
         };
     }
 
@@ -559,6 +568,7 @@ export function resolveExitTransition(fromLevelId, fromExitIndex) {
         toLevelId: dynamic.toLevelId,
         toExitIndex: dynamic.toExitIndex,
         toExitId: null,
+        arrivalDirection: null,
         entryDirection: null,
     };
 }
@@ -578,11 +588,20 @@ export * from './world/vision.js';
  *   toLevelId: string,
  *   toExitIndex?: number,
  *   toExitId?: string|null,
+ *   approachDirection?: 'north'|'east'|'south'|'west'|null,
+ *   arrivalDirection?: 'north'|'east'|'south'|'west'|null,
  *   entryDirection?: 'north'|'east'|'south'|'west'|null
  * }} params
- * @returns {{ x:number, y:number, tileX:number, tileY:number, entryDirection:'north'|'east'|'south'|'west'|null }}
+ * @returns {{ x:number, y:number, tileX:number, tileY:number, arrivalDirection:'north'|'east'|'south'|'west'|null, entryDirection:'north'|'east'|'south'|'west'|null }}
  */
-export function resolveExitSpawnPosition({ toLevelId, toExitIndex = null, toExitId = null, entryDirection = null }) {
+export function resolveExitSpawnPosition({
+    toLevelId,
+    toExitIndex = null,
+    toExitId = null,
+    approachDirection = null,
+    arrivalDirection = null,
+    entryDirection = null,
+}) {
     const { grid, exits } = getStageData(toLevelId);
     if (!grid || !Array.isArray(exits) || exits.length === 0) {
         return null;
@@ -593,11 +612,15 @@ export function resolveExitSpawnPosition({ toLevelId, toExitIndex = null, toExit
         : null) ?? exits.find((e) => e.exitIndex === toExitIndex) ?? exits[0];
     if (!targetExit) return null;
 
-    const resolvedDir = CARDINAL_DIRECTIONS.includes(entryDirection)
-        ? entryDirection
-        : _defaultEntryDirectionFromExit(targetExit);
+    const resolvedArrivalDirection = CARDINAL_DIRECTIONS.includes(arrivalDirection)
+        ? arrivalDirection
+        : (CARDINAL_DIRECTIONS.includes(entryDirection)
+            ? entryDirection
+            : (CARDINAL_DIRECTIONS.includes(approachDirection)
+                ? getOppositeDirection(approachDirection)
+                : _defaultArrivalDirectionFromExit(targetExit)));
 
-    const tile = _findArrivalTileNearExit(grid, targetExit, resolvedDir);
+    const tile = resolvePreferredExitArrivalTile(grid, targetExit, resolvedArrivalDirection);
     const tileX = tile.x;
     const tileY = tile.y;
 
@@ -606,7 +629,8 @@ export function resolveExitSpawnPosition({ toLevelId, toExitIndex = null, toExit
         y: tileY * TILE_SIZE + TILE_SIZE / 2,
         tileX,
         tileY,
-        entryDirection: resolvedDir,
+        arrivalDirection: resolvedArrivalDirection,
+        entryDirection: resolvedArrivalDirection,
     };
 }
 
@@ -669,14 +693,14 @@ function _exitSide(x, y, w, h) {
     return 'east';
 }
 
-function _defaultEntryDirectionFromExit(exit) {
+function _defaultArrivalDirectionFromExit(exit) {
     if (CARDINAL_DIRECTIONS.includes(exit?.side)) {
-        return _oppositeDirection(exit.side);
+        return getOppositeDirection(exit.side);
     }
     return 'south';
 }
 
-function _oppositeDirection(direction) {
+export function getOppositeDirection(direction) {
     switch (direction) {
         case 'north': return 'south';
         case 'east': return 'west';
@@ -686,11 +710,51 @@ function _oppositeDirection(direction) {
     }
 }
 
+export function getExitApproachDirection({
+    currentX,
+    currentY,
+    previousX,
+    previousY,
+    exitX,
+    exitY,
+    exitWidth = TILE_SIZE,
+    exitHeight = TILE_SIZE,
+}) {
+    const dx = Number.isFinite(currentX) && Number.isFinite(previousX) ? currentX - previousX : 0;
+    const dy = Number.isFinite(currentY) && Number.isFinite(previousY) ? currentY - previousY : 0;
+
+    if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+        if (Math.abs(dx) >= Math.abs(dy)) {
+            return dx > 0 ? 'west' : 'east';
+        }
+        return dy > 0 ? 'north' : 'south';
+    }
+
+    const halfW = Math.max(1, exitWidth / 2);
+    const halfH = Math.max(1, exitHeight / 2);
+    const left = exitX - halfW;
+    const right = exitX + halfW;
+    const top = exitY - halfH;
+    const bottom = exitY + halfH;
+
+    if (Number.isFinite(previousX) && previousX < left) return 'west';
+    if (Number.isFinite(previousX) && previousX > right) return 'east';
+    if (Number.isFinite(previousY) && previousY < top) return 'north';
+    if (Number.isFinite(previousY) && previousY > bottom) return 'south';
+
+    const centerDx = (Number.isFinite(previousX) ? previousX : currentX) - exitX;
+    const centerDy = (Number.isFinite(previousY) ? previousY : currentY) - exitY;
+    if (Math.abs(centerDx) >= Math.abs(centerDy)) {
+        return centerDx <= 0 ? 'west' : 'east';
+    }
+    return centerDy <= 0 ? 'north' : 'south';
+}
+
 function _isWalkableTile(tile) {
     return isWalkableTile(tile);
 }
 
-function _findArrivalTileNearExit(grid, exit, preferredDirection) {
+export function resolvePreferredExitArrivalTile(grid, exit, preferredDirection) {
     const h = grid.length;
     const w = grid[0]?.length ?? 0;
     const inBounds = (x, y) => x >= 0 && x < w && y >= 0 && y < h;
@@ -724,6 +788,10 @@ function _findArrivalTileNearExit(grid, exit, preferredDirection) {
     }
 
     return { x: exit.x, y: exit.y };
+}
+
+function _findArrivalTileNearExit(grid, exit, preferredDirection) {
+    return resolvePreferredExitArrivalTile(grid, exit, preferredDirection);
 }
 
 /**

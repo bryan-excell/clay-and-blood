@@ -355,8 +355,11 @@ class NetworkManager {
             entityKey: opts.entityKey ?? null,
             fromLevelId: opts.fromLevelId ?? null,
             fromExitIndex: Number.isFinite(opts.fromExitIndex) ? opts.fromExitIndex : null,
+            fromExitId: typeof opts.fromExitId === 'string' ? opts.fromExitId : null,
             toExitIndex: Number.isFinite(opts.toExitIndex) ? opts.toExitIndex : null,
-            entryDirection: opts.entryDirection ?? null,
+            toExitId: typeof opts.toExitId === 'string' ? opts.toExitId : null,
+            approachDirection: opts.approachDirection ?? null,
+            arrivalDirection: opts.arrivalDirection ?? null,
         });
     }
 
