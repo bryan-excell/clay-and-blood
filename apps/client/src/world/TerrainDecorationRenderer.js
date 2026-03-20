@@ -15,6 +15,7 @@ const FEATURE_TYPE_TO_DECORATION = Object.freeze({
     water_pool: 'shallow_water',
     shallow_water_pool: 'shallow_water',
 });
+const CHUNK_OVERDRAW_PX = 1;
 
 export class TerrainDecorationRenderer {
     constructor(scene, stageData, options = {}) {
@@ -33,11 +34,14 @@ export class TerrainDecorationRenderer {
     update(camera) {
         if (!camera || !this._hasDecorations) return;
         const chunkWorldSize = this.chunkTiles * TILE_SIZE;
-        const worldView = camera.worldView;
-        const minChunkX = Math.max(0, Math.floor(worldView.x / chunkWorldSize) - 1);
-        const maxChunkX = Math.min(this._chunkColumns - 1, Math.floor((worldView.right - 1) / chunkWorldSize) + 1);
-        const minChunkY = Math.max(0, Math.floor(worldView.y / chunkWorldSize) - 1);
-        const maxChunkY = Math.min(this._chunkRows - 1, Math.floor((worldView.bottom - 1) / chunkWorldSize) + 1);
+        const scrollX = camera.scrollX;
+        const scrollY = camera.scrollY;
+        const viewW = camera.width / camera.zoom;
+        const viewH = camera.height / camera.zoom;
+        const minChunkX = Math.max(0, Math.floor(scrollX / chunkWorldSize) - 1);
+        const maxChunkX = Math.min(this._chunkColumns - 1, Math.floor((scrollX + viewW - 1) / chunkWorldSize) + 1);
+        const minChunkY = Math.max(0, Math.floor(scrollY / chunkWorldSize) - 1);
+        const maxChunkY = Math.min(this._chunkRows - 1, Math.floor((scrollY + viewH - 1) / chunkWorldSize) + 1);
         const visibleKey = `${minChunkX}:${maxChunkX}:${minChunkY}:${maxChunkY}`;
         if (visibleKey === this._lastVisibleKey) return;
         this._lastVisibleKey = visibleKey;
@@ -127,10 +131,14 @@ export class TerrainDecorationRenderer {
         const tileStartY = chunkY * this.chunkTiles;
         const tileEndX = Math.min(this.stageData.width, tileStartX + this.chunkTiles);
         const tileEndY = Math.min(this.stageData.height, tileStartY + this.chunkTiles);
-        const pixelWidth = (tileEndX - tileStartX) * TILE_SIZE;
-        const pixelHeight = (tileEndY - tileStartY) * TILE_SIZE;
-        const originX = tileStartX * TILE_SIZE;
-        const originY = tileStartY * TILE_SIZE;
+        const bleedLeft = chunkX > 0 ? CHUNK_OVERDRAW_PX : 0;
+        const bleedRight = chunkX < this._chunkColumns - 1 ? CHUNK_OVERDRAW_PX : 0;
+        const bleedTop = chunkY > 0 ? CHUNK_OVERDRAW_PX : 0;
+        const bleedBottom = chunkY < this._chunkRows - 1 ? CHUNK_OVERDRAW_PX : 0;
+        const pixelWidth = (tileEndX - tileStartX) * TILE_SIZE + bleedLeft + bleedRight;
+        const pixelHeight = (tileEndY - tileStartY) * TILE_SIZE + bleedTop + bleedBottom;
+        const originX = tileStartX * TILE_SIZE - bleedLeft;
+        const originY = tileStartY * TILE_SIZE - bleedTop;
 
         this._builder.clear();
         let hasOverlay = false;
@@ -139,8 +147,8 @@ export class TerrainDecorationRenderer {
                 const decoration = this._getDecorationAt(x, y);
                 if (!decoration) continue;
                 hasOverlay = true;
-                const localX = (x - tileStartX) * TILE_SIZE;
-                const localY = (y - tileStartY) * TILE_SIZE;
+                const localX = (x - tileStartX) * TILE_SIZE + bleedLeft;
+                const localY = (y - tileStartY) * TILE_SIZE + bleedTop;
                 if (decoration === 'tall_grass') this._drawTallGrass(localX, localY, x, y);
                 if (decoration === 'shallow_water') this._drawShallowWater(localX, localY, x, y);
             }

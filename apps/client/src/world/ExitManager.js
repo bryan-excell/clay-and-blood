@@ -93,8 +93,6 @@ export class ExitManager {
             return;
         }
 
-        this.scene.levelManager.setupLevel(targetLevelId);
-
         const finalPos = this.positionEntityAtExit(
             controlledEntity,
             targetLevel,
@@ -105,6 +103,8 @@ export class ExitManager {
                 arrivalDirection,
             }
         );
+
+        this.scene.levelManager.setupLevel(targetLevelId);
 
         if (finalPos) {
             networkManager.sendLevelChange(targetLevelId, finalPos.x, finalPos.y, {

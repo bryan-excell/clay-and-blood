@@ -795,8 +795,13 @@ export class GameScene extends Phaser.Scene {
                     // the controlled entity (Phase 1A/B) for level-tracking, but the
                     // player entity is dormant and must not be visually dragged along.
                     // Only reconcile when the player is actually locally controlled.
+                    // Also skip correction when the server's reported level differs from
+                    // the client's current level — the server hasn't yet confirmed the
+                    // level change, so its position data is for the old stage and would
+                    // hard-snap the player back, causing a visible flicker.
                     const isControllingPlayer = this.getLocallyControlledEntity()?.id === this.player?.id;
-                    if (isControllingPlayer) {
+                    const serverLevelMatchesCurrent = !p.levelId || p.levelId === gameState.currentLevelId;
+                    if (isControllingPlayer && serverLevelMatchesCurrent) {
                         this._applyServerCorrection(p.x, p.y);
                     }
                 } else {

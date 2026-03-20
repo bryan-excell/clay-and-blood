@@ -22,6 +22,7 @@ const WALL_STYLE = Object.freeze({
     stroke: 0x131a0e,
     strokeWidth: 2,
 });
+const CHUNK_OVERDRAW_PX = 1;
 
 export class ChunkedBaseRenderer {
     constructor(scene, stageData, options = {}) {
@@ -39,11 +40,14 @@ export class ChunkedBaseRenderer {
     update(camera) {
         if (!camera || !this.stageData?.grid) return;
         const chunkWorldSize = this.chunkTiles * TILE_SIZE;
-        const worldView = camera.worldView;
-        const minChunkX = Math.max(0, Math.floor(worldView.x / chunkWorldSize) - 1);
-        const maxChunkX = Math.min(this._chunkColumns - 1, Math.floor((worldView.right - 1) / chunkWorldSize) + 1);
-        const minChunkY = Math.max(0, Math.floor(worldView.y / chunkWorldSize) - 1);
-        const maxChunkY = Math.min(this._chunkRows - 1, Math.floor((worldView.bottom - 1) / chunkWorldSize) + 1);
+        const scrollX = camera.scrollX;
+        const scrollY = camera.scrollY;
+        const viewW = camera.width / camera.zoom;
+        const viewH = camera.height / camera.zoom;
+        const minChunkX = Math.max(0, Math.floor(scrollX / chunkWorldSize) - 1);
+        const maxChunkX = Math.min(this._chunkColumns - 1, Math.floor((scrollX + viewW - 1) / chunkWorldSize) + 1);
+        const minChunkY = Math.max(0, Math.floor(scrollY / chunkWorldSize) - 1);
+        const maxChunkY = Math.min(this._chunkRows - 1, Math.floor((scrollY + viewH - 1) / chunkWorldSize) + 1);
         const visibleKey = `${minChunkX}:${maxChunkX}:${minChunkY}:${maxChunkY}`;
         if (this._lastVisibleKey === visibleKey) return;
         this._lastVisibleKey = visibleKey;
@@ -86,10 +90,14 @@ export class ChunkedBaseRenderer {
         const tileStartY = chunkY * this.chunkTiles;
         const tileEndX = Math.min(this.stageData.width, tileStartX + this.chunkTiles);
         const tileEndY = Math.min(this.stageData.height, tileStartY + this.chunkTiles);
-        const pixelWidth = (tileEndX - tileStartX) * TILE_SIZE;
-        const pixelHeight = (tileEndY - tileStartY) * TILE_SIZE;
-        const originX = tileStartX * TILE_SIZE;
-        const originY = tileStartY * TILE_SIZE;
+        const bleedLeft = chunkX > 0 ? CHUNK_OVERDRAW_PX : 0;
+        const bleedRight = chunkX < this._chunkColumns - 1 ? CHUNK_OVERDRAW_PX : 0;
+        const bleedTop = chunkY > 0 ? CHUNK_OVERDRAW_PX : 0;
+        const bleedBottom = chunkY < this._chunkRows - 1 ? CHUNK_OVERDRAW_PX : 0;
+        const pixelWidth = (tileEndX - tileStartX) * TILE_SIZE + bleedLeft + bleedRight;
+        const pixelHeight = (tileEndY - tileStartY) * TILE_SIZE + bleedTop + bleedBottom;
+        const originX = tileStartX * TILE_SIZE - bleedLeft;
+        const originY = tileStartY * TILE_SIZE - bleedTop;
 
         const floorTexture = this.scene.add.renderTexture(originX, originY, pixelWidth, pixelHeight)
             .setOrigin(0, 0)
@@ -108,11 +116,13 @@ export class ChunkedBaseRenderer {
                 hasFloor = true;
                 const fill = TILE_FILL_BY_ID[properties.id] ?? this.floorStyle.fill;
                 this._builder.fillStyle(fill, 1);
+                const localX = (x - tileStartX) * TILE_SIZE + bleedLeft;
+                const localY = (y - tileStartY) * TILE_SIZE + bleedTop;
                 this._builder.fillRect(
-                    (x - tileStartX) * TILE_SIZE,
-                    (y - tileStartY) * TILE_SIZE,
-                    TILE_SIZE,
-                    TILE_SIZE
+                    localX - CHUNK_OVERDRAW_PX,
+                    localY - CHUNK_OVERDRAW_PX,
+                    TILE_SIZE + CHUNK_OVERDRAW_PX * 2,
+                    TILE_SIZE + CHUNK_OVERDRAW_PX * 2
                 );
             }
         }
@@ -128,8 +138,8 @@ export class ChunkedBaseRenderer {
                 if (!getTileProperties(tile).solid || !tileHasTag(tile, 'structure')) continue;
                 if (!this._isVisibleWall(x, y)) continue;
                 hasWall = true;
-                const localX = (x - tileStartX) * TILE_SIZE;
-                const localY = (y - tileStartY) * TILE_SIZE;
+                const localX = (x - tileStartX) * TILE_SIZE + bleedLeft;
+                const localY = (y - tileStartY) * TILE_SIZE + bleedTop;
                 this._builder.fillRect(localX, localY, TILE_SIZE, TILE_SIZE);
                 this._builder.strokeRect(localX, localY, TILE_SIZE, TILE_SIZE);
             }

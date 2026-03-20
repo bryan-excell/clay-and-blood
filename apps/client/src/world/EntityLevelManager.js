@@ -50,6 +50,14 @@ export class EntityLevelManager {
         const levelH = level.height * TILE_SIZE;
         this.scene.physics.world.setBounds(0, 0, levelW, levelH);
 
+        const controlledTransform = this.scene.controlledEntity?.getComponent?.('transform');
+        const controlledCircle = this.scene.controlledEntity?.getComponent?.('circle');
+        const focusX = controlledCircle?.gameObject?.x ?? controlledTransform?.position?.x;
+        const focusY = controlledCircle?.gameObject?.y ?? controlledTransform?.position?.y;
+        if (Number.isFinite(focusX) && Number.isFinite(focusY)) {
+            this.scene.cameras.main.centerOn(focusX, focusY);
+        }
+
         if (this._background) this._background.destroy();
         this._background = this.scene.add.rectangle(levelW / 2, levelH / 2, levelW, levelH, 0x0d120a, 1)
             .setDepth(STAGE_RENDER_DEPTH.floor - 1);
