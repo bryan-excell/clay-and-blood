@@ -1,5 +1,6 @@
 import { PLAYER_RADIUS, COLOR_PLAYER, TILE_SIZE } from "../config.js";
 import { gameState } from "../core/GameState.js";
+import { eventBus } from "../core/EventBus.js";
 import { CircleComponent } from "../components/CircleComponent.js";
 import { KeyboardInputComponent } from "../components/KeyboardInputComponent.js";
 import { PlayerStateMachine } from "../components/PlayerStateMachine.js";
@@ -11,7 +12,7 @@ import { AuthorityComponent } from "../components/AuthorityComponent.js";
 import { IntentComponent } from "../components/IntentComponent.js";
 import { ExitTraversalComponent } from "../components/ExitTraversalComponent.js";
 import { networkManager } from "../core/NetworkManager.js";
-import { getExitApproachDirection, resolveExitTransition, resolveExitSpawnPosition } from '@clay-and-blood/shared';
+import { getExitApproachDirection, getStageDefinition, resolveExitTransition, resolveExitSpawnPosition } from '@clay-and-blood/shared';
 
 /**
  * Manages transitions between levels via exits
@@ -67,7 +68,7 @@ export class ExitManager {
             targetLevelId = resolved.toLevelId;
             targetExitIndex = resolved.toExitIndex;
             targetExitId = resolved.toExitId ?? null;
-            arrivalDirection = resolved.arrivalDirection ?? resolved.entryDirection ?? null;
+            arrivalDirection = resolved.arrivalDirection ?? null;
 
             this.scene.levelManager.connectLevels(
                 currentLevelId,
@@ -80,7 +81,7 @@ export class ExitManager {
             targetLevelId = connection.levelId;
             targetExitIndex = connection.exitIndex;
             targetExitId = connection.exitId ?? null;
-            arrivalDirection = connection.arrivalDirection ?? connection.entryDirection ?? null;
+            arrivalDirection = connection.arrivalDirection ?? null;
         }
 
         const targetLevel = this.scene.levelManager.getLevel(targetLevelId);
@@ -105,6 +106,7 @@ export class ExitManager {
         );
 
         this.scene.levelManager.setupLevel(targetLevelId);
+        this._emitZoneEnteredIfNeeded(currentLevelId, targetLevelId);
 
         if (finalPos) {
             networkManager.sendLevelChange(targetLevelId, finalPos.x, finalPos.y, {
@@ -197,7 +199,7 @@ export class ExitManager {
             visualComponent.gameObject.setPosition(safeX, safeY);
         }
 
-        return { x: safeX, y: safeY, arrivalDirection: spawn.arrivalDirection ?? spawn.entryDirection ?? null };
+        return { x: safeX, y: safeY, arrivalDirection: spawn.arrivalDirection ?? null };
     }
 
     canEntityUseExits(entity) {
@@ -269,5 +271,17 @@ export class ExitManager {
             return `player:${networkManager.sessionId ?? 'local'}`;
         }
         return `world:${entity.id}`;
+    }
+
+    _emitZoneEnteredIfNeeded(fromLevelId, toLevelId) {
+        const fromZoneId = getStageDefinition(fromLevelId)?.zoneId ?? null;
+        const toZoneId = getStageDefinition(toLevelId)?.zoneId ?? null;
+        if (!toZoneId || fromZoneId === toZoneId) return;
+        eventBus.emit('zone:entered', {
+            fromStageId: fromLevelId,
+            toStageId: toLevelId,
+            fromZoneId,
+            zoneId: toZoneId,
+        });
     }
 }

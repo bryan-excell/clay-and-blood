@@ -20,7 +20,7 @@ export function getStageDefinition(levelId) {
         stageSlug: definition.stageSlug ?? definition.id ?? null,
         stageUuid: definition.stageUuid ?? null,
         kind: definition.kind ?? 'procedural',
-        type: definition.kind === 'static' ? 'static' : 'random',
+        type: definition.kind === 'static' && Array.isArray(definition.tiles) ? 'static' : 'random',
         floorTile: definition.floorTile ?? 'floor_dirt',
         width: definition.width,
         height: definition.height,
@@ -46,14 +46,13 @@ export function getStageDefinition(levelId) {
                             exitId: connection.exitId ?? null,
                             exitIndex: Number.isInteger(connection.exitIndex) ? connection.exitIndex : null,
                             arrivalDirection: connection.arrivalDirection ?? null,
-                            entryDirection: connection.arrivalDirection ?? null,
                         }];
                     })
                     .filter(Boolean)
             )
             : {},
         generator: definition.generator ?? definition.generationConfig?.generator ?? 'cave',
-        regionId: definition.regionId ?? null,
+        zoneId: definition.zoneId ?? null,
         displayName: definition.displayName ?? null,
         tags: Array.isArray(definition.tags) ? [...definition.tags] : [],
     };

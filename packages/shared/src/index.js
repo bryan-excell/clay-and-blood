@@ -1,9 +1,13 @@
 import {
-    STATIC_STAGE_SPAWN_POINTS,
     getStageDefinition,
     getExitById,
     getExitByIndex,
 } from './world/stageRegistry.js';
+import {
+    formatProceduralStageId,
+    getDefaultZoneId,
+    getZoneDefinition,
+} from './world/zoneRegistry.js';
 import {
     TILE_EXIT,
     TILE_FLOOR,
@@ -448,9 +452,12 @@ export function shuffleArrayWithRng(array, rng) {
  */
 export function getExitDestination(fromLevelId, fromExitIndex) {
     const rng = seededRng(`exit:${fromLevelId}:${fromExitIndex}`);
-    // Derive a stable, human-readable level ID
+    const fromZoneId = getStageDefinition(fromLevelId)?.zoneId ?? getDefaultZoneId();
+    const fromZone = getZoneDefinition(fromZoneId);
+    const targetZoneId = fromZone?.proceduralPrefix ? fromZoneId : getDefaultZoneId();
+    // Derive a stable, human-readable stage ID within the selected zone.
     const levelHash = Math.floor(rng() * 0xFFFFFF).toString(16).padStart(6, '0');
-    const toLevelId = `level-${levelHash}`;
+    const toLevelId = formatProceduralStageId(targetZoneId, `proc-${levelHash}`);
     // Pick target exit deterministically using the destination's own exits
     const { exits } = generateLevelData(toLevelId);
     const toExitIndex = exits[Math.floor(rng() * exits.length)]?.exitIndex ?? 0;
@@ -540,7 +547,7 @@ export function generateLevelData(levelId, options = {}) {
  * Static links take precedence; all other exits use deterministic wild links.
  * @param {string} fromLevelId
  * @param {number} fromExitIndex
- * @returns {{ toLevelId: string, toExitIndex: number, toExitId: (string|null), arrivalDirection: ('north'|'east'|'south'|'west'|null), entryDirection: ('north'|'east'|'south'|'west'|null) }}
+ * @returns {{ toLevelId: string, toExitIndex: number, toExitId: (string|null), arrivalDirection: ('north'|'east'|'south'|'west'|null) }}
  */
 export function resolveExitTransition(fromLevelId, fromExitIndex, fromExitId = null) {
     const stageDefinition = getStageDefinition(fromLevelId);
@@ -559,7 +566,6 @@ export function resolveExitTransition(fromLevelId, fromExitIndex, fromExitId = n
             toExitIndex: staticConn.exitIndex,
             toExitId: staticConn.exitId ?? null,
             arrivalDirection: resolvedArrivalDirection,
-            entryDirection: resolvedArrivalDirection,
         };
     }
 
@@ -569,7 +575,6 @@ export function resolveExitTransition(fromLevelId, fromExitIndex, fromExitId = n
         toExitIndex: dynamic.toExitIndex,
         toExitId: null,
         arrivalDirection: null,
-        entryDirection: null,
     };
 }
 
@@ -578,7 +583,7 @@ export * from './resources.js';
 export * from './spawnDefinitions.js';
 export * from './interactableDefinitions.js';
 export * from './world/stageRegistry.js';
-export * from './world/regionRegistry.js';
+export * from './world/zoneRegistry.js';
 export * from './world/tileRegistry.js';
 export * from './world/vision.js';
 
@@ -589,10 +594,9 @@ export * from './world/vision.js';
  *   toExitIndex?: number,
  *   toExitId?: string|null,
  *   approachDirection?: 'north'|'east'|'south'|'west'|null,
- *   arrivalDirection?: 'north'|'east'|'south'|'west'|null,
- *   entryDirection?: 'north'|'east'|'south'|'west'|null
+ *   arrivalDirection?: 'north'|'east'|'south'|'west'|null
  * }} params
- * @returns {{ x:number, y:number, tileX:number, tileY:number, arrivalDirection:'north'|'east'|'south'|'west'|null, entryDirection:'north'|'east'|'south'|'west'|null }}
+ * @returns {{ x:number, y:number, tileX:number, tileY:number, arrivalDirection:'north'|'east'|'south'|'west'|null }}
  */
 export function resolveExitSpawnPosition({
     toLevelId,
@@ -600,7 +604,6 @@ export function resolveExitSpawnPosition({
     toExitId = null,
     approachDirection = null,
     arrivalDirection = null,
-    entryDirection = null,
 }) {
     const { grid, exits } = getStageData(toLevelId);
     if (!grid || !Array.isArray(exits) || exits.length === 0) {
@@ -614,11 +617,9 @@ export function resolveExitSpawnPosition({
 
     const resolvedArrivalDirection = CARDINAL_DIRECTIONS.includes(arrivalDirection)
         ? arrivalDirection
-        : (CARDINAL_DIRECTIONS.includes(entryDirection)
-            ? entryDirection
-            : (CARDINAL_DIRECTIONS.includes(approachDirection)
-                ? getOppositeDirection(approachDirection)
-                : _defaultArrivalDirectionFromExit(targetExit)));
+        : (CARDINAL_DIRECTIONS.includes(approachDirection)
+            ? getOppositeDirection(approachDirection)
+            : _defaultArrivalDirectionFromExit(targetExit));
 
     const tile = resolvePreferredExitArrivalTile(grid, targetExit, resolvedArrivalDirection);
     const tileX = tile.x;
@@ -630,7 +631,6 @@ export function resolveExitSpawnPosition({
         tileX,
         tileY,
         arrivalDirection: resolvedArrivalDirection,
-        entryDirection: resolvedArrivalDirection,
     };
 }
 
@@ -638,7 +638,7 @@ export function resolveStageSpawnPosition(levelId) {
     const { grid } = getStageData(levelId);
     if (!grid || grid.length === 0 || !Array.isArray(grid[0])) return null;
 
-    const spawn = getStageDefinition(levelId)?.spawnPoint ?? STATIC_STAGE_SPAWN_POINTS[levelId] ?? null;
+    const spawn = getStageDefinition(levelId)?.spawnPoint ?? null;
     const tileX = Number.isFinite(spawn?.x) ? spawn.x : Math.floor(grid[0].length / 2);
     const tileY = Number.isFinite(spawn?.y) ? spawn.y : Math.floor(grid.length / 2);
 

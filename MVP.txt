@@ -1,145 +1,146 @@
-# Weathered: Minimum Viable Product (MVP)
+# Clay and Blood: Minimum Viable Product (MVP)
 
-## Overview
+## Purpose
 
-The Weathered MVP aims to demonstrate the core gameplay experience with minimal feature set that showcases the game's unique aspects: interconnected stage-based exploration and real-time combat with varied enemy behaviors. This document outlines the scope of our initial release target, focusing on proving the core gameplay loop before expanding to the full feature set described in the Game Design Document.
+The MVP should prove the core loop: explore an interconnected stage world, fight real-time server-authoritative encounters, collect equipment and resources, return to safety, and push farther out again.
 
-## Core Features
+The project is past the earliest foundation stage. Health/stamina/mana, inventory/loadout, vendors/upgrades, combat authority, vision, possession/corpses, and reliable exits all have working implementations. The current MVP focus is the world structure and content pass.
 
-### Stage-Based World Structure
+## Current Development Frame
 
-- **4 Connected Stages:**
-  - **Town Hub:** Small settlement with a shop, respawn point, and multiple exits
-  - **Wilderness Area:** Medium-sized outdoor area with scattered enemies
-  - **Exploration Zone:** Large area with more complex layout and hidden elements
-  - **Dungeon:** Small, challenge-focused area with higher enemy density
+Treat MVP work as three foundations rather than a pile of unrelated features:
 
-- **Stage Connections:**
-  - Bidirectional exits between all areas
-  - At least one hidden shortcut (requires player discovery)
-  - Visual distinction between different area types
+1. **Combat resources/state**
+   - Shared resource schema for health, stamina, and mana.
+   - Server-authoritative spend, regen, damage, death, and recovery behavior.
+   - Combat state hooks for sprinting, dashing, casting, attacks, flinch, stagger, and poise.
+   - Status: mostly implemented and usable.
 
-- **Procedural Generation:**
-  - Basic room and corridor system for the larger areas
-  - Consistent exit placement for reliable navigation
-  - Deterministic generation to maintain stage layouts between sessions
+2. **Player/world data model**
+   - Inventory, equipment, loadouts, currency, pickups, drops, buy/sell, and upgrades.
+   - Stable stage IDs, stage metadata, zone metadata, exit identity, spawn rules, and world entity definitions.
+   - Status: inventory/progression data is mostly implemented; world identity exists but needs a more complete MVP pass.
 
-### Combat System
+3. **Content built on those systems**
+   - Authored town/hub spaces.
+   - Procedural or semi-procedural wilderness/exploration/dungeon stages.
+   - Spawn tables, difficulty bands, loot placement, hidden shortcut, and enough encounter variety for a short play session.
+   - Status: active focus.
 
-- **Player Combat:**
-  - One melee weapon type with basic attack pattern
-  - Dodge/roll movement ability
-  - Health and stamina system
+## MVP Scope
 
-- **Enemy Types:** (3 minimum)
-  - **Passive:** Flees when player approaches
-  - **Neutral:** Only attacks when provoked
-  - **Aggressive:** Actively hunts the player when in range
+### Stage-Based World
 
-- **Combat Mechanics:**
-  - Collision-based damage system
-  - Hit reactions and basic animations/effects
-  - Enemy AI based on simple behavior states
+- **Minimum Connected World**
+  - Town hub with inn/shop/safe respawn.
+  - Gate or road transition out of town.
+  - Wilderness area with enemies and resources.
+  - Exploration zone with larger layout and one hidden or optional connection.
+  - Dungeon or challenge pocket with denser combat.
 
-- **Death Mechanics:**
-  - Player respawns at town hub
-  - Basic penalty (reduced health until visiting shop)
-  - Enemies reset when re-entering a stage
+- **Connections**
+  - Exits must be stable, named, and deterministic.
+  - Core travel paths should be bidirectional unless intentionally marked otherwise.
+  - Arrival placement must be safe and should avoid immediate re-trigger loops.
+  - At least one shortcut or hidden connection should reward exploration.
 
-### Minimal Progression
+- **Generation**
+  - Keep authored stages for important places like town, inn, shop, and key transition points.
+  - Use deterministic procedural generation for wilds/exploration/dungeon areas.
+  - Add generator variants or config profiles for wilderness, cave/dungeon, and road/transition stages.
+  - Generation must expose enough metadata for spawns, exits, terrain, and future persistence.
 
-- **Equipment:**
-  - 3-5 weapons with different stats
-  - Basic armor slot with 2-3 options
-  - Shop in town for purchasing upgrades
+### Combat
 
-- **Player Stats:**
-  - Health (increases with better equipment)
-  - Damage output
-  - Movement speed
+- Player movement, sprint, dash, melee, ranged/spell options, and resource costs.
+- Health/stamina/mana with shared authoritative rules.
+- Hit reactions, poise, flinch/stagger, and death/respawn.
+- Enemy behavior sufficient for MVP:
+  - Aggressive enemy that hunts and attacks.
+  - Neutral or guard-like entity with faction/team behavior.
+  - Passive/fleeing enemy is desirable but can be cut if time is tight.
 
-### Technical Requirements
+### Progression and Economy
 
-- **Stage Management:**
-  - Seamless transitions between stages
-  - State persistence when revisiting areas
-  - Memory-efficient handling of multiple stages
+- Inventory and loadout.
+- Pickups, drops, and currency.
+- Simple merchant buy/sell.
+- Basic weapon/spell upgrade path.
+- Equipment should visibly affect combat or survivability.
+- Full skill trees, stat allocation, and complex crafting are out of scope.
 
-- **Performance:**
-  - Stable framerate on target platforms
-  - Efficient entity management for areas with many enemies
-  - Optimized rendering for larger exploration zones
+### Save/Load
 
-- **Controls:**
-  - Responsive movement and combat
-  - Clear feedback for player actions
-  - Intuitive stage transition mechanics
+Save/load comes after resource, inventory, and stage identity schemas are stable enough to avoid churn.
 
-## Visual Presentation
+For MVP, persist only:
 
-- **Minimalist Art Style:**
-  - Geometric shapes with clear color differentiation
-  - Visual distinction between stage types
-  - Clear indication of interactive elements (exits, NPCs, etc.)
+- Player identity.
+- Current/last safe position.
+- Resources and death-relevant state.
+- Inventory, loadout, currency, and upgrade levels.
+- Minimal world progression flags such as discovered shortcut or defeated challenge state.
 
-- **UI Elements:**
-  - Health/stamina indicators
-  - Current location identifier
-  - Basic inventory/equipment display
-  - Minimal HUD to maximize game view
+A full account system is not required for MVP unless multiplayer identity becomes a near-term requirement.
 
-- **Feedback Systems:**
-  - Visual effects for hits, damage, and healing
-  - Screen transitions between stages
-  - Enemy state indicators (aggression, damage)
+### Minimal Leveling
 
-## Out of Scope for MVP
+Leveling is intentionally late and small:
 
-To maintain focus, the following features from the full design are explicitly excluded from the MVP:
+- XP and level count.
+- A few unlocks or upgrades.
+- No full skill tree for MVP.
 
-- Complex progression systems (skill trees, stat allocation)
-- Multiple weapon types and attack patterns
-- Campsite system
-- Companion mechanics
-- Quest system
-- Advanced crafting and economy
-- Environmental hazards and interactions
-- Teleportation network
+## Out of Scope
 
-## Development Priorities
+- Full skill trees or deep stat allocation.
+- Complex crafting economy.
+- Quest system.
+- Campsite system.
+- Companion system beyond possession/corpse mechanics already present.
+- Teleportation network.
+- Large world expansion beyond the MVP route.
+- Full account/login system unless needed for deployment.
 
-1. **First Milestone: Movement & Stage Transitions**
-   - Player movement mechanics
-   - Stage generation
-   - Exit/entrance system
-   - Basic stage persistence
+## Current Milestones
 
-2. **Second Milestone: Combat Basics**
-   - Player attack implementation
-   - Enemy AI behaviors
-   - Health system
-   - Death and respawn
+1. **Completed/Foundation: Combat Resources**
+   - Health, stamina, and mana schema.
+   - Regen/spend/damage rules.
+   - Server authority and HUD-facing summaries.
 
-3. **Third Milestone: Progression & Content**
-   - Equipment implementation
-   - Shop system
-   - Balancing enemy placement
-   - Hidden area implementation
+2. **Completed/Foundation: Inventory and Equipment**
+   - Owned items, currency, pickups, drops.
+   - Loadouts and equipment switching.
+   - Merchant buy/sell and basic upgrades.
 
-4. **Final Milestone: Polish & Refinement**
-   - UI implementation
-   - Visual feedback enhancement
-   - Performance optimization
-   - Bug fixing and playtesting
+3. **Active: World Structure and Generation**
+   - Define the MVP world graph.
+   - Add stable stage/zone/difficulty metadata.
+   - Create generator profiles for wilds, exploration, and dungeon spaces.
+   - Move spawn placement toward stage-aware spawn tables.
+   - Add topology and generation tests.
+
+4. **Next: Save/Load**
+   - Serialize the now-stable player and world-facing data.
+   - Keep the first persistence format minimal.
+
+5. **Later: Minimal Progression**
+   - XP, levels, and a few unlocks.
+   - Avoid full skill-tree work until the core loop is fun.
+
+6. **Final: Polish and Playtest**
+   - Balance enemy placement and rewards.
+   - Improve feedback, UI clarity, and performance.
+   - Make the first 15-30 minutes coherent.
 
 ## Evaluation Criteria
 
-The MVP will be considered successful if it demonstrates:
+The MVP succeeds when it demonstrates:
 
-1. The appeal of exploring interconnected stages of varying sizes and layouts
-2. Engaging combat with distinct enemy behaviors
-3. Clear progression through equipment upgrades
-4. Technical stability with smooth transitions between areas
-5. Enough content to provide 15-30 minutes of gameplay
-
-This focused approach allows us to validate our core game concepts, gather feedback, and create a solid foundation for expanding toward the full vision of Weathered.
+1. Interconnected exploration across named stages with reliable exits.
+2. Deterministic generation that supports repeatable navigation and content placement.
+3. Real-time combat that feels readable and resource-driven.
+4. A simple but motivating loot/vendor/upgrade loop.
+5. Stable death/respawn and short-session progression.
+6. Enough content for 15-30 minutes of play without needing future systems to make sense.

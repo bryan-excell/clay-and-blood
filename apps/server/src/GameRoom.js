@@ -957,7 +957,7 @@ export class GameRoom {
                     levelId = resolved.toLevelId;
                     toExitIndex = resolved.toExitIndex;
                     toExitId = resolved.toExitId ?? null;
-                    if (!arrivalDirection) arrivalDirection = resolved.arrivalDirection ?? resolved.entryDirection ?? null;
+                    if (!arrivalDirection) arrivalDirection = resolved.arrivalDirection ?? null;
                 }
 
                 const grid = this._getGrid(levelId);
@@ -977,7 +977,7 @@ export class GameRoom {
                     if (spawn) {
                         x = spawn.x;
                         y = spawn.y;
-                        arrivalDirection = spawn.arrivalDirection ?? spawn.entryDirection ?? arrivalDirection;
+                        arrivalDirection = spawn.arrivalDirection ?? arrivalDirection;
                     }
                 }
 

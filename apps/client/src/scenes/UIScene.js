@@ -426,7 +426,7 @@ export class UIScene extends Phaser.Scene {
             `Stage UUID: ${worldDebug?.stageUuid ?? 'unknown'}`,
             `Name: ${worldDebug?.displayName ?? 'unknown'}`,
             `Kind: ${worldDebug?.stageKind ?? 'unknown'}`,
-            `Region: ${worldDebug?.regionName ?? worldDebug?.regionId ?? 'none'}`,
+            `Zone: ${worldDebug?.zoneName ?? worldDebug?.zoneId ?? 'none'}`,
         ];
         if (Number.isFinite(worldDebug?.tileX) && Number.isFinite(worldDebug?.tileY)) {
             debugLines.push(`Tile: ${worldDebug.tileX}, ${worldDebug.tileY}`);

@@ -11,7 +11,7 @@ Weathered is a top-down action RPG that draws inspiration from classic MUDs (Mul
 - **Interconnected Stages**: The world is divided into discrete stages of varying sizes connected by exits
   - **Towns/Hubs**: Large, multi-screen areas containing essential services (shops, banks, inns, temples)
   - **Interior Spaces**: Small, single-screen areas for shops, houses, and other buildings
-  - **Wilderness Areas**: Expansive, multi-screen areas containing dangers and connections to other regions
+  - **Wilderness Areas**: Expansive, multi-screen zones containing dangers and connections to other zones
   - **Dungeons**: Challenge-focused areas with unique enemies and valuable rewards
 
 - **Complex Web of Connections**: Areas connect in non-linear ways, encouraging exploration
@@ -156,7 +156,7 @@ Weathered is a top-down action RPG that draws inspiration from classic MUDs (Mul
 - **Currency**: Money earned through combat, quests, and selling items
 - **Merchants**: NPCs buying and selling various goods
 - **Banking**: Safe storage for currency to mitigate death penalties
-- **Price Fluctuations**: Potential regional or time-based price variations
+- **Price Fluctuations**: Potential zone-based or time-based price variations
 
 ## Artistic Direction
 
@@ -164,7 +164,7 @@ Weathered is a top-down action RPG that draws inspiration from classic MUDs (Mul
 
 - **Aesthetic**: Minimalist but distinctive representation of characters and environments
 - **Visual Language**: Clear visual cues for danger levels and interactive elements
-- **Environment Variety**: Visually distinct regions with unique themes
+- **Environment Variety**: Visually distinct zones with unique themes
 - **Animation Quality**: Smooth character and effect animations prioritizing gameplay clarity
 
 ### Audio Design

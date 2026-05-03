@@ -6,6 +6,11 @@ import {
     TILE_VOID,
     TILE_WALL,
 } from './tileRegistry.js';
+import {
+    getDefaultZoneId,
+    getZoneDefinition,
+    getZoneIdFromStageId,
+} from './zoneRegistry.js';
 
 function cloneExit(exit) {
     return {
@@ -15,12 +20,9 @@ function cloneExit(exit) {
 
 function cloneConnection(connection) {
     if (!connection || typeof connection !== 'object') return null;
-    const arrivalDirection = typeof connection.arrivalDirection === 'string'
-        ? connection.arrivalDirection
-        : (typeof connection.entryDirection === 'string' ? connection.entryDirection : null);
     return {
         ...connection,
-        arrivalDirection,
+        arrivalDirection: typeof connection.arrivalDirection === 'string' ? connection.arrivalDirection : null,
     };
 }
 
@@ -84,6 +86,7 @@ function cloneStageDefinition(definition) {
             ? definition.stageUuid
             : generateStageUuid(definition.id ?? definition.stageSlug ?? 'unknown-stage'),
         stageSlug: definition.stageSlug ?? definition.id ?? null,
+        zoneId: definition.zoneId ?? null,
         tags: Array.isArray(definition.tags) ? [...definition.tags] : [],
         tiles: Array.isArray(definition.tiles) ? definition.tiles.map((row) => [...row]) : undefined,
         exits: Array.isArray(definition.exits) ? definition.exits.map(cloneExit) : undefined,
@@ -182,7 +185,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             stageUuid: '8e9d3f30-9793-4f6e-99a4-c5ef3e8c6c95',
             displayName: 'Town Square',
             kind: 'static',
-            regionId: 'millhaven',
+            zoneId: 'millhaven',
             tags: Object.freeze(['outdoor', 'hub', 'town']),
             floorTile: 'floor_dirt',
             width: w,
@@ -218,7 +221,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             stageUuid: '454d9e2f-4639-4b46-b5a2-1be820f21dfe',
             displayName: 'West Gate',
             kind: 'static',
-            regionId: 'millhaven',
+            zoneId: 'millhaven',
             tags: Object.freeze(['outdoor', 'gatehouse']),
             floorTile: 'floor_dirt',
             width: w,
@@ -259,7 +262,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             stageUuid: '8b385533-3fc4-4d45-8c4d-1c800f984f45',
             displayName: 'The Inn',
             kind: 'static',
-            regionId: 'millhaven',
+            zoneId: 'millhaven',
             tags: Object.freeze(['interior', 'town']),
             floorTile: 'floor_dirt',
             width: w,
@@ -288,7 +291,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
             stageUuid: 'bb87d99a-7de5-4a3f-a409-e27baac84176',
             displayName: 'The Shop',
             kind: 'static',
-            regionId: 'millhaven',
+            zoneId: 'millhaven',
             tags: Object.freeze(['interior', 'merchant']),
             floorTile: 'floor_dirt',
             width: w,
@@ -317,7 +320,7 @@ export const DEFAULT_STAGE_DEFINITION = Object.freeze({
     floorTile: 'floor_dirt',
     generator: 'cave',
     generationConfig: Object.freeze({ generator: 'cave' }),
-    regionId: 'western-wilds',
+    zoneId: 'western-wilds',
     tags: Object.freeze(['procedural', 'wilds']),
     terrainFeatures: Object.freeze([]),
 });
@@ -325,12 +328,17 @@ export const DEFAULT_STAGE_DEFINITION = Object.freeze({
 export function getStageDefinition(stageId) {
     const stage = registry.get(stageId);
     if (stage) return cloneStageDefinition(stage);
+    const zoneId = getZoneIdFromStageId(stageId) ?? getDefaultZoneId();
+    const zone = getZoneDefinition(zoneId);
+    const defaultStage = zone?.defaultStage ?? DEFAULT_STAGE_DEFINITION;
+    const clonedDefaultStage = cloneStageDefinition(defaultStage);
     return {
+        ...clonedDefaultStage,
         id: stageId,
         stageSlug: stageId,
         stageUuid: generateStageUuid(stageId),
-        displayName: 'The Wilds',
-        ...cloneStageDefinition(DEFAULT_STAGE_DEFINITION),
+        displayName: zone?.displayName ?? 'The Wilds',
+        zoneId,
     };
 }
 
@@ -361,67 +369,3 @@ export function getExitByIndex(stageId, exitIndex) {
     if (!Array.isArray(definition?.exits)) return null;
     return definition.exits.find((exit) => exit.exitIndex === exitIndex) ?? null;
 }
-
-// Compatibility bridge for legacy callers. Migrate consumers to getStageDefinition.
-export const STATIC_STAGE_LAYOUTS = new Proxy({}, {
-    get(_target, prop) {
-        if (typeof prop !== 'string') return undefined;
-        const definition = registry.get(prop);
-        if (!definition?.tiles) return undefined;
-        return {
-            width: definition.width,
-            height: definition.height,
-            tiles: definition.tiles.map((row) => [...row]),
-            exits: definition.exits.map(cloneExit),
-        };
-    },
-    ownKeys() {
-        return [...registry.keys()];
-    },
-    getOwnPropertyDescriptor() {
-        return { enumerable: true, configurable: true };
-    },
-});
-
-// Compatibility bridge for legacy callers. Migrate consumers to getStageDefinition.
-export const STATIC_EXIT_CONNECTIONS = new Proxy({}, {
-    get(_target, prop) {
-        if (typeof prop !== 'string') return undefined;
-        const definition = registry.get(prop);
-        if (!definition?.connectionsByExitId || !Array.isArray(definition.exits)) return undefined;
-        const connections = {};
-        for (const exit of definition.exits) {
-            const connection = definition.connectionsByExitId[exit.id];
-            if (!connection) continue;
-            connections[exit.exitIndex] = {
-                levelId: connection.levelId,
-                exitId: connection.exitId ?? null,
-                exitIndex: Number.isInteger(connection.exitIndex) ? connection.exitIndex : null,
-                arrivalDirection: connection.arrivalDirection ?? null,
-                entryDirection: connection.arrivalDirection ?? null,
-            };
-        }
-        return connections;
-    },
-    ownKeys() {
-        return [...registry.keys()];
-    },
-    getOwnPropertyDescriptor() {
-        return { enumerable: true, configurable: true };
-    },
-});
-
-// Compatibility bridge for legacy callers. Migrate consumers to getStageDefinition.
-export const STATIC_STAGE_SPAWN_POINTS = new Proxy({}, {
-    get(_target, prop) {
-        if (typeof prop !== 'string') return undefined;
-        const definition = registry.get(prop);
-        return definition?.spawnPoint ? { ...definition.spawnPoint } : undefined;
-    },
-    ownKeys() {
-        return [...registry.keys()];
-    },
-    getOwnPropertyDescriptor() {
-        return { enumerable: true, configurable: true };
-    },
-});

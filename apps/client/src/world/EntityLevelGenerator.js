@@ -18,7 +18,7 @@ export class EntityLevelGenerator {
 
         let grid, exits, width, height;
 
-        if (def.kind === 'static') {
+        if (def.kind === 'static' && Array.isArray(def.tiles)) {
             width = def.width;
             height = def.height;
             grid = def.tiles.map((row) => [...row]);
@@ -42,7 +42,7 @@ export class EntityLevelGenerator {
             type: def.kind === 'static' ? 'static' : 'random',
             kind: def.kind ?? 'procedural',
             displayName: def.displayName ?? null,
-            regionId: def.regionId ?? null,
+            zoneId: def.zoneId ?? null,
             tags: Array.isArray(def.tags) ? [...def.tags] : [],
             width,
             height,
