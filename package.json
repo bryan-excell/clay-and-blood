@@ -14,6 +14,7 @@
     "deploy": "turbo deploy",
     "world:generate-stage": "node tools/world/generateStage.mjs",
     "world:generate-zone": "node tools/world/generateZone.mjs",
+    "world:generate-zone-preview": "node tools/world/generateZonePreview.mjs",
     "world:preview-stage": "node tools/world/previewStage.mjs"
   },
   "devDependencies": {
