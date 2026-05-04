@@ -589,6 +589,8 @@ export * from './world/validation.js';
 export * from './world/zoneRegistry.js';
 export * from './world/tileRegistry.js';
 export * from './world/vision.js';
+export * from './world/generators/pathFirstRoad.js';
+export * from './world/generators/rng.js';
 
 /**
  * Resolve a deterministic spawn position for arriving through an exit.
