@@ -44,6 +44,7 @@ Examples:
 
 - `lunavik`
 - `great-northern-road`
+- `the-meadows`
 - `western-wilds`
 
 Zones are the right unit for:
@@ -260,7 +261,7 @@ File:
 
 - `packages/shared/src/world/stageRegistry.js`
 
-The stage registry exposes stage definitions to the rest of the game. It contains static authored Lunavik stages and registers generated Great Northern Road stages from the shared Great Northern Road generator.
+The stage registry exposes stage definitions to the rest of the game. It contains static authored Lunavik stages and registers generated Great Northern Road and Meadows stages from their shared zone generators.
 
 Important existing stages:
 
@@ -374,6 +375,32 @@ The stage entries variant is useful for tooling because it includes metadata suc
 - `forwardSide`
 - `pathRadius`
 - `seed`
+
+### The Meadows Generator
+
+File:
+
+- `packages/shared/src/world/generators/theMeadows.js`
+
+The Meadows is the second generated-zone pattern. It is a loose 5x5 grid east of Lunavik, with a few missing cells and one smaller static clearing so the result is interconnected without being a perfect square.
+
+It currently owns:
+
+- Zone ID
+- Stable 5x5-ish stage coordinate slots
+- Large meadow stage generation
+- A small static clearing landmark
+- Cardinal neighbor exits
+- Reciprocal grid connections
+- Boundary connection back to Lunavik's east road
+- Stage ID list generation
+
+Important exports:
+
+- `buildTheMeadowsStages()`
+- `buildTheMeadowsStageEntries()`
+- `getTheMeadowsStageIds()`
+- `getTheMeadowsEntryStageId()`
 
 ### Path-First Road Stage Generator
 
@@ -507,6 +534,42 @@ Generated zones can contain authored landmarks without special runtime hacks.
 The final generated road stage currently has its forward exit removed. This prevents accidentally falling through into dynamic procedural wilderness before there is a designed destination.
 
 When a future northern destination exists, replace this rule with an explicit zone boundary connection.
+
+## The Meadows: Grid Reference Implementation
+
+### Design Intent
+
+The Meadows is a broad outdoor zone east of Lunavik.
+
+It should feel like:
+
+- A loose grid of large fields.
+- More interconnected than a road.
+- Easy to wander, backtrack, and approach from different directions.
+- Open, grassy, and readable.
+- Not a perfect 5x5 square.
+
+### Current Stage Flow
+
+The route starts:
+
+```txt
+town-square
+  -> the-meadows::meadow-r3c1
+```
+
+The generated zone contains:
+
+- 22 generated meadow stages.
+- 1 small static landmark: `the-meadows::a-clearing`
+- Stable stage IDs based on row and column coordinates.
+- A few omitted grid cells to break the perfect square.
+
+### Connection Rule
+
+Each stage exposes exits for neighboring meadow cells in the cardinal directions. Connections are reciprocal.
+
+The west exit of `the-meadows::meadow-r3c1` returns to Lunavik's town square east road.
 
 ## Preview Tooling
 
@@ -904,16 +967,24 @@ Generate Great Northern Road preview:
 npm run world:generate-zone-preview -- --seed gnr-map-01
 ```
 
+Generate The Meadows preview:
+
+```powershell
+npm run world:generate-zone-preview -- --zone the-meadows --seed meadows-map-01
+```
+
 Open:
 
 ```txt
 tools/world/out/great-northern-road-preview.html
+tools/world/out/the-meadows-preview.html
 ```
 
 Dump zone ASCII to terminal:
 
 ```powershell
 npm run world:generate-zone -- --seed gnr-map-01
+npm run world:generate-zone -- --zone the-meadows --seed meadows-map-01
 ```
 
 Preview a registered stage:
@@ -955,6 +1026,6 @@ The current world generation strategy is:
 - Use explicit arrival tiles.
 - Validate aggressively.
 - Preview generated worlds in HTML before committing to them.
-- Treat Great Northern Road as the first reference implementation.
+- Treat Great Northern Road as the route-chain reference and The Meadows as the grid-zone reference.
 
 This gives Clay and Blood a path toward a world that is authored where it matters, variable where replayability matters, and testable enough that world generation bugs are caught early.

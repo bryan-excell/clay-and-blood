@@ -1,4 +1,12 @@
 import { getGreatNorthernRoadStageIds } from './generators/greatNorthernRoad.js';
+import {
+    getTheGrottoEntryStageId,
+    getTheGrottoStageIds,
+} from './generators/theGrotto.js';
+import {
+    getTheMeadowsEntryStageId,
+    getTheMeadowsStageIds,
+} from './generators/theMeadows.js';
 
 const ZONE_SEPARATOR = '::';
 
@@ -37,6 +45,42 @@ const ZONE_DEFINITIONS = Object.freeze({
             generator: 'road',
             generationConfig: Object.freeze({ generator: 'road' }),
             tags: Object.freeze(['outdoor', 'road']),
+        }),
+    }),
+    'the-meadows': Object.freeze({
+        id: 'the-meadows',
+        displayName: 'The Meadows',
+        biome: 'meadow',
+        tags: Object.freeze(['outdoor', 'field', 'meadow', 'travel']),
+        hubStageId: getTheMeadowsEntryStageId(),
+        stageIds: Object.freeze(getTheMeadowsStageIds()),
+        proceduralPrefix: null,
+        defaultStage: Object.freeze({
+            kind: 'procedural',
+            width: 56,
+            height: 42,
+            floorTile: 'floor_dirt',
+            generator: 'meadow-grid',
+            generationConfig: Object.freeze({ generator: 'meadow-grid' }),
+            tags: Object.freeze(['outdoor', 'field', 'meadow']),
+        }),
+    }),
+    'the-grotto': Object.freeze({
+        id: 'the-grotto',
+        displayName: 'The Grotto',
+        biome: 'grotto',
+        tags: Object.freeze(['cave', 'grotto', 'exploration']),
+        hubStageId: getTheGrottoEntryStageId(),
+        stageIds: Object.freeze(getTheGrottoStageIds()),
+        proceduralPrefix: null,
+        defaultStage: Object.freeze({
+            kind: 'procedural',
+            width: 27,
+            height: 19,
+            floorTile: 'floor_dirt',
+            generator: 'grotto-winding-corridors',
+            generationConfig: Object.freeze({ generator: 'grotto-winding-corridors' }),
+            tags: Object.freeze(['cave', 'grotto']),
         }),
     }),
     'western-wilds': Object.freeze({

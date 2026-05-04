@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import {
     buildGreatNorthernRoadStageEntries,
+    buildTheGrottoStageEntries,
+    buildTheMeadowsStageEntries,
     validateStageDefinition,
 } from '../../packages/shared/src/index.js';
 import { printStageSummary } from './lib/asciiMap.mjs';
@@ -32,7 +34,7 @@ function numberArg(args, key, fallback) {
 
 function printUsage() {
     console.log([
-        'Usage: npm run world:generate-zone -- --zone great-northern-road --seed gnr-v2 --count 15',
+        'Usage: npm run world:generate-zone -- --zone the-meadows --seed meadows-map-01',
         '',
         'Options:',
         '  --zone <zone-id>',
@@ -56,7 +58,16 @@ function main() {
     const seed = args.seed ?? zoneId;
     let totalIssues = 0;
 
-    for (const [index, entry] of buildGreatNorthernRoadStageEntries({ worldSeed: seed }).entries()) {
+    const builders = {
+        'great-northern-road': buildGreatNorthernRoadStageEntries,
+        'the-meadows': buildTheMeadowsStageEntries,
+        'the-grotto': buildTheGrottoStageEntries,
+    };
+    const buildEntries = builders[zoneId];
+    if (!buildEntries) throw new Error(`Unknown zone "${zoneId}"`);
+    const entries = buildEntries({ worldSeed: seed });
+
+    for (const [index, entry] of entries.entries()) {
         const { stage } = entry;
         const ascii = stageToAscii(stage, { showArrivals: false });
         const issues = validateStageDefinition(stage);

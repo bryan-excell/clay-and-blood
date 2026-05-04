@@ -4,12 +4,14 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
     buildGreatNorthernRoadStageEntries,
+    buildTheGrottoStageEntries,
+    buildTheMeadowsStageEntries,
     validateStageDefinition,
 } from '../../packages/shared/src/index.js';
 import { stageToAscii } from './lib/asciiMap.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_OUTPUT = resolve(__dirname, 'out', 'great-northern-road-preview.html');
+const DEFAULT_OUTPUT_DIR = resolve(__dirname, 'out');
 
 function parseArgs(argv) {
     const args = {};
@@ -62,7 +64,15 @@ function tileClassForChar(char) {
 function buildZoneCandidates(args) {
     const zoneId = args.zone ?? 'great-northern-road';
     const seed = args.seed ?? zoneId;
-    const candidates = buildGreatNorthernRoadStageEntries({ worldSeed: seed }).map((entry) => ({
+    const builders = {
+        'great-northern-road': buildGreatNorthernRoadStageEntries,
+        'the-meadows': buildTheMeadowsStageEntries,
+        'the-grotto': buildTheGrottoStageEntries,
+    };
+    const buildEntries = builders[zoneId];
+    if (!buildEntries) throw new Error(`Unknown zone "${zoneId}"`);
+    const entries = buildEntries({ worldSeed: seed });
+    const candidates = entries.map((entry) => ({
         ...entry,
         ascii: stageToAscii(entry.stage, { showArrivals: false }),
         issues: validateStageDefinition(entry.stage),
@@ -98,6 +108,10 @@ function placeNextStage(currentPlacement, currentCandidate, nextCandidate) {
 }
 
 function buildRouteLayout(candidates) {
+    if (candidates.every((candidate) => Number.isInteger(candidate.gridX) && Number.isInteger(candidate.gridY))) {
+        return buildGridLayout(candidates);
+    }
+
     const placements = [];
     let minX = 0;
     let minY = 0;
@@ -122,6 +136,40 @@ function buildRouteLayout(candidates) {
         })),
         width: maxX - minX,
         height: maxY - minY,
+    };
+}
+
+function buildGridLayout(candidates) {
+    const gap = 4;
+    const columnWidths = new Map();
+    const rowHeights = new Map();
+    for (const candidate of candidates) {
+        columnWidths.set(candidate.gridX, Math.max(columnWidths.get(candidate.gridX) ?? 0, candidate.stage.width));
+        rowHeights.set(candidate.gridY, Math.max(rowHeights.get(candidate.gridY) ?? 0, candidate.stage.height));
+    }
+
+    const columns = [...columnWidths.keys()].sort((a, b) => a - b);
+    const rows = [...rowHeights.keys()].sort((a, b) => a - b);
+    const xByColumn = new Map();
+    const yByRow = new Map();
+    let x = 0;
+    let y = 0;
+    for (const column of columns) {
+        xByColumn.set(column, x);
+        x += columnWidths.get(column) + gap;
+    }
+    for (const row of rows) {
+        yByRow.set(row, y);
+        y += rowHeights.get(row) + gap;
+    }
+
+    return {
+        placements: candidates.map((candidate) => ({
+            x: xByColumn.get(candidate.gridX),
+            y: yByRow.get(candidate.gridY),
+        })),
+        width: Math.max(0, x - gap),
+        height: Math.max(0, y - gap),
     };
 }
 
@@ -201,7 +249,7 @@ function renderHtml({ zoneId, seed, candidates }) {
                 <header>
                     <div>
                         <h2>${escapeHtml(stage.id)}</h2>
-                        <p>${escapeHtml(candidate.kind)} &middot; ${stage.width}x${stage.height} &middot; ${escapeHtml(candidate.backSide)} to ${escapeHtml(candidate.forwardSide)}${candidate.pathRadius ? ` &middot; radius ${candidate.pathRadius}` : ''}</p>
+                        <p>${escapeHtml(candidate.kind)} &middot; ${stage.width}x${stage.height}${Number.isInteger(candidate.gridX) ? ` &middot; grid ${candidate.gridX + 1},${candidate.gridY + 1}` : ` &middot; ${escapeHtml(candidate.backSide)} to ${escapeHtml(candidate.forwardSide)}`}${candidate.pathRadius ? ` &middot; radius ${candidate.pathRadius}` : ''}</p>
                     </div>
                     <strong>${issueText}</strong>
                 </header>
@@ -429,8 +477,8 @@ function renderHtml({ zoneId, seed, candidates }) {
 
 async function main() {
     const args = parseArgs(process.argv.slice(2));
-    const output = resolve(args.output ?? DEFAULT_OUTPUT);
     const preview = buildZoneCandidates(args);
+    const output = resolve(args.output ?? resolve(DEFAULT_OUTPUT_DIR, `${preview.zoneId}-preview.html`));
     await mkdir(dirname(output), { recursive: true });
     await writeFile(output, renderHtml(preview), 'utf8');
     console.log(output);

@@ -1,5 +1,10 @@
 import { createAuthoredStageDefinition } from './authoredStage.js';
 import { buildGreatNorthernRoadStages } from './generators/greatNorthernRoad.js';
+import { buildTheGrottoStages } from './generators/theGrotto.js';
+import {
+    buildTheMeadowsStages,
+    getTheMeadowsEntryStageId,
+} from './generators/theMeadows.js';
 import {
     getDefaultZoneId,
     getZoneDefinition,
@@ -191,6 +196,7 @@ C......................................D
         connectionsByExitId: Object.freeze({
             'north-road': Object.freeze({ levelId: 'northern-gate', exitId: 'south-road', exitIndex: 0, arrivalDirection: 'north' }),
             'west-gate': Object.freeze({ levelId: 'west-gate', exitId: 'east-road', exitIndex: 1, arrivalDirection: 'west' }),
+            'east-road': Object.freeze({ levelId: getTheMeadowsEntryStageId(), exitId: 'west-path', exitIndex: 3, arrivalDirection: 'east' }),
             'inn-door': Object.freeze({ levelId: 'inn', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
             'shop-door': Object.freeze({ levelId: 'shop-1', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
         }),
@@ -283,6 +289,8 @@ A..................B
     }),
     'northern-gate': NORTHERN_GATE_STAGE,
     ...Object.fromEntries(buildGreatNorthernRoadStages().map((stage) => [stage.id, stage])),
+    ...Object.fromEntries(buildTheMeadowsStages().map((stage) => [stage.id, stage])),
+    ...Object.fromEntries(buildTheGrottoStages().map((stage) => [stage.id, stage])),
 };
 
 const registry = new Map(

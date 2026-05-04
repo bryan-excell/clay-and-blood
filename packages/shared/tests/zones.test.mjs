@@ -7,6 +7,8 @@ import {
     getExitDestination,
     getStageData,
     getStageDefinition,
+    getTheGrottoEntryStageId,
+    getTheMeadowsEntryStageId,
     getZoneDefinition,
     getZoneIdFromStageId,
     resolveExitTransition,
@@ -91,6 +93,88 @@ function testGreatNorthernRoadRouteChain() {
     assert.equal(getExitById(zone.stageIds.at(-1), 'north-road'), null, 'final road stage should not leak to dynamic wilds');
 }
 
+function parseMeadowCoord(stageId) {
+    if (stageId === 'the-meadows::a-clearing') return { y: 2, x: 2 };
+    const match = /^the-meadows::meadow-r(\d+)c(\d+)$/.exec(stageId);
+    return match ? { y: Number(match[1]) - 1, x: Number(match[2]) - 1 } : null;
+}
+
+function testTheMeadowsGridTopology() {
+    const zone = getZoneDefinition('the-meadows');
+    assert.ok(zone, 'expected The Meadows zone');
+    assert.equal(zone.displayName, 'The Meadows');
+    assert.equal(zone.stageIds.length, 23);
+    assert.equal(zone.hubStageId, getTheMeadowsEntryStageId());
+    assert.ok(zone.stageIds.includes('the-meadows::a-clearing'));
+
+    const clearing = getStageDefinition('the-meadows::a-clearing');
+    assert.equal(clearing.displayName, 'A Clearing');
+    assert.equal(clearing.tags.includes('static'), true, 'A Clearing should be a static landmark stage');
+    assert.ok(clearing.width < 40 && clearing.height < 30, 'A Clearing should be smaller than generated meadow stages');
+
+    const townEast = resolveExitTransition('town-square', 3, 'east-road');
+    assert.equal(townEast.toLevelId, getTheMeadowsEntryStageId());
+    assert.equal(townEast.toExitId, 'west-path');
+
+    const entryWest = resolveExitTransition(getTheMeadowsEntryStageId(), 3, 'west-path');
+    assert.equal(entryWest.toLevelId, 'town-square');
+    assert.equal(entryWest.toExitId, 'east-road');
+
+    const stageIds = new Set(zone.stageIds);
+    const idForCoord = (x, y) => (x === 2 && y === 2 ? 'the-meadows::a-clearing' : `the-meadows::meadow-r${y + 1}c${x + 1}`);
+    for (const stageId of zone.stageIds) {
+        const coord = parseMeadowCoord(stageId);
+        assert.ok(coord, `${stageId} should encode a meadow grid coordinate`);
+        const stage = getStageDefinition(stageId);
+        assert.equal(stage.zoneId, 'the-meadows');
+
+        for (const [exitId, dx, dy] of [
+            ['east-path', 1, 0],
+            ['south-path', 0, 1],
+        ]) {
+            const targetStageId = idForCoord(coord.x + dx, coord.y + dy);
+            if (!stageIds.has(targetStageId)) continue;
+            const exit = stage.exits.find((candidate) => candidate.id === exitId);
+            assert.ok(exit, `${stageId} should connect to ${targetStageId}`);
+            const transition = resolveExitTransition(stageId, exit.exitIndex, exit.id);
+            assert.equal(transition.toLevelId, targetStageId);
+        }
+    }
+}
+
+function testTheGrottoTopology() {
+    const zone = getZoneDefinition('the-grotto');
+    assert.ok(zone, 'expected The Grotto zone');
+    assert.equal(zone.displayName, 'The Grotto');
+    assert.equal(zone.stageIds.length, 10);
+    assert.equal(zone.hubStageId, getTheGrottoEntryStageId());
+
+    const clearingToGrotto = resolveExitTransition('the-meadows::a-clearing', 4, 'grotto-mouth');
+    assert.equal(clearingToGrotto.toLevelId, getTheGrottoEntryStageId());
+    assert.equal(clearingToGrotto.toExitId, 'meadow-light');
+
+    const grottoToClearing = resolveExitTransition(getTheGrottoEntryStageId(), 0, 'meadow-light');
+    assert.equal(grottoToClearing.toLevelId, 'the-meadows::a-clearing');
+    assert.equal(grottoToClearing.toExitId, 'grotto-mouth');
+
+    for (const stageId of zone.stageIds) {
+        const stage = getStageDefinition(stageId);
+        assert.equal(stage.zoneId, 'the-grotto');
+        assert.ok(stage.width <= 27 && stage.height <= 19, `${stageId} should stay compact`);
+        assert.ok(stage.exits.length >= 2 && stage.exits.length <= 3, `${stageId} should have 2 or 3 exits`);
+
+        for (const [exitId, connection] of Object.entries(stage.connectionsByExitId)) {
+            const exit = stage.exits.find((candidate) => candidate.id === exitId);
+            assert.ok(exit, `${stageId} should have exit ${exitId}`);
+            if (connection.levelId === 'the-meadows::a-clearing') continue;
+            assert.ok(zone.stageIds.includes(connection.levelId), `${stageId}:${exitId} should stay in the grotto graph`);
+            const target = getStageDefinition(connection.levelId);
+            const returnConnection = target.connectionsByExitId?.[connection.exitId];
+            assert.equal(returnConnection?.levelId, stageId, `${stageId}:${exitId} should be reciprocated`);
+        }
+    }
+}
+
 function testProceduralStagesKeepSolidBoundary() {
     const { grid } = getStageData('western-wilds::proc-boundary-test');
     const h = grid.length;
@@ -112,6 +196,8 @@ function run() {
     testProceduralStageIdsCarryZone();
     testDynamicExitDestinationIsZoneAware();
     testGreatNorthernRoadRouteChain();
+    testTheMeadowsGridTopology();
+    testTheGrottoTopology();
     testProceduralStagesKeepSolidBoundary();
     console.log('shared zone tests passed');
 }
