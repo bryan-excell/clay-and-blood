@@ -2,37 +2,14 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateStageDefinition } from '../../packages/shared/src/index.js';
-import { generatePathFirstRoadStage } from './lib/generators/pathFirstRoad.mjs';
-import { createRng, intRange } from './lib/rng.mjs';
+import {
+    buildGreatNorthernRoadStageEntries,
+    validateStageDefinition,
+} from '../../packages/shared/src/index.js';
+import { stageToAscii } from './lib/asciiMap.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_OUTPUT = resolve(__dirname, 'out', 'great-northern-road-preview.html');
-
-const OPPOSITE_SIDE = Object.freeze({
-    north: 'south',
-    east: 'west',
-    south: 'north',
-    west: 'east',
-});
-
-const GREAT_NORTHERN_ROAD_FORWARD_PATTERN = Object.freeze([
-    'north',
-    'north',
-    'east',
-    'north',
-    'north',
-    'west',
-    'north',
-    'north',
-    'north',
-    'east',
-    'north',
-    'west',
-    'north',
-    'north',
-    'north',
-]);
 
 function parseArgs(argv) {
     const args = {};
@@ -82,56 +59,14 @@ function tileClassForChar(char) {
     }
 }
 
-function padStageNumber(index) {
-    return String(index + 1).padStart(2, '0');
-}
-
 function buildZoneCandidates(args) {
     const zoneId = args.zone ?? 'great-northern-road';
     const seed = args.seed ?? zoneId;
-    const count = numberArg(args, 'count', 15);
-    const minWidth = numberArg(args, 'min-width', 15);
-    const maxWidth = numberArg(args, 'max-width', 72);
-    const minHeight = numberArg(args, 'min-height', 15);
-    const maxHeight = numberArg(args, 'max-height', 42);
-    const rng = createRng(seed);
-    const candidates = [];
-    let backSide = 'south';
-
-    for (let i = 0; i < count; i++) {
-        const stageNumber = padStageNumber(i);
-        const forwardSide = GREAT_NORTHERN_ROAD_FORWARD_PATTERN[i % GREAT_NORTHERN_ROAD_FORWARD_PATTERN.length];
-        const width = intRange(rng, minWidth, maxWidth);
-        const height = intRange(rng, minHeight, maxHeight);
-        const stageSeed = `${seed}:${stageNumber}:${backSide}-${forwardSide}`;
-        const pathRadius = intRange(rng, 1, 3);
-        const { stage, ascii } = generatePathFirstRoadStage({
-            id: `${zoneId}::road-${stageNumber}`,
-            displayName: `Great Northern Road ${stageNumber}`,
-            zoneId,
-            seed: stageSeed,
-            width,
-            height,
-            backSide,
-            forwardSide,
-            wander: 0.22 + rng() * 0.34,
-            pathRadius,
-            clearingsMin: 1,
-            clearingsMax: intRange(rng, 2, 5),
-            tallGrassChance: 0.03 + rng() * 0.08,
-            waterChance: rng() < 0.18 ? 0.012 : 0,
-        });
-        candidates.push({
-            stage,
-            ascii,
-            issues: validateStageDefinition(stage),
-            backSide,
-            forwardSide,
-            pathRadius,
-            seed: stageSeed,
-        });
-        backSide = OPPOSITE_SIDE[forwardSide];
-    }
+    const candidates = buildGreatNorthernRoadStageEntries({ worldSeed: seed }).map((entry) => ({
+        ...entry,
+        ascii: stageToAscii(entry.stage, { showArrivals: false }),
+        issues: validateStageDefinition(entry.stage),
+    }));
 
     return { zoneId, seed, candidates };
 }
@@ -229,7 +164,7 @@ function renderRouteViewer(candidates) {
     const stages = candidates.map((candidate, index) => {
         const placement = layout.placements[index];
         return `
-            <section class="route-stage" style="left: ${placement.x * routeTilePx}px; top: ${placement.y * routeTilePx}px;">
+            <section class="route-stage ${escapeHtml(candidate.kind)}" style="left: ${placement.x * routeTilePx}px; top: ${placement.y * routeTilePx}px;">
                 <div class="route-label">${index + 1}</div>
                 ${renderMap(candidate, { className: 'route-map' })}
             </section>
@@ -262,11 +197,11 @@ function renderHtml({ zoneId, seed, candidates }) {
             .map((exit) => `${exit.id} ${exit.side} (${exit.x},${exit.y}) -> (${exit.arrival?.x},${exit.arrival?.y})`)
             .join('<br>');
         return `
-            <article class="stage">
+            <article class="stage ${escapeHtml(candidate.kind)}">
                 <header>
                     <div>
                         <h2>${escapeHtml(stage.id)}</h2>
-                        <p>${stage.width}x${stage.height} &middot; ${escapeHtml(candidate.backSide)} to ${escapeHtml(candidate.forwardSide)} &middot; radius ${candidate.pathRadius}</p>
+                        <p>${escapeHtml(candidate.kind)} &middot; ${stage.width}x${stage.height} &middot; ${escapeHtml(candidate.backSide)} to ${escapeHtml(candidate.forwardSide)}${candidate.pathRadius ? ` &middot; radius ${candidate.pathRadius}` : ''}</p>
                     </div>
                     <strong>${issueText}</strong>
                 </header>
@@ -360,6 +295,9 @@ function renderHtml({ zoneId, seed, candidates }) {
         background: rgba(22, 21, 17, 0.78);
         box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
     }
+    .route-stage.static-landmark {
+        outline-color: rgba(104, 202, 166, 0.95);
+    }
     .route-label {
         position: absolute;
         z-index: 2;
@@ -385,6 +323,9 @@ function renderHtml({ zoneId, seed, candidates }) {
         background: #20201d;
         padding: 12px;
         overflow-x: auto;
+    }
+    .stage.static-landmark {
+        border-color: #559b80;
     }
     .stage header {
         display: flex;

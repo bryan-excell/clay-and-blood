@@ -1,9 +1,11 @@
+import { getGreatNorthernRoadStageIds } from './generators/greatNorthernRoad.js';
+
 const ZONE_SEPARATOR = '::';
 
 const ZONE_DEFINITIONS = Object.freeze({
-    millhaven: Object.freeze({
-        id: 'millhaven',
-        displayName: 'Millhaven',
+    lunavik: Object.freeze({
+        id: 'lunavik',
+        displayName: 'Lunavik',
         biome: 'town',
         tags: Object.freeze(['safe-zone', 'settlement']),
         hubStageId: 'town-square',
@@ -25,23 +27,7 @@ const ZONE_DEFINITIONS = Object.freeze({
         biome: 'road',
         tags: Object.freeze(['outdoor', 'road', 'travel']),
         hubStageId: 'great-northern-road::road-01',
-        stageIds: Object.freeze([
-            'great-northern-road::road-01',
-            'great-northern-road::road-02',
-            'great-northern-road::road-03',
-            'great-northern-road::road-04',
-            'great-northern-road::road-05',
-            'great-northern-road::road-06',
-            'great-northern-road::road-07',
-            'great-northern-road::road-08',
-            'great-northern-road::road-09',
-            'great-northern-road::road-10',
-            'great-northern-road::road-11',
-            'great-northern-road::road-12',
-            'great-northern-road::road-13',
-            'great-northern-road::road-14',
-            'great-northern-road::road-15',
-        ]),
+        stageIds: Object.freeze(getGreatNorthernRoadStageIds()),
         proceduralPrefix: null,
         defaultStage: Object.freeze({
             kind: 'procedural',

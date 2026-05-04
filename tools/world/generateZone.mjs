@@ -1,33 +1,10 @@
 #!/usr/bin/env node
-import { validateStageDefinition } from '../../packages/shared/src/index.js';
-import { generatePathFirstRoadStage } from './lib/generators/pathFirstRoad.mjs';
+import {
+    buildGreatNorthernRoadStageEntries,
+    validateStageDefinition,
+} from '../../packages/shared/src/index.js';
 import { printStageSummary } from './lib/asciiMap.mjs';
-import { createRng, intRange } from './lib/rng.mjs';
-
-const OPPOSITE_SIDE = Object.freeze({
-    north: 'south',
-    east: 'west',
-    south: 'north',
-    west: 'east',
-});
-
-const GREAT_NORTHERN_ROAD_FORWARD_PATTERN = Object.freeze([
-    'north',
-    'north',
-    'east',
-    'north',
-    'north',
-    'west',
-    'north',
-    'north',
-    'north',
-    'east',
-    'north',
-    'west',
-    'north',
-    'north',
-    'north',
-]);
+import { stageToAscii } from './lib/asciiMap.mjs';
 
 function parseArgs(argv) {
     const args = {};
@@ -51,10 +28,6 @@ function numberArg(args, key, fallback) {
     const value = Number(args[key]);
     if (!Number.isFinite(value)) throw new Error(`--${key} must be a number`);
     return value;
-}
-
-function padStageNumber(index) {
-    return String(index + 1).padStart(2, '0');
 }
 
 function printUsage() {
@@ -81,52 +54,25 @@ function main() {
 
     const zoneId = args.zone ?? 'great-northern-road';
     const seed = args.seed ?? zoneId;
-    const count = numberArg(args, 'count', 15);
-    const minWidth = numberArg(args, 'min-width', 15);
-    const maxWidth = numberArg(args, 'max-width', 72);
-    const minHeight = numberArg(args, 'min-height', 15);
-    const maxHeight = numberArg(args, 'max-height', 42);
-    const rng = createRng(seed);
-    let backSide = 'south';
     let totalIssues = 0;
 
-    for (let i = 0; i < count; i++) {
-        const stageNumber = padStageNumber(i);
-        const forwardSide = GREAT_NORTHERN_ROAD_FORWARD_PATTERN[i % GREAT_NORTHERN_ROAD_FORWARD_PATTERN.length];
-        const width = intRange(rng, minWidth, maxWidth);
-        const height = intRange(rng, minHeight, maxHeight);
-        const stageSeed = `${seed}:${stageNumber}:${backSide}-${forwardSide}`;
-        const { stage, ascii } = generatePathFirstRoadStage({
-            id: `${zoneId}::road-${stageNumber}`,
-            displayName: `Great Northern Road ${stageNumber}`,
-            zoneId,
-            seed: stageSeed,
-            width,
-            height,
-            backSide,
-            forwardSide,
-            wander: 0.22 + rng() * 0.34,
-            pathRadius: intRange(rng, 1, 3),
-            clearingsMin: 1,
-            clearingsMax: intRange(rng, 2, 5),
-            tallGrassChance: 0.03 + rng() * 0.08,
-            waterChance: rng() < 0.18 ? 0.012 : 0,
-        });
+    for (const [index, entry] of buildGreatNorthernRoadStageEntries({ worldSeed: seed }).entries()) {
+        const { stage } = entry;
+        const ascii = stageToAscii(stage, { showArrivals: false });
         const issues = validateStageDefinition(stage);
         totalIssues += issues.length;
 
         console.log(`// ${'-'.repeat(72)}`);
         console.log(`// ${printStageSummary(stage).replace(/\n/g, '\n// ')}`);
+        console.log(`// kind: ${entry.kind}`);
         console.log(`// validation: ${issues.length === 0 ? 'ok' : `${issues.length} issue(s)`}`);
         for (const issue of issues) {
             console.log(`// - ${issue.code}: ${issue.message}`);
         }
-        console.log(`const road${stageNumber} = \``);
+        console.log(`const stage${String(index + 1).padStart(2, '0')} = \``);
         console.log(ascii);
         console.log('`;');
         console.log('');
-
-        backSide = OPPOSITE_SIDE[forwardSide];
     }
 
     if (totalIssues > 0) process.exitCode = 1;

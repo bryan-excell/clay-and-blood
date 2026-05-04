@@ -1,8 +1,5 @@
 import { createAuthoredStageDefinition } from './authoredStage.js';
-import { generatePathFirstRoadStage } from './generators/pathFirstRoad.js';
-import { createRng, intRange } from './generators/rng.js';
-import { TILE_FLOOR } from './tileRegistry.js';
-import { compileRouteChain } from './topology.js';
+import { buildGreatNorthernRoadStages } from './generators/greatNorthernRoad.js';
 import {
     getDefaultZoneId,
     getZoneDefinition,
@@ -102,115 +99,11 @@ function cloneStageDefinition(definition) {
     };
 }
 
-const OPPOSITE_SIDE = Object.freeze({
-    north: 'south',
-    east: 'west',
-    south: 'north',
-    west: 'east',
-});
-
-const GREAT_NORTHERN_ROAD_FORWARD_PATTERN = Object.freeze([
-    'north',
-    'north',
-    'east',
-    'north',
-    'north',
-    'west',
-    'north',
-    'north',
-    'north',
-    'east',
-    'north',
-    'west',
-    'north',
-    'north',
-    'north',
-]);
-
-function padStageNumber(index) {
-    return String(index + 1).padStart(2, '0');
-}
-
-function getExitByRole(stage, role) {
-    return stage.exits.find((exit) => exit.connectionRole === role) ?? null;
-}
-
-function withExitConnection(stage, exit, connection) {
-    return Object.freeze({
-        ...stage,
-        connectionsByExitId: Object.freeze({
-            ...(stage.connectionsByExitId ?? {}),
-            [exit.id]: Object.freeze(connection),
-        }),
-    });
-}
-
-function withoutForwardExit(stage) {
-    const forwardExit = getExitByRole(stage, 'forward');
-    if (!forwardExit) return stage;
-
-    const tiles = stage.tiles.map((row) => [...row]);
-    tiles[forwardExit.y][forwardExit.x] = TILE_FLOOR;
-    const connectionsByExitId = { ...(stage.connectionsByExitId ?? {}) };
-    delete connectionsByExitId[forwardExit.id];
-
-    return Object.freeze({
-        ...stage,
-        tiles: Object.freeze(tiles.map((row) => Object.freeze(row))),
-        exits: Object.freeze(stage.exits.filter((exit) => exit.id !== forwardExit.id)),
-        connectionsByExitId: Object.freeze(connectionsByExitId),
-    });
-}
-
-function buildGeneratedGreatNorthernRoadStages(seed = 'gnr-map-01') {
-    const rng = createRng(seed);
-    const stages = [];
-    let backSide = 'south';
-
-    for (let index = 0; index < 15; index++) {
-        const stageNumber = padStageNumber(index);
-        const forwardSide = GREAT_NORTHERN_ROAD_FORWARD_PATTERN[index];
-        const width = intRange(rng, 15, 72);
-        const height = intRange(rng, 15, 42);
-        const stageSeed = `${seed}:${stageNumber}:${backSide}-${forwardSide}`;
-        const pathRadius = intRange(rng, 1, 3);
-        const { stage } = generatePathFirstRoadStage({
-            id: `great-northern-road::road-${stageNumber}`,
-            displayName: `Great Northern Road ${stageNumber}`,
-            zoneId: 'great-northern-road',
-            seed: stageSeed,
-            width,
-            height,
-            backSide,
-            forwardSide,
-            wander: 0.22 + rng() * 0.34,
-            pathRadius,
-            clearingsMin: 1,
-            clearingsMax: intRange(rng, 2, 5),
-            tallGrassChance: 0.03 + rng() * 0.08,
-            waterChance: rng() < 0.18 ? 0.012 : 0,
-        });
-        stages.push(stage);
-        backSide = OPPOSITE_SIDE[forwardSide];
-    }
-
-    const compiled = compileRouteChain(stages);
-    const firstBackExit = getExitByRole(compiled[0], 'back');
-    compiled[0] = withExitConnection(compiled[0], firstBackExit, {
-        levelId: 'northern-gate',
-        exitId: 'north-road',
-        exitIndex: 1,
-        arrivalDirection: 'south',
-    });
-    compiled[compiled.length - 1] = withoutForwardExit(compiled[compiled.length - 1]);
-    return compiled;
-}
-
 const NORTHERN_GATE_STAGE = createAuthoredStageDefinition({
     id: 'northern-gate',
     stageSlug: 'northern-gate',
     displayName: 'Northern Gate',
-    zoneId: 'millhaven',
+    zoneId: 'lunavik',
     tags: Object.freeze(['outdoor', 'gatehouse', 'town']),
     floorTile: 'floor_dirt',
     map: `
@@ -241,7 +134,7 @@ const AUTHORED_STAGE_DEFINITIONS = {
         stageSlug: 'town-square',
         stageUuid: '8e9d3f30-9793-4f6e-99a4-c5ef3e8c6c95',
         displayName: 'Town Square',
-        zoneId: 'millhaven',
+        zoneId: 'lunavik',
         tags: Object.freeze(['outdoor', 'hub', 'town']),
         floorTile: 'floor_dirt',
         map: `
@@ -307,7 +200,7 @@ C......................................D
         stageSlug: 'west-gate',
         stageUuid: '454d9e2f-4639-4b46-b5a2-1be820f21dfe',
         displayName: 'West Gate',
-        zoneId: 'millhaven',
+        zoneId: 'lunavik',
         tags: Object.freeze(['outdoor', 'gatehouse']),
         floorTile: 'floor_dirt',
         map: `
@@ -335,7 +228,7 @@ A..................B
         stageSlug: 'inn',
         stageUuid: '8b385533-3fc4-4d45-8c4d-1c800f984f45',
         displayName: 'The Inn',
-        zoneId: 'millhaven',
+        zoneId: 'lunavik',
         tags: Object.freeze(['interior', 'town']),
         floorTile: 'floor_dirt',
         map: `
@@ -365,7 +258,7 @@ A..................B
         stageSlug: 'shop-1',
         stageUuid: 'bb87d99a-7de5-4a3f-a409-e27baac84176',
         displayName: 'The Shop',
-        zoneId: 'millhaven',
+        zoneId: 'lunavik',
         tags: Object.freeze(['interior', 'merchant']),
         floorTile: 'floor_dirt',
         map: `
@@ -389,7 +282,7 @@ A..................B
         }),
     }),
     'northern-gate': NORTHERN_GATE_STAGE,
-    ...Object.fromEntries(buildGeneratedGreatNorthernRoadStages().map((stage) => [stage.id, stage])),
+    ...Object.fromEntries(buildGreatNorthernRoadStages().map((stage) => [stage.id, stage])),
 };
 
 const registry = new Map(

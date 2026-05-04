@@ -31,9 +31,9 @@ function testZoneStageIdsResolveToAuthoredStages() {
 }
 
 function testZoneMembershipResolvesFromAuthoredStages() {
-    assert.equal(getZoneIdFromStageId('town-square'), 'millhaven');
-    assert.equal(getStageDefinition('inn').zoneId, 'millhaven');
-    assert.equal(getZoneDefinition('millhaven').displayName, 'Millhaven');
+    assert.equal(getZoneIdFromStageId('town-square'), 'lunavik');
+    assert.equal(getStageDefinition('inn').zoneId, 'lunavik');
+    assert.equal(getZoneDefinition('lunavik').displayName, 'Lunavik');
 }
 
 function testProceduralStageIdsCarryZone() {
@@ -52,7 +52,12 @@ function testDynamicExitDestinationIsZoneAware() {
 function testGreatNorthernRoadRouteChain() {
     const zone = getZoneDefinition('great-northern-road');
     assert.ok(zone, 'expected Great Northern Road zone');
-    assert.equal(zone.stageIds.length, 15);
+    assert.equal(zone.stageIds.length, 16);
+
+    const caravanIndex = zone.stageIds.indexOf('great-northern-road::merchant-caravan');
+    assert.ok(caravanIndex >= 6 && caravanIndex <= 9, 'merchant caravan should be inserted around road stages 6-9');
+    const caravan = getStageDefinition('great-northern-road::merchant-caravan');
+    assert.equal(caravan.tags.includes('static'), true, 'merchant caravan should be a static landmark stage');
 
     const townNorth = resolveExitTransition('town-square', 0, 'north-road');
     assert.equal(townNorth.toLevelId, 'northern-gate');
