@@ -11,7 +11,10 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "preview": "turbo preview",
-    "deploy": "turbo deploy"
+    "deploy": "turbo deploy",
+    "world:generate-stage": "node tools/world/generateStage.mjs",
+    "world:generate-zone": "node tools/world/generateZone.mjs",
+    "world:preview-stage": "node tools/world/previewStage.mjs"
   },
   "devDependencies": {
     "turbo": "^2.0.0"

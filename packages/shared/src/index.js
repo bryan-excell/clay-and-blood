@@ -583,6 +583,9 @@ export * from './resources.js';
 export * from './spawnDefinitions.js';
 export * from './interactableDefinitions.js';
 export * from './world/stageRegistry.js';
+export * from './world/authoredStage.js';
+export * from './world/topology.js';
+export * from './world/validation.js';
 export * from './world/zoneRegistry.js';
 export * from './world/tileRegistry.js';
 export * from './world/vision.js';
@@ -621,7 +624,8 @@ export function resolveExitSpawnPosition({
             ? getOppositeDirection(approachDirection)
             : _defaultArrivalDirectionFromExit(targetExit));
 
-    const tile = resolvePreferredExitArrivalTile(grid, targetExit, resolvedArrivalDirection);
+    const tile = resolveExplicitExitArrivalTile(grid, targetExit) ??
+        resolvePreferredExitArrivalTile(grid, targetExit, resolvedArrivalDirection);
     const tileX = tile.x;
     const tileY = tile.y;
 
@@ -630,6 +634,7 @@ export function resolveExitSpawnPosition({
         y: tileY * TILE_SIZE + TILE_SIZE / 2,
         tileX,
         tileY,
+        facing: typeof targetExit.arrival?.facing === 'string' ? targetExit.arrival.facing : null,
         arrivalDirection: resolvedArrivalDirection,
     };
 }
@@ -788,6 +793,22 @@ export function resolvePreferredExitArrivalTile(grid, exit, preferredDirection) 
     }
 
     return { x: exit.x, y: exit.y };
+}
+
+export function resolveExplicitExitArrivalTile(grid, exit) {
+    const arrival = exit?.arrival;
+    if (!arrival || typeof arrival !== 'object') return null;
+    const tileX = Number.isFinite(arrival.x) ? arrival.x : arrival.tileX;
+    const tileY = Number.isFinite(arrival.y) ? arrival.y : arrival.tileY;
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileY)) return null;
+
+    const x = Math.floor(tileX);
+    const y = Math.floor(tileY);
+    const h = grid.length;
+    const w = grid[0]?.length ?? 0;
+    if (x < 0 || x >= w || y < 0 || y >= h) return null;
+    if (!_isWalkableTile(grid[y][x])) return null;
+    return { x, y };
 }
 
 function _findArrivalTileNearExit(grid, exit, preferredDirection) {

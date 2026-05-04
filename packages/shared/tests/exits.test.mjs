@@ -64,6 +64,7 @@ function testSpawnUsesOppositeOfApproachDirection() {
     assert.equal(spawn.arrivalDirection, 'north');
     assert.equal(spawn.tileX, 5);
     assert.equal(spawn.tileY, 10);
+    assert.equal(spawn.facing, 'north');
 }
 
 function testPreferredArrivalTileFallsBackDeterministically() {

@@ -122,7 +122,7 @@ export class ExitManager {
         }
 
         this.scene.setupCollisions();
-        this._cooldownUntilMs = performance.now() + 500;
+        this._cooldownUntilMs = performance.now() + 100;
         this._blockedExit = {
             entityId: controlledEntity?.id ?? null,
             levelId: targetLevelId,

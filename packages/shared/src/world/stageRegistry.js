@@ -1,11 +1,5 @@
-import {
-    TILE_EXIT,
-    TILE_FLOOR,
-    TILE_SHALLOW_WATER,
-    TILE_TALL_GRASS,
-    TILE_VOID,
-    TILE_WALL,
-} from './tileRegistry.js';
+import { createAuthoredStageDefinition } from './authoredStage.js';
+import { compileRouteChain } from './topology.js';
 import {
     getDefaultZoneId,
     getZoneDefinition,
@@ -15,6 +9,7 @@ import {
 function cloneExit(exit) {
     return {
         ...exit,
+        arrival: exit?.arrival ? { ...exit.arrival } : undefined,
     };
 }
 
@@ -104,209 +99,591 @@ function cloneStageDefinition(definition) {
     };
 }
 
-function emptyRoom(w, h) {
-    return Array.from({ length: h }, (_, y) =>
-        Array.from({ length: w }, (_, x) =>
-            x === 0 || x === w - 1 || y === 0 || y === h - 1 ? TILE_WALL : TILE_FLOOR
-        )
-    );
-}
+const NORTHERN_GATE_STAGE = createAuthoredStageDefinition({
+    id: 'northern-gate',
+    stageSlug: 'northern-gate',
+    displayName: 'Northern Gate',
+    zoneId: 'millhaven',
+    tags: Object.freeze(['outdoor', 'gatehouse', 'town']),
+    floorTile: 'floor_dirt',
+    map: `
+###############B###############
+#.............................#
+#.............................#
+#.........####...####.........#
+#.........#.........#.........#
+#.........#.........#.........#
+#.............................#
+#.............................#
+###############A###############
+`,
+    exitMarkers: Object.freeze({
+        A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 15, y: 7, facing: 'north' }) }),
+        B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 15, y: 1, facing: 'south' }) }),
+    }),
+    spawnPoint: Object.freeze({ x: 15, y: 4 }),
+    connectionsByExitId: Object.freeze({
+        'south-road': Object.freeze({ levelId: 'town-square', exitId: 'north-road', exitIndex: 0, arrivalDirection: 'south' }),
+        'north-road': Object.freeze({ levelId: 'great-northern-road::road-01', exitId: 'south-road', exitIndex: 0, arrivalDirection: 'north' }),
+    }),
+});
 
-function freezeGrid(grid) {
-    return Object.freeze(grid.map((row) => Object.freeze([...row])));
-}
+const GREAT_NORTHERN_ROAD_STAGES = compileRouteChain([
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-01',
+        stageSlug: 'great-northern-road::road-01',
+        displayName: 'Great Northern Road - South Approach',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'travel']),
+        floorTile: 'floor_dirt',
+        map: `
+###############B###############
+#.............................#
+#.............,,,,,...........#
+#.............,,,,,...........#
+#.............................#
+#.....#####...........#####...#
+#.....#...................#...#
+#.....#...................#...#
+#.............................#
+#.............................#
+###############A###############
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 15, y: 9, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 15, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 15, y: 9 }),
+        connectionsByExitId: Object.freeze({
+            'south-road': Object.freeze({ levelId: 'northern-gate', exitId: 'north-road', exitIndex: 1, arrivalDirection: 'south' }),
+        }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-02',
+        stageSlug: 'great-northern-road::road-02',
+        displayName: 'Great Northern Road - Meadow Mile',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'meadow']),
+        floorTile: 'floor_dirt',
+        map: `
+##################B#################
+#..................................#
+#..,,,,,,,,..................,,,,..#
+#..,,,,,,,,..................,,,,..#
+#..................................#
+#..........~~~~....................#
+#..........~~~~....................#
+#......................#####.......#
+#......................#...#.......#
+#..................................#
+#..................................#
+##################A#################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 18, y: 10, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 18, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 18, y: 10 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-03',
+        stageSlug: 'great-northern-road::road-03',
+        displayName: 'Great Northern Road - Stonecut Bend',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'narrow']),
+        floorTile: 'floor_dirt',
+        map: `
+############B############
+#.......................#
+#..#########............#
+#..........#............#
+#..........#....#####...#
+#..........#........#...#
+#..........########.#...#
+#...................#...#
+#...................#...#
+#.......................#
+############A############
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 12, y: 9, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 12, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 12, y: 9 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-04',
+        stageSlug: 'great-northern-road::road-04',
+        displayName: 'Great Northern Road - Eastward Turn',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'bend']),
+        floorTile: 'floor_dirt',
+        map: `
+############################
+#..........................#
+#..........................#
+#......######..............B
+#......#...................#
+#......#...................#
+#......#...................#
+#..........................#
+#..........................#
+############A###############
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 12, y: 8, facing: 'north' }) }),
+            B: Object.freeze({ id: 'east-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 26, y: 3, facing: 'west' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 12, y: 8 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-05',
+        stageSlug: 'great-northern-road::road-05',
+        displayName: "Great Northern Road - Watcher's Spur",
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'bend']),
+        floorTile: 'floor_dirt',
+        map: `
+################B################
+#...............................#
+#...............................#
+A..................######.......#
+#..................#....#.......#
+#..................#............#
+#..................#............#
+#...............................#
+#...............................#
+#################################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'west-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 1, y: 3, facing: 'east' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 16, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 1, y: 3 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-06',
+        stageSlug: 'great-northern-road::road-06',
+        displayName: 'Great Northern Road - Broad Clearing',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'clearing']),
+        floorTile: 'floor_dirt',
+        map: `
+########################B#######################
+#..............................................#
+#.....,,,,,,..........................,,,,,....#
+#.....,,,,,,..........................,,,,,....#
+#..............................................#
+#..................~~~~~~~.....................#
+#..................~~~~~~~.....................#
+#..............................................#
+#.........####....................####.........#
+#.........#........................#...........#
+#..............................................#
+#..............................................#
+########################A#######################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 24, y: 11, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 24, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 24, y: 11 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-07',
+        stageSlug: 'great-northern-road::road-07',
+        displayName: 'Great Northern Road - Split Rock Pass',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'pass']),
+        floorTile: 'floor_dirt',
+        map: `
+##########B##########
+#...................#
+#..#####.....#####..#
+#..#.............#..#
+#..#..####.####..#..#
+#.....#.......#.....#
+#.....#.......#.....#
+#..#..####.####..#..#
+#..#.............#..#
+#..#####.....#####..#
+#...................#
+##########A##########
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 10, y: 10, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 10, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 10, y: 10 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-08',
+        stageSlug: 'great-northern-road::road-08',
+        displayName: 'Great Northern Road - Old Mile Markers',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'ruin']),
+        floorTile: 'floor_dirt',
+        map: `
+###################B####################
+#......................................#
+#....##..........................##....#
+#....##........,,,,,,,,..........##....#
+#..............,,,,,,,,................#
+#......................................#
+#....................####..............#
+#....................####..............#
+#....................####..............#
+#......................................#
+#......................................#
+###################A####################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 19, y: 10, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 19, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 19, y: 10 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-09',
+        stageSlug: 'great-northern-road::road-09',
+        displayName: 'Great Northern Road - Western Switch',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'bend']),
+        floorTile: 'floor_dirt',
+        map: `
+#############################
+#...........................#
+#...........................#
+B..................######...#
+#.......................#...#
+#.......................#...#
+#.....######............#...#
+#.....#.....................#
+#...........................#
+##############A##############
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 14, y: 8, facing: 'north' }) }),
+            B: Object.freeze({ id: 'west-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 1, y: 3, facing: 'east' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 14, y: 8 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-10',
+        stageSlug: 'great-northern-road::road-10',
+        displayName: 'Great Northern Road - Low Hollow',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'hollow']),
+        floorTile: 'floor_dirt',
+        map: `
+################B################
+#...............................#
+#...............................#
+#........~~~~~~~................#
+#........~~~~~~~................#
+#.....................,,,,,,....#
+#.....................,,,,,,....#
+#...............................#
+#...............................#
+A...............................#
+#...............................#
+#################################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'east-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 1, y: 9, facing: 'east' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 16, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 1, y: 9 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-11',
+        stageSlug: 'great-northern-road::road-11',
+        displayName: 'Great Northern Road - Narrow Northing',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'narrow']),
+        floorTile: 'floor_dirt',
+        map: `
+########B########
+#...............#
+#.#####...#####.#
+#.#.........#...#
+#.#.#####...#...#
+#.#.....#...#...#
+#.#####.#...#...#
+#.......#.......#
+#.......#####...#
+#...............#
+########A########
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 8, y: 9, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 8, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 8, y: 9 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-12',
+        stageSlug: 'great-northern-road::road-12',
+        displayName: 'Great Northern Road - Rain Pools',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'water']),
+        floorTile: 'floor_dirt',
+        map: `
+#####################B#####################
+#.........................................#
+#....~~~~~.........................~~~~...#
+#....~~~~~.........................~~~~...#
+#.........................................#
+#..............,,,,,,,,,,,,...............#
+#..............,,,,,,,,,,,,...............#
+#.........................................#
+#......#####................#####.........#
+#.........................................#
+#.........................................#
+#####################A#####################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 21, y: 10, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 21, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 21, y: 10 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-13',
+        stageSlug: 'great-northern-road::road-13',
+        displayName: 'Great Northern Road - Fallen Trunk',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'obstacle']),
+        floorTile: 'floor_dirt',
+        map: `
+###############B###############
+#.............................#
+#.............................#
+#.......###########...........#
+#.................#...........#
+#.................#...........#
+#.................#########...#
+#.............................#
+#.............................#
+#.....,,,,,,..........,,,,,...#
+#.....,,,,,,..........,,,,,...#
+###############A###############
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 15, y: 10, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 15, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 15, y: 10 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-14',
+        stageSlug: 'great-northern-road::road-14',
+        displayName: 'Great Northern Road - Windbreak',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'windbreak']),
+        floorTile: 'floor_dirt',
+        map: `
+####################B####################
+#.......................................#
+#..,,,,,,,,,,,,...............,,,,,,,...#
+#..,,,,,,,,,,,,...............,,,,,,,...#
+#.......................................#
+#..........#######......................#
+#................#......................#
+#................#.......#######........#
+#.......................................#
+#.......................................#
+####################A####################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 20, y: 9, facing: 'north' }) }),
+            B: Object.freeze({ id: 'north-road', exitIndex: 1, connectionRole: 'forward', arrival: Object.freeze({ x: 20, y: 1, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 20, y: 9 }),
+    }),
+    createAuthoredStageDefinition({
+        id: 'great-northern-road::road-15',
+        stageSlug: 'great-northern-road::road-15',
+        displayName: 'Great Northern Road - Far Milestone',
+        zoneId: 'great-northern-road',
+        tags: Object.freeze(['outdoor', 'road', 'milestone']),
+        floorTile: 'floor_dirt',
+        map: `
+#################################
+#...............................#
+#...............................#
+#...........####................#
+#...........#..#................#
+#...............................#
+#....................~~~~~......#
+#....................~~~~~......#
+#...............................#
+#.....,,,,,,....................#
+#.....,,,,,,....................#
+################A################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'south-road', exitIndex: 0, connectionRole: 'back', arrival: Object.freeze({ x: 16, y: 10, facing: 'north' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 16, y: 10 }),
+    }),
+]);
 
 const AUTHORED_STAGE_DEFINITIONS = {
-    'town-square': (() => {
-        const w = 40;
-        const h = 40;
-        const tiles = emptyRoom(w, h);
-        const midX = Math.floor(w / 2);
-        const midY = Math.floor(h / 2);
-
-        tiles[0][midX] = TILE_EXIT;
-        tiles[h - 1][midX] = TILE_EXIT;
-        tiles[midY][0] = TILE_EXIT;
-        tiles[midY][w - 1] = TILE_EXIT;
-
-        for (let bx = 4; bx <= 10; bx++) {
-            tiles[3][bx] = TILE_WALL;
-            tiles[9][bx] = TILE_WALL;
-        }
-        for (let by = 4; by <= 8; by++) {
-            tiles[by][4] = TILE_WALL;
-            tiles[by][10] = TILE_WALL;
-        }
-        tiles[9][7] = TILE_EXIT;
-
-        for (let bx = 29; bx <= 35; bx++) {
-            tiles[3][bx] = TILE_WALL;
-            tiles[9][bx] = TILE_WALL;
-        }
-        for (let by = 4; by <= 8; by++) {
-            tiles[by][29] = TILE_WALL;
-            tiles[by][35] = TILE_WALL;
-        }
-        tiles[9][32] = TILE_EXIT;
-
-        const shallowWaterCells = [
-            [5, 28], [6, 28], [7, 28], [8, 28], [9, 28],
-            [4, 29], [5, 29], [6, 29], [7, 29], [8, 29], [9, 29], [10, 29],
-            [4, 30], [5, 30], [6, 30], [7, 30], [8, 30], [9, 30], [10, 30],
-            [3, 31], [4, 31], [5, 31], [6, 31], [7, 31], [8, 31], [9, 31], [10, 31],
-            [3, 32], [4, 32], [5, 32], [6, 32], [7, 32], [8, 32], [9, 32],
-            [4, 33], [5, 33], [6, 33], [7, 33], [8, 33], [9, 33],
-            [5, 34], [6, 34], [7, 34], [8, 34],
-        ];
-        for (const [x, y] of shallowWaterCells) {
-            if (tiles[y]?.[x] === TILE_FLOOR) {
-                tiles[y][x] = TILE_SHALLOW_WATER;
-            }
-        }
-
-        const tallGrassCells = [
-            [30, 28], [31, 28], [32, 28], [33, 28], [34, 28], [35, 28],
-            [29, 29], [30, 29], [31, 29], [32, 29], [33, 29], [34, 29], [35, 29], [36, 29],
-            [29, 30], [30, 30], [31, 30], [32, 30], [33, 30], [34, 30], [35, 30], [36, 30],
-            [28, 31], [29, 31], [30, 31], [31, 31], [32, 31], [33, 31], [34, 31], [35, 31], [36, 31],
-            [28, 32], [29, 32], [30, 32], [31, 32], [32, 32], [33, 32], [34, 32], [35, 32], [36, 32],
-            [29, 33], [30, 33], [31, 33], [32, 33], [33, 33], [34, 33], [35, 33], [36, 33],
-            [30, 34], [31, 34], [32, 34], [33, 34], [34, 34], [35, 34],
-        ];
-        for (const [x, y] of tallGrassCells) {
-            if (tiles[y]?.[x] === TILE_FLOOR) {
-                tiles[y][x] = TILE_TALL_GRASS;
-            }
-        }
-
-        return Object.freeze({
-            id: 'town-square',
-            stageSlug: 'town-square',
-            stageUuid: '8e9d3f30-9793-4f6e-99a4-c5ef3e8c6c95',
-            displayName: 'Town Square',
-            kind: 'static',
-            zoneId: 'millhaven',
-            tags: Object.freeze(['outdoor', 'hub', 'town']),
-            floorTile: 'floor_dirt',
-            width: w,
-            height: h,
-            tiles: freezeGrid(tiles),
-            exits: Object.freeze([
-                Object.freeze({ id: 'north-road', x: midX, y: 0, exitIndex: 0, side: 'north' }),
-                Object.freeze({ id: 'south-road', x: midX, y: h - 1, exitIndex: 1, side: 'south' }),
-                Object.freeze({ id: 'west-gate', x: 0, y: midY, exitIndex: 2, side: 'west' }),
-                Object.freeze({ id: 'east-road', x: w - 1, y: midY, exitIndex: 3, side: 'east' }),
-                Object.freeze({ id: 'inn-door', x: 7, y: 9, exitIndex: 4, side: 'interior' }),
-                Object.freeze({ id: 'shop-door', x: 32, y: 9, exitIndex: 5, side: 'interior' }),
-            ]),
-            terrainFeatures: Object.freeze([]),
-            spawnPoint: Object.freeze({ x: 20, y: 20 }),
-            connectionsByExitId: Object.freeze({
-                'west-gate': Object.freeze({ levelId: 'west-gate', exitId: 'east-road', exitIndex: 1, arrivalDirection: 'west' }),
-                'inn-door': Object.freeze({ levelId: 'inn', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
-                'shop-door': Object.freeze({ levelId: 'shop-1', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
-            }),
-        });
-    })(),
-    'west-gate': (() => {
-        const w = 20;
-        const h = 9;
-        const tiles = emptyRoom(w, h);
-        const midY = Math.floor(h / 2);
-        tiles[midY][0] = TILE_EXIT;
-        tiles[midY][w - 1] = TILE_EXIT;
-        return Object.freeze({
-            id: 'west-gate',
-            stageSlug: 'west-gate',
-            stageUuid: '454d9e2f-4639-4b46-b5a2-1be820f21dfe',
-            displayName: 'West Gate',
-            kind: 'static',
-            zoneId: 'millhaven',
-            tags: Object.freeze(['outdoor', 'gatehouse']),
-            floorTile: 'floor_dirt',
-            width: w,
-            height: h,
-            tiles: freezeGrid(tiles),
-            exits: Object.freeze([
-                Object.freeze({ id: 'west-road', x: 0, y: midY, exitIndex: 0, side: 'west' }),
-                Object.freeze({ id: 'east-road', x: w - 1, y: midY, exitIndex: 1, side: 'east' }),
-            ]),
-            terrainFeatures: Object.freeze([]),
-            spawnPoint: Object.freeze({ x: 10, y: 4 }),
-            connectionsByExitId: Object.freeze({
-                'east-road': Object.freeze({ levelId: 'town-square', exitId: 'west-gate', exitIndex: 2, arrivalDirection: 'east' }),
-            }),
-        });
-    })(),
-    inn: (() => {
-        const w = 16;
-        const h = 12;
-        const tiles = Array.from({ length: h }, () => new Array(w).fill(TILE_VOID));
-        for (let y = 0; y <= 5; y++) {
-            for (let x = 0; x <= 7; x++) {
-                tiles[y][x] = (x === 0 || x === 7 || y === 0) ? TILE_WALL : TILE_FLOOR;
-            }
-        }
-        for (let y = 6; y <= 11; y++) {
-            for (let x = 0; x <= 15; x++) {
-                tiles[y][x] = (x === 0 || x === 15 || y === 11) ? TILE_WALL : TILE_FLOOR;
-            }
-        }
-        for (let x = 7; x <= 15; x++) {
-            tiles[6][x] = TILE_WALL;
-        }
-        tiles[11][5] = TILE_EXIT;
-        return Object.freeze({
-            id: 'inn',
-            stageSlug: 'inn',
-            stageUuid: '8b385533-3fc4-4d45-8c4d-1c800f984f45',
-            displayName: 'The Inn',
-            kind: 'static',
-            zoneId: 'millhaven',
-            tags: Object.freeze(['interior', 'town']),
-            floorTile: 'floor_dirt',
-            width: w,
-            height: h,
-            tiles: freezeGrid(tiles),
-            exits: Object.freeze([
-                Object.freeze({ id: 'front-door', x: 5, y: 11, exitIndex: 0, side: 'south' }),
-            ]),
-            terrainFeatures: Object.freeze([]),
-            spawnPoint: Object.freeze({ x: 3, y: 9 }),
-            connectionsByExitId: Object.freeze({
-                'front-door': Object.freeze({ levelId: 'town-square', exitId: 'inn-door', exitIndex: 4, arrivalDirection: 'south' }),
-            }),
-        });
-    })(),
-    'shop-1': (() => {
-        const w = 12;
-        const h = 10;
-        const tiles = emptyRoom(w, h);
-        for (let x = 2; x <= 9; x++) tiles[2][x] = TILE_WALL;
-        tiles[2][5] = TILE_FLOOR;
-        tiles[h - 1][Math.floor(w / 2)] = TILE_EXIT;
-        return Object.freeze({
-            id: 'shop-1',
-            stageSlug: 'shop-1',
-            stageUuid: 'bb87d99a-7de5-4a3f-a409-e27baac84176',
-            displayName: 'The Shop',
-            kind: 'static',
-            zoneId: 'millhaven',
-            tags: Object.freeze(['interior', 'merchant']),
-            floorTile: 'floor_dirt',
-            width: w,
-            height: h,
-            tiles: freezeGrid(tiles),
-            exits: Object.freeze([
-                Object.freeze({ id: 'front-door', x: Math.floor(w / 2), y: h - 1, exitIndex: 0, side: 'south' }),
-            ]),
-            terrainFeatures: Object.freeze([]),
-            spawnPoint: Object.freeze({ x: Math.floor(w / 2), y: h - 2 }),
-            connectionsByExitId: Object.freeze({
-                'front-door': Object.freeze({ levelId: 'town-square', exitId: 'shop-door', exitIndex: 5, arrivalDirection: 'south' }),
-            }),
-        });
-    })(),
+    'town-square': createAuthoredStageDefinition({
+        id: 'town-square',
+        stageSlug: 'town-square',
+        stageUuid: '8e9d3f30-9793-4f6e-99a4-c5ef3e8c6c95',
+        displayName: 'Town Square',
+        zoneId: 'millhaven',
+        tags: Object.freeze(['outdoor', 'hub', 'town']),
+        floorTile: 'floor_dirt',
+        map: `
+####################A###################
+#......................................#
+#......................................#
+#...#######..................#######...#
+#...#.....#..................#.....#...#
+#...#.....#..................#.....#...#
+#...#.....#..................#.....#...#
+#...#.....#..................#.....#...#
+#...#.....#..................#.....#...#
+#...###E###..................###F###...#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+C......................................D
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+#....~~~~~....................,,,,,,...#
+#...~~~~~~~..................,,,,,,,,..#
+#...~~~~~~~..................,,,,,,,,..#
+#..~~~~~~~~.................,,,,,,,,,..#
+#..~~~~~~~..................,,,,,,,,,..#
+#...~~~~~~...................,,,,,,,,..#
+#....~~~~.....................,,,,,,...#
+#......................................#
+#......................................#
+#......................................#
+#......................................#
+####################B###################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'north-road', exitIndex: 0, arrival: Object.freeze({ x: 20, y: 1, facing: 'south' }) }),
+            B: Object.freeze({ id: 'south-road', exitIndex: 1, arrival: Object.freeze({ x: 20, y: 38, facing: 'north' }) }),
+            C: Object.freeze({ id: 'west-gate', exitIndex: 2, arrival: Object.freeze({ x: 1, y: 20, facing: 'east' }) }),
+            D: Object.freeze({ id: 'east-road', exitIndex: 3, arrival: Object.freeze({ x: 38, y: 20, facing: 'west' }) }),
+            E: Object.freeze({ id: 'inn-door', exitIndex: 4, arrival: Object.freeze({ x: 7, y: 10, facing: 'south' }) }),
+            F: Object.freeze({ id: 'shop-door', exitIndex: 5, arrival: Object.freeze({ x: 32, y: 10, facing: 'south' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 20, y: 20 }),
+        connectionsByExitId: Object.freeze({
+            'north-road': Object.freeze({ levelId: 'northern-gate', exitId: 'south-road', exitIndex: 0, arrivalDirection: 'north' }),
+            'west-gate': Object.freeze({ levelId: 'west-gate', exitId: 'east-road', exitIndex: 1, arrivalDirection: 'west' }),
+            'inn-door': Object.freeze({ levelId: 'inn', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
+            'shop-door': Object.freeze({ levelId: 'shop-1', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
+        }),
+    }),
+    'west-gate': createAuthoredStageDefinition({
+        id: 'west-gate',
+        stageSlug: 'west-gate',
+        stageUuid: '454d9e2f-4639-4b46-b5a2-1be820f21dfe',
+        displayName: 'West Gate',
+        zoneId: 'millhaven',
+        tags: Object.freeze(['outdoor', 'gatehouse']),
+        floorTile: 'floor_dirt',
+        map: `
+####################
+#..................#
+#..................#
+#..................#
+A..................B
+#..................#
+#..................#
+#..................#
+####################
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'west-road', exitIndex: 0, arrival: Object.freeze({ x: 1, y: 4, facing: 'east' }) }),
+            B: Object.freeze({ id: 'east-road', exitIndex: 1, arrival: Object.freeze({ x: 18, y: 4, facing: 'west' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 10, y: 4 }),
+        connectionsByExitId: Object.freeze({
+            'east-road': Object.freeze({ levelId: 'town-square', exitId: 'west-gate', exitIndex: 2, arrivalDirection: 'east' }),
+        }),
+    }),
+    inn: createAuthoredStageDefinition({
+        id: 'inn',
+        stageSlug: 'inn',
+        stageUuid: '8b385533-3fc4-4d45-8c4d-1c800f984f45',
+        displayName: 'The Inn',
+        zoneId: 'millhaven',
+        tags: Object.freeze(['interior', 'town']),
+        floorTile: 'floor_dirt',
+        map: `
+########^^^^^^^^
+#......#^^^^^^^^
+#......#^^^^^^^^
+#......#^^^^^^^^
+#......#^^^^^^^^
+#......#^^^^^^^^
+#......#########
+#..............#
+#..............#
+#..............#
+#..............#
+#####A##########
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'front-door', exitIndex: 0, arrival: Object.freeze({ x: 5, y: 10, facing: 'north' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 3, y: 9 }),
+        connectionsByExitId: Object.freeze({
+            'front-door': Object.freeze({ levelId: 'town-square', exitId: 'inn-door', exitIndex: 4, arrivalDirection: 'south' }),
+        }),
+    }),
+    'shop-1': createAuthoredStageDefinition({
+        id: 'shop-1',
+        stageSlug: 'shop-1',
+        stageUuid: 'bb87d99a-7de5-4a3f-a409-e27baac84176',
+        displayName: 'The Shop',
+        zoneId: 'millhaven',
+        tags: Object.freeze(['interior', 'merchant']),
+        floorTile: 'floor_dirt',
+        map: `
+############
+#..........#
+#.###.####.#
+#..........#
+#..........#
+#..........#
+#..........#
+#..........#
+#..........#
+######A#####
+`,
+        exitMarkers: Object.freeze({
+            A: Object.freeze({ id: 'front-door', exitIndex: 0, arrival: Object.freeze({ x: 6, y: 8, facing: 'north' }) }),
+        }),
+        spawnPoint: Object.freeze({ x: 6, y: 8 }),
+        connectionsByExitId: Object.freeze({
+            'front-door': Object.freeze({ levelId: 'town-square', exitId: 'shop-door', exitIndex: 5, arrivalDirection: 'south' }),
+        }),
+    }),
+    'northern-gate': NORTHERN_GATE_STAGE,
+    ...Object.fromEntries(GREAT_NORTHERN_ROAD_STAGES.map((stage) => [stage.id, stage])),
 };
 
 const registry = new Map(
