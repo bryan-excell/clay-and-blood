@@ -1,10 +1,18 @@
 import { createAuthoredStageDefinition } from './authoredStage.js';
 import { buildGreatNorthernRoadStages } from './generators/greatNorthernRoad.js';
+import {
+    buildRollingHillsStages,
+    getRollingHillsEntryStageId,
+} from './generators/rollingHills.js';
 import { buildTheGrottoStages } from './generators/theGrotto.js';
 import {
     buildTheMeadowsStages,
     getTheMeadowsEntryStageId,
 } from './generators/theMeadows.js';
+import {
+    buildTheMistyPathStages,
+    getTheMistyPathEntryStageId,
+} from './generators/theMistyPath.js';
 import {
     getDefaultZoneId,
     getZoneDefinition,
@@ -195,6 +203,7 @@ C......................................D
         spawnPoint: Object.freeze({ x: 20, y: 20 }),
         connectionsByExitId: Object.freeze({
             'north-road': Object.freeze({ levelId: 'northern-gate', exitId: 'south-road', exitIndex: 0, arrivalDirection: 'north' }),
+            'south-road': Object.freeze({ levelId: getTheMistyPathEntryStageId(), exitId: 'lunavik-road', exitIndex: 0, arrivalDirection: 'south' }),
             'west-gate': Object.freeze({ levelId: 'west-gate', exitId: 'east-road', exitIndex: 1, arrivalDirection: 'west' }),
             'east-road': Object.freeze({ levelId: getTheMeadowsEntryStageId(), exitId: 'west-path', exitIndex: 3, arrivalDirection: 'east' }),
             'inn-door': Object.freeze({ levelId: 'inn', exitId: 'front-door', exitIndex: 0, arrivalDirection: 'north' }),
@@ -226,6 +235,7 @@ A..................B
         }),
         spawnPoint: Object.freeze({ x: 10, y: 4 }),
         connectionsByExitId: Object.freeze({
+            'west-road': Object.freeze({ levelId: getRollingHillsEntryStageId(), exitId: 'lunavik-road', exitIndex: 1, arrivalDirection: 'west' }),
             'east-road': Object.freeze({ levelId: 'town-square', exitId: 'west-gate', exitIndex: 2, arrivalDirection: 'east' }),
         }),
     }),
@@ -291,6 +301,8 @@ A..................B
     ...Object.fromEntries(buildGreatNorthernRoadStages().map((stage) => [stage.id, stage])),
     ...Object.fromEntries(buildTheMeadowsStages().map((stage) => [stage.id, stage])),
     ...Object.fromEntries(buildTheGrottoStages().map((stage) => [stage.id, stage])),
+    ...Object.fromEntries(buildTheMistyPathStages().map((stage) => [stage.id, stage])),
+    ...Object.fromEntries(buildRollingHillsStages().map((stage) => [stage.id, stage])),
 };
 
 const registry = new Map(

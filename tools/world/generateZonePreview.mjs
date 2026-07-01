@@ -4,8 +4,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
     buildGreatNorthernRoadStageEntries,
+    buildRollingHillsStageEntries,
     buildTheGrottoStageEntries,
     buildTheMeadowsStageEntries,
+    buildTheMistyPathStageEntries,
     validateStageDefinition,
 } from '../../packages/shared/src/index.js';
 import { stageToAscii } from './lib/asciiMap.mjs';
@@ -54,6 +56,8 @@ function tileClassForChar(char) {
         case '~': return 'tile-water';
         case 'A':
         case 'B':
+        case 'C':
+        case 'D':
         case 'E':
             return 'tile-exit-marker';
         default:
@@ -68,6 +72,8 @@ function buildZoneCandidates(args) {
         'great-northern-road': buildGreatNorthernRoadStageEntries,
         'the-meadows': buildTheMeadowsStageEntries,
         'the-grotto': buildTheGrottoStageEntries,
+        'the-misty-path': buildTheMistyPathStageEntries,
+        'rolling-hills': buildRollingHillsStageEntries,
     };
     const buildEntries = builders[zoneId];
     if (!buildEntries) throw new Error(`Unknown zone "${zoneId}"`);

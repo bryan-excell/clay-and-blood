@@ -1,5 +1,9 @@
 import { getGreatNorthernRoadStageIds } from './generators/greatNorthernRoad.js';
 import {
+    getRollingHillsEntryStageId,
+    getRollingHillsStageIds,
+} from './generators/rollingHills.js';
+import {
     getTheGrottoEntryStageId,
     getTheGrottoStageIds,
 } from './generators/theGrotto.js';
@@ -7,6 +11,10 @@ import {
     getTheMeadowsEntryStageId,
     getTheMeadowsStageIds,
 } from './generators/theMeadows.js';
+import {
+    getTheMistyPathEntryStageId,
+    getTheMistyPathStageIds,
+} from './generators/theMistyPath.js';
 
 const ZONE_SEPARATOR = '::';
 
@@ -81,6 +89,42 @@ const ZONE_DEFINITIONS = Object.freeze({
             generator: 'grotto-winding-corridors',
             generationConfig: Object.freeze({ generator: 'grotto-winding-corridors' }),
             tags: Object.freeze(['cave', 'grotto']),
+        }),
+    }),
+    'the-misty-path': Object.freeze({
+        id: 'the-misty-path',
+        displayName: 'The Misty Path',
+        biome: 'misty-path',
+        tags: Object.freeze(['outdoor', 'trail', 'mist', 'exploration']),
+        hubStageId: getTheMistyPathEntryStageId(),
+        stageIds: Object.freeze(getTheMistyPathStageIds()),
+        proceduralPrefix: null,
+        defaultStage: Object.freeze({
+            kind: 'procedural',
+            width: 36,
+            height: 24,
+            floorTile: 'floor_dirt',
+            generator: 'misty-path-branching-corridors',
+            generationConfig: Object.freeze({ generator: 'misty-path-branching-corridors' }),
+            tags: Object.freeze(['outdoor', 'trail', 'misty-path']),
+        }),
+    }),
+    'rolling-hills': Object.freeze({
+        id: 'rolling-hills',
+        displayName: 'Rolling Hills',
+        biome: 'hills',
+        tags: Object.freeze(['outdoor', 'hills', 'road', 'travel']),
+        hubStageId: getRollingHillsEntryStageId(),
+        stageIds: Object.freeze(getRollingHillsStageIds()),
+        proceduralPrefix: null,
+        defaultStage: Object.freeze({
+            kind: 'procedural',
+            width: 56,
+            height: 21,
+            floorTile: 'floor_dirt',
+            generator: 'rolling-hills-heightfield-braid',
+            generationConfig: Object.freeze({ generator: 'rolling-hills-heightfield-braid' }),
+            tags: Object.freeze(['outdoor', 'hills', 'road']),
         }),
     }),
     'western-wilds': Object.freeze({

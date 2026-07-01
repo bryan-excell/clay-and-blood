@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import {
     buildGreatNorthernRoadStageEntries,
+    buildRollingHillsStageEntries,
     buildTheGrottoStageEntries,
     buildTheMeadowsStageEntries,
+    buildTheMistyPathStageEntries,
     validateStageDefinition,
 } from '../../packages/shared/src/index.js';
 import { printStageSummary } from './lib/asciiMap.mjs';
@@ -62,6 +64,8 @@ function main() {
         'great-northern-road': buildGreatNorthernRoadStageEntries,
         'the-meadows': buildTheMeadowsStageEntries,
         'the-grotto': buildTheGrottoStageEntries,
+        'the-misty-path': buildTheMistyPathStageEntries,
+        'rolling-hills': buildRollingHillsStageEntries,
     };
     const buildEntries = builders[zoneId];
     if (!buildEntries) throw new Error(`Unknown zone "${zoneId}"`);

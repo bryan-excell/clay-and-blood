@@ -594,6 +594,8 @@ export * from './world/generators/rng.js';
 export * from './world/generators/greatNorthernRoad.js';
 export * from './world/generators/theMeadows.js';
 export * from './world/generators/theGrotto.js';
+export * from './world/generators/theMistyPath.js';
+export * from './world/generators/rollingHills.js';
 
 /**
  * Resolve a deterministic spawn position for arriving through an exit.

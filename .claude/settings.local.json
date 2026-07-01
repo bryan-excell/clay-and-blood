@@ -9,7 +9,11 @@
       "Bash(grep -E \"\\\\.js$\")",
       "Bash(xargs grep -l \"PHASE_INPUT\\\\|input.*component\\\\|keyboard.*component\\\\|movement.*system\\\\|InputSystem\\\\|MovementSystem\")",
       "Bash(xargs grep -l \"keyboard\\\\|KeyboardComponent\\\\|KeyboardInput\")",
-      "Bash(xargs grep -l \"phaseInputIntent\\\\|phaseLocomotionDash\\\\|phasePhysicsTransform\")"
+      "Bash(xargs grep -l \"phaseInputIntent\\\\|phaseLocomotionDash\\\\|phasePhysicsTransform\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Code\\\\ClayAndBlood\" -Recurse -Force)",
+      "Bash(Select-Object -First 50)",
+      "Bash(Format-Table -Property FullName)",
+      "Bash(xargs grep -l \"particle\\\\|effect\\\\|emitter\" -i)"
     ]
   }
 }

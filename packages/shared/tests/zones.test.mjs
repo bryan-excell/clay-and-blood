@@ -5,10 +5,12 @@ import {
     getAllZoneDefinitions,
     getExitById,
     getExitDestination,
+    getRollingHillsEntryStageId,
     getStageData,
     getStageDefinition,
     getTheGrottoEntryStageId,
     getTheMeadowsEntryStageId,
+    getTheMistyPathEntryStageId,
     getZoneDefinition,
     getZoneIdFromStageId,
     resolveExitTransition,
@@ -46,7 +48,7 @@ function testProceduralStageIdsCarryZone() {
 }
 
 function testDynamicExitDestinationIsZoneAware() {
-    const destination = getExitDestination('west-gate', 0);
+    const destination = getExitDestination('western-wilds::proc-source', 0);
     assert.match(destination.toLevelId, /^western-wilds::proc-[0-9a-f]{6}$/);
     assert.equal(getStageDefinition(destination.toLevelId).zoneId, 'western-wilds');
 }
@@ -175,6 +177,99 @@ function testTheGrottoTopology() {
     }
 }
 
+function testTheMistyPathTopology() {
+    const zone = getZoneDefinition('the-misty-path');
+    assert.ok(zone, 'expected The Misty Path zone');
+    assert.equal(zone.displayName, 'The Misty Path');
+    assert.equal(zone.stageIds.length, 14);
+    assert.equal(zone.hubStageId, getTheMistyPathEntryStageId());
+
+    const townSouth = resolveExitTransition('town-square', 1, 'south-road');
+    assert.equal(townSouth.toLevelId, getTheMistyPathEntryStageId());
+    assert.equal(townSouth.toExitId, 'lunavik-road');
+
+    const pathNorth = resolveExitTransition(getTheMistyPathEntryStageId(), 0, 'lunavik-road');
+    assert.equal(pathNorth.toLevelId, 'town-square');
+    assert.equal(pathNorth.toExitId, 'south-road');
+
+    let fourExitStages = 0;
+    for (const stageId of zone.stageIds) {
+        const stage = getStageDefinition(stageId);
+        assert.equal(stage.zoneId, 'the-misty-path');
+        assert.ok(stage.width >= 25 && stage.width <= 49, `${stageId} should use varied misty path widths`);
+        assert.ok(stage.height >= 17 && stage.height <= 33, `${stageId} should use varied misty path heights`);
+        assert.ok(stage.exits.length >= 2 && stage.exits.length <= 4, `${stageId} should have 2-4 exits`);
+        if (stage.exits.length === 4) fourExitStages++;
+
+        for (const [exitId, connection] of Object.entries(stage.connectionsByExitId)) {
+            const exit = stage.exits.find((candidate) => candidate.id === exitId);
+            assert.ok(exit, `${stageId} should have exit ${exitId}`);
+            if (connection.levelId === 'town-square') continue;
+            assert.ok(zone.stageIds.includes(connection.levelId), `${stageId}:${exitId} should stay in the misty path graph`);
+            const target = getStageDefinition(connection.levelId);
+            const returnConnection = target.connectionsByExitId?.[connection.exitId];
+            assert.equal(returnConnection?.levelId, stageId, `${stageId}:${exitId} should be reciprocated`);
+        }
+    }
+    assert.ok(fourExitStages >= 2, 'The Misty Path should have meaningful branching touch points');
+}
+
+function testRollingHillsBraidedTopology() {
+    const zone = getZoneDefinition('rolling-hills');
+    assert.ok(zone, 'expected Rolling Hills zone');
+    assert.equal(zone.displayName, 'Rolling Hills');
+    assert.equal(zone.stageIds.length, 20);
+    assert.equal(zone.hubStageId, getRollingHillsEntryStageId());
+
+    const westGate = resolveExitTransition('west-gate', 0, 'west-road');
+    assert.equal(westGate.toLevelId, getRollingHillsEntryStageId());
+    assert.equal(westGate.toExitId, 'lunavik-road');
+
+    const entryEast = resolveExitTransition(getRollingHillsEntryStageId(), 1, 'lunavik-road');
+    assert.equal(entryEast.toLevelId, 'west-gate');
+    assert.equal(entryEast.toExitId, 'west-road');
+    assert.ok(
+        getStageDefinition(getRollingHillsEntryStageId()).generationConfig.gridX >
+            getStageDefinition(zone.stageIds.at(-1)).generationConfig.gridX,
+        'Rolling Hills preview should place Lunavik on the east/right end and the west end to the left'
+    );
+
+    let splitStages = 0;
+    let joinStages = 0;
+    for (const stageId of zone.stageIds) {
+        const stage = getStageDefinition(stageId);
+        assert.equal(stage.zoneId, 'rolling-hills');
+        assert.ok(stage.width >= 36 && stage.width <= 84, `${stageId} should use varied long widths`);
+        assert.ok(stage.height >= 13 && stage.height <= 29, `${stageId} should use varied hill heights`);
+        const expectedMinimumExits = stageId === zone.stageIds.at(-1) ? 1 : 2;
+        assert.ok(stage.exits.length >= expectedMinimumExits && stage.exits.length <= 4, `${stageId} should have ${expectedMinimumExits}-4 exits`);
+
+        const outbound = Object.entries(stage.connectionsByExitId)
+            .filter(([, connection]) => connection.levelId !== 'west-gate');
+        if (outbound.length >= 3) splitStages++;
+
+        const inbound = zone.stageIds.filter((otherId) => {
+            if (otherId === stageId) return false;
+            const other = getStageDefinition(otherId);
+            return Object.values(other.connectionsByExitId).some((connection) => connection.levelId === stageId);
+        });
+        if (inbound.length >= 3) joinStages++;
+
+        for (const [exitId, connection] of Object.entries(stage.connectionsByExitId)) {
+            const exit = stage.exits.find((candidate) => candidate.id === exitId);
+            assert.ok(exit, `${stageId} should have exit ${exitId}`);
+            if (connection.levelId === 'west-gate') continue;
+            assert.ok(zone.stageIds.includes(connection.levelId), `${stageId}:${exitId} should stay in the rolling hills graph`);
+            const target = getStageDefinition(connection.levelId);
+            const returnConnection = target.connectionsByExitId?.[connection.exitId];
+            assert.equal(returnConnection?.levelId, stageId, `${stageId}:${exitId} should be reciprocated`);
+        }
+    }
+
+    assert.ok(splitStages >= 2, 'Rolling Hills should split in multiple places');
+    assert.ok(joinStages >= 1, 'Rolling Hills should rejoin into shared stages');
+}
+
 function testProceduralStagesKeepSolidBoundary() {
     const { grid } = getStageData('western-wilds::proc-boundary-test');
     const h = grid.length;
@@ -198,6 +293,8 @@ function run() {
     testGreatNorthernRoadRouteChain();
     testTheMeadowsGridTopology();
     testTheGrottoTopology();
+    testTheMistyPathTopology();
+    testRollingHillsBraidedTopology();
     testProceduralStagesKeepSolidBoundary();
     console.log('shared zone tests passed');
 }
