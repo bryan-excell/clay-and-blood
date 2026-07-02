@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@clay-and-blood/shared": "*",
-    "phaser": "^3.55.2"
+    "phaser": "3.90.0"
   },
   "devDependencies": {
     "vite": "^6.2.0"

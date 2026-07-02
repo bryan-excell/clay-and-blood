@@ -46,6 +46,9 @@ export class RectangleComponent extends PhaserObjectComponent {
         if (this.strokeColor !== null && this.strokeWidth > 0) {
             rectangle.setStrokeStyle(this.strokeWidth, this.strokeColor);
         }
+        if (this.alpha <= 0 && typeof rectangle.setAlpha === 'function') {
+            rectangle.setAlpha(0);
+        }
 
         return rectangle;
     }

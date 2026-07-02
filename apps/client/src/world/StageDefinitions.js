@@ -53,6 +53,10 @@ export function getStageDefinition(levelId) {
             : {},
         generator: definition.generator ?? definition.generationConfig?.generator ?? 'cave',
         zoneId: definition.zoneId ?? null,
+        palette: definition.palette ? {
+            ...definition.palette,
+            ambientDrift: definition.palette.ambientDrift ? { ...definition.palette.ambientDrift } : undefined,
+        } : null,
         displayName: definition.displayName ?? null,
         tags: Array.isArray(definition.tags) ? [...definition.tags] : [],
     };

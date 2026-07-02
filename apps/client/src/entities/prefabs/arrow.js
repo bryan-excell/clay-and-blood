@@ -1,7 +1,8 @@
 import { TransformComponent } from '../../components/TransformComponent.js';
 import { RectangleComponent } from '../../components/RectangleComponent.js';
+import { ParticleComponent } from '../../components/ParticleComponent.js';
 import { BulletComponent } from '../../components/BulletComponent.js';
-import { BULLET_DAMAGE, ARROW_MAX_RANGE, ARROW_PENETRATION } from '../../config.js';
+import { BULLET_DAMAGE, ARROW_MAX_RANGE, ARROW_PENETRATION, DEBUG_VISUAL_ANCHORS_DEFAULT } from '../../config.js';
 
 /**
  * Creates an arrow entity (bow weapon projectile).
@@ -43,7 +44,8 @@ export function createArrow(scene, config = {}) {
     arrow.addComponent(transform);
 
     // Thin rectangle oriented along travel direction
-    arrow.addComponent(new RectangleComponent(18, 3, 0xFFDD55));
+    arrow.addComponent(new RectangleComponent(18, 3, 0xFFDD55, DEBUG_VISUAL_ANCHORS_DEFAULT ? 1 : 0));
+    arrow.addComponent(new ParticleComponent('arrow'));
     arrow.addComponent(new BulletComponent(velocityX, velocityY, damage, maxRange, {
         penetration,
         collidesWithEntities: true,

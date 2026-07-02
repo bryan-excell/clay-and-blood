@@ -1,7 +1,8 @@
 import { TransformComponent } from '../../components/TransformComponent.js';
 import { CircleComponent } from '../../components/CircleComponent.js';
+import { ParticleComponent } from '../../components/ParticleComponent.js';
 import { BulletComponent } from '../../components/BulletComponent.js';
-import { BULLET_RADIUS, BULLET_DAMAGE, BULLET_MAX_RANGE } from '../../config.js';
+import { BULLET_RADIUS, BULLET_DAMAGE, BULLET_MAX_RANGE, DEBUG_VISUAL_ANCHORS_DEFAULT } from '../../config.js';
 
 /**
  * Creates a bullet entity.
@@ -35,7 +36,8 @@ export function createBullet(scene, config = {}) {
     bullet.type = 'bullet';
 
     bullet.addComponent(new TransformComponent(x, y));
-    bullet.addComponent(new CircleComponent(radius, color));
+    bullet.addComponent(new CircleComponent(radius, color, DEBUG_VISUAL_ANCHORS_DEFAULT ? 1 : 0));
+    bullet.addComponent(new ParticleComponent('bullet'));
     bullet.addComponent(new BulletComponent(velocityX, velocityY, damage, maxRange));
 
     return bullet;

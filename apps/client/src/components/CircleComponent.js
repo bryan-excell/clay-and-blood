@@ -43,6 +43,9 @@ export class CircleComponent extends PhaserObjectComponent {
         if (this.strokeColor !== null && this.strokeWidth > 0) {
             circle.setStrokeStyle(this.strokeWidth, this.strokeColor);
         }
+        if (this.alpha <= 0 && typeof circle.setAlpha === 'function') {
+            circle.setAlpha(0);
+        }
 
         return circle;
     }

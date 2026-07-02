@@ -1,5 +1,6 @@
 import { TransformComponent } from "../../components/TransformComponent.js";
 import { CircleComponent } from '../../components/CircleComponent.js';
+import { ParticleComponent } from '../../components/ParticleComponent.js';
 import { KeyboardInputComponent } from '../../components/KeyboardInputComponent.js';
 import { PlayerStateMachine } from '../../components/PlayerStateMachine.js';
 import { PlayerCombatComponent } from '../../components/PlayerCombatComponent.js';
@@ -12,7 +13,7 @@ import { LoadoutComponent } from '../../components/LoadoutComponent.js';
 import { InventoryComponent } from '../../components/InventoryComponent.js';
 import { SpellbookComponent } from '../../components/SpellbookComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
-import { STAGE_RENDER_DEPTH } from '../../config.js';
+import { STAGE_RENDER_DEPTH, DEBUG_VISUAL_ANCHORS_DEFAULT } from '../../config.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 /**
@@ -35,9 +36,10 @@ export function createGolem(scene, config = {}) {
     golem.type = 'golem';
 
     golem.addComponent(new TransformComponent(x, y));
-    const circle = new CircleComponent(radius, color, 1, 0x2f3238, 4);
+    const circle = new CircleComponent(radius, color, DEBUG_VISUAL_ANCHORS_DEFAULT ? 1 : 0, 0x2f3238, 4);
     golem.addComponent(circle);
     circle.gameObject?.setDepth(STAGE_RENDER_DEPTH.actors);
+    golem.addComponent(new ParticleComponent('golem'));
     golem.addComponent(new ControlComponent({ controlMode, controllerId }));
     golem.addComponent(new AuthorityComponent({ authority, ownerId }));
     golem.addComponent(new IntentComponent());

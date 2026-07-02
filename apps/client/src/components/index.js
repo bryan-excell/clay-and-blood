@@ -8,6 +8,7 @@ export { TransformComponent } from './TransformComponent.js';
 export { PhaserObjectComponent } from './PhaserObjectComponent.js';
 export { CircleComponent } from './CircleComponent.js';
 export { RectangleComponent } from './RectangleComponent.js';
+export { ParticleComponent } from './ParticleComponent.js';
 
 // Physics Components
 export { PhysicsCapability } from './PhysicsCapability.js'; // New

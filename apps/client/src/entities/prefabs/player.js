@@ -1,5 +1,6 @@
 import { TransformComponent } from "../../components/TransformComponent.js";
 import { CircleComponent } from '../../components/CircleComponent.js';
+import { ParticleComponent } from '../../components/ParticleComponent.js';
 import { KeyboardInputComponent } from '../../components/KeyboardInputComponent.js';
 import { PlayerStateMachine } from '../../components/PlayerStateMachine.js';
 import { PlayerCombatComponent } from '../../components/PlayerCombatComponent.js';
@@ -12,7 +13,7 @@ import { LoadoutComponent } from '../../components/LoadoutComponent.js';
 import { InventoryComponent } from '../../components/InventoryComponent.js';
 import { SpellbookComponent } from '../../components/SpellbookComponent.js';
 import { ExitTraversalComponent } from '../../components/ExitTraversalComponent.js';
-import { PLAYER_RADIUS, COLOR_PLAYER, STAGE_RENDER_DEPTH } from '../../config.js';
+import { PLAYER_RADIUS, COLOR_PLAYER, STAGE_RENDER_DEPTH, DEBUG_VISUAL_ANCHORS_DEFAULT } from '../../config.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 /**
@@ -43,9 +44,10 @@ export function createPlayer(scene, config = {}) {
 
     // 2. Add the visual representation (creates the Phaser game object)
     // Warm torchlight fill with dark outline
-    const circle = new CircleComponent(radius, color, 1, 0x5c3a00, 3);
+    const circle = new CircleComponent(radius, color, DEBUG_VISUAL_ANCHORS_DEFAULT ? 1 : 0, 0x5c3a00, 3);
     player.addComponent(circle);
     circle.gameObject?.setDepth(STAGE_RENDER_DEPTH.actors);
+    player.addComponent(new ParticleComponent('player'));
 
     // 3. Add control, authority, and resolved intent data
     player.addComponent(new ControlComponent({ controlMode, controllerId }));

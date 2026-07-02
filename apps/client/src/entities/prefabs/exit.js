@@ -1,6 +1,7 @@
 import { TransformComponent } from '../../components/TransformComponent.js';
 import { RectangleComponent } from '../../components/RectangleComponent.js';
-import { STAGE_RENDER_DEPTH, TILE_SIZE, COLOR_EXIT } from '../../config.js';
+import { ParticleComponent } from '../../components/ParticleComponent.js';
+import { STAGE_RENDER_DEPTH, TILE_SIZE, COLOR_EXIT, DEBUG_VISUAL_ANCHORS_DEFAULT } from '../../config.js';
 import { Component } from '../../components/Component.js';
 
 /**
@@ -57,9 +58,10 @@ export function createExit(scene, config = {}) {
 
     // 2. Add the visual representation (creates the Phaser game object)
     // Ethereal blue portal with glowing edge
-    const rect = new RectangleComponent(width, height, color, 0.75, 0x88bbff, 3);
+    const rect = new RectangleComponent(width, height, color, DEBUG_VISUAL_ANCHORS_DEFAULT ? 0.75 : 0, 0x88bbff, 3);
     exit.addComponent(rect);
     rect.gameObject?.setDepth(STAGE_RENDER_DEPTH.exits);
+    exit.addComponent(new ParticleComponent('exit'));
 
     // 3. Add exit-specific logic
     exit.addComponent(new ExitComponent(exitIndex, exitId));

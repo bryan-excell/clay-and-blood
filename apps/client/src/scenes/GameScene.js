@@ -3,6 +3,9 @@ import { EntityManager } from '../entities/EntityManager.js';
 import { EntityLevelManager } from '../world/EntityLevelManager.js';
 import { ExitManager } from '../world/ExitManager.js';
 import { LightingRenderer } from '../world/LightingRenderer.js';
+import { ParticleEventSystem } from '../world/ParticleEventSystem.js';
+import { ParticleModifierSystem } from '../world/ParticleModifierSystem.js';
+import { ZoneAmbientParticleSystem } from '../world/ZoneAmbientParticleSystem.js';
 import { VisibilitySystem } from '../world/VisibilitySystem.js';
 import { InputIntentSystem } from '../world/InputIntentSystem.js';
 import { LocomotionSystem } from '../world/LocomotionSystem.js';
@@ -16,6 +19,9 @@ import { eventBus } from '../core/EventBus.js';
 import { networkManager } from '../core/NetworkManager.js';
 import { NetworkUiAdapter } from '../core/NetworkUiAdapter.js';
 import { uiStateStore } from '../core/UiStateStore.js';
+import { ensureParticleTextures } from '../world/ParticleTextureFactory.js';
+import { particleBudget } from '../world/ParticleBudget.js';
+import { zonePalette } from '../world/ZonePalette.js';
 import {
     GAME_FONT_FAMILY,
     PLAYER_RADIUS,
@@ -56,7 +62,7 @@ const PHASE_INPUT_COMPONENTS = ['input', 'keyboard'];
 const PHASE_PHYSICS = ['bullet', 'physics'];
 const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
-const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility', 'decay', 'decayBar'];
+const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility', 'decay', 'decayBar', 'particle'];
 const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
 const DEBUG_GOLEM_KEY = 'world:golem_town_square';
 const DAMAGE_TEXT_RISE_PX = 24;
@@ -80,6 +86,8 @@ export class GameScene extends Phaser.Scene {
         this.entityManager = new EntityManager(this);
         this.levelManager = new EntityLevelManager(this);
         this.levelManager.initialize();
+        ensureParticleTextures(this);
+        zonePalette.start();
         this.exitManager = new ExitManager(this);
         this._worldEntityStateCache = new Map(); // entityKey -> { x, y, levelId, controllerSessionId, possessionMsRemaining }
         this._replicationTracks = new Map(); // trackKey -> { stageId, snapshots: [{timeMs,tick,x,y,stageId}] }
@@ -114,6 +122,7 @@ export class GameScene extends Phaser.Scene {
 
         // Always start in the town square on fresh load
         const initialLevelId = 'inn';
+        zonePalette.setFromLevelId(initialLevelId);
         const initialLevel = this.levelManager.setupLevel(initialLevelId);
 
         // Create player at a safe spot
@@ -134,6 +143,11 @@ export class GameScene extends Phaser.Scene {
         // Lighting / fog-of-war — must come after player creation so we have the entity id
         this.lightingRenderer = new LightingRenderer(this, this.player.id);
         this.lightingRenderer.onLevelChanged(initialLevel);
+        this._applyParticleMasksToExistingEntities();
+        this.particleEventSystem = new ParticleEventSystem(this);
+        this.particleEventSystem.start();
+        this.zoneAmbientParticleSystem = new ZoneAmbientParticleSystem(this);
+        this.zoneAmbientParticleSystem.start();
 
         // Camera bounds are set per-level by EntityLevelManager.setupLevel()
 
@@ -188,6 +202,9 @@ export class GameScene extends Phaser.Scene {
         this.uiProjectionSystem.publishImmediate();
 
         this.events.once('shutdown', () => {
+            this.particleEventSystem?.stop();
+            this.zoneAmbientParticleSystem?.stop();
+            zonePalette.stop();
             this.uiProjectionSystem?.stop();
             this.networkUiAdapter?.stop();
             this._possessionBarGfx?.destroy();
@@ -200,6 +217,12 @@ export class GameScene extends Phaser.Scene {
             this._hoverTargetGfx?.destroy();
             this._hoverTargetGfx = null;
         });
+    }
+
+    _applyParticleMasksToExistingEntities() {
+        for (const entity of this.entityManager?.getEntitiesWithComponent?.('particle') ?? []) {
+            entity.getComponent('particle')?.tryApplyVisibilityMask?.();
+        }
     }
 
     /**
@@ -350,6 +373,7 @@ export class GameScene extends Phaser.Scene {
         if (circle?.gameObject) {
             circle.gameObject.setVisible(!!isVisible);
         }
+        entity?.getComponent('particle')?.setEmitterVisible(!!isVisible);
     }
 
     _isPointerInsideUiDrawer(pointer = this.input?.activePointer) {
@@ -1046,10 +1070,6 @@ export class GameScene extends Phaser.Scene {
                 if (projectileId) {
                     this._networkProjectiles.set(projectileId, projectileEntity.id);
                 }
-                const projectileGO =
-                    projectileEntity.getComponent('rectangle')?.gameObject ??
-                    projectileEntity.getComponent('circle')?.gameObject;
-                this.lightingRenderer?.maskGameObject(projectileGO);
             }
         });
 
@@ -1508,16 +1528,8 @@ export class GameScene extends Phaser.Scene {
             this.player?.getComponent('playerCombat')?.forceInterrupt?.();
         }
 
-        const burst = this.add.circle(target.x, target.y, 8, 0xffaa66, 0.9).setDepth(250);
-        this.tweens.add({
-            targets: burst,
-            alpha: 0,
-            scaleX: 2.6,
-            scaleY: 2.6,
-            duration: 140,
-            ease: 'Quad.easeOut',
-            onComplete: () => burst.destroy(),
-        });
+        const entity = this._resolveEntityByNetworkKey(entityKey);
+        entity?.getComponent?.('particle')?.emitBurst('flinch');
     }
 
     _onEntityStaggered(entityKey, durationMs, levelId = null) {
@@ -1534,39 +1546,24 @@ export class GameScene extends Phaser.Scene {
     }
 
     _startStaggerPulse(entityKey, durationMs) {
-        const target = this._resolveReactionVisualTarget(entityKey);
-        const go = target?.go;
-        if (!go || typeof go.setFillStyle !== 'function') return;
-
         const previous = this._staggerPulseState.get(entityKey);
         if (previous) {
             previous.event?.remove?.(false);
-            go.setFillStyle(previous.originalColor, previous.originalAlpha);
+            previous.particle?.clearStateModifier('staggered');
             this._staggerPulseState.delete(entityKey);
         }
 
-        const originalColor = Number.isFinite(go.fillColor) ? go.fillColor : 0xffffff;
-        const originalAlpha = Number.isFinite(go.fillAlpha) ? go.fillAlpha : 1;
-        const endAt = performance.now() + durationMs;
-        let on = false;
+        const entity = this._resolveEntityByNetworkKey(entityKey);
+        const particle = entity?.getComponent?.('particle');
+        if (!particle) return;
 
-        const event = this.time.addEvent({
-            delay: 120,
-            loop: true,
-            callback: () => {
-                if (!go.active || performance.now() >= endAt) {
-                    go.setFillStyle(originalColor, originalAlpha);
-                    event.remove(false);
-                    this._staggerPulseState.delete(entityKey);
-                    return;
-                }
-                on = !on;
-                if (on) go.setFillStyle(0xff4444, originalAlpha);
-                else go.setFillStyle(originalColor, originalAlpha);
-            },
+        particle.applyStateModifier('staggered');
+        const event = this.time.delayedCall(Math.max(120, durationMs), () => {
+            particle.clearStateModifier('staggered');
+            this._staggerPulseState.delete(entityKey);
         });
 
-        this._staggerPulseState.set(entityKey, { event, originalColor, originalAlpha });
+        this._staggerPulseState.set(entityKey, { event, particle });
     }
 
     _resolveMeleeVisualSpec(weaponId, phaseIndex) {
@@ -2594,6 +2591,7 @@ export class GameScene extends Phaser.Scene {
      * @param {number} delta - ms since last frame
      */
     renderUpdate(delta) {
+        particleBudget.updateFramePressure(delta);
         this._refreshInteractablesForCurrentLevel();
         this._updateHoveredEntityTarget(performance.now());
 
@@ -2651,6 +2649,8 @@ export class GameScene extends Phaser.Scene {
             }
         }
 
+        ParticleModifierSystem.update(this.entityManager, this, delta);
+        this.zoneAmbientParticleSystem?.update(delta);
         this._updateExitLabel(delta);
         this._updateInteractLabel(delta);
         this._updatePossessionBar();

@@ -22,6 +22,7 @@ export const ARROW_PENETRATION = 0;
 
 export const GAME_FONT_FAMILY = '"Libre Baskerville", Georgia, serif';
 export const DEBUG_WORLD_OVERLAY_DEFAULT = import.meta?.env?.VITE_DEBUG_WORLD_OVERLAY === '1';
+export const DEBUG_VISUAL_ANCHORS_DEFAULT = import.meta?.env?.VITE_DEBUG_VISUAL_ANCHORS === '1';
 export const BASE_RENDER_CHUNK_TILES = 8;
 export const STAGE_RENDER_DEPTH = Object.freeze({
     floor: 0,

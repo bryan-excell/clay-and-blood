@@ -1,9 +1,10 @@
 import { TransformComponent } from '../../components/TransformComponent.js';
 import { CircleComponent } from '../../components/CircleComponent.js';
+import { ParticleComponent } from '../../components/ParticleComponent.js';
 import { CorpseIdentityComponent } from '../../components/CorpseIdentityComponent.js';
 import { DecayComponent } from '../../components/DecayComponent.js';
 import { DecayBarComponent } from '../../components/DecayBarComponent.js';
-import { STAGE_RENDER_DEPTH } from '../../config.js';
+import { STAGE_RENDER_DEPTH, DEBUG_VISUAL_ANCHORS_DEFAULT } from '../../config.js';
 import { ARCHETYPE_CONFIG } from '@clay-and-blood/shared';
 
 export function createCorpse(scene, config = {}) {
@@ -21,9 +22,10 @@ export function createCorpse(scene, config = {}) {
     corpse.type = 'corpse';
 
     corpse.addComponent(new TransformComponent(x, y));
-    const circle = new CircleComponent(radius, 0x3a3030, 0.7, 0x1a1212, 1);
+    const circle = new CircleComponent(radius, 0x3a3030, DEBUG_VISUAL_ANCHORS_DEFAULT ? 0.7 : 0, 0x1a1212, 1);
     corpse.addComponent(circle);
     circle.gameObject?.setDepth(STAGE_RENDER_DEPTH.actors);
+    corpse.addComponent(new ParticleComponent('corpse'));
     corpse.addComponent(new CorpseIdentityComponent(identity));
     corpse.addComponent(new DecayComponent(totalDecayMs, decayMsRemaining));
     corpse.addComponent(new DecayBarComponent());
