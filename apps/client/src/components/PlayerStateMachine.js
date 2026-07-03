@@ -1,6 +1,5 @@
 import { Component } from './Component.js';
 import { eventBus } from '../core/EventBus.js';
-import { networkManager } from '../core/NetworkManager.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { PLAYER_SPEED, PLAYER_SPRINT_MULTIPLIER } from '../config.js';
 
@@ -102,11 +101,7 @@ export class PlayerStateMachine extends Component {
 
         const keyboard = this.entity.getComponent('keyboard');
         const dashInput = keyboard?.inputState ?? this._intentToInputState(intent);
-        const dashSeq = this.entity.getComponent('control')?.controlMode === 'local'
-            ? networkManager.sendDash(dashInput)
-            : -1;
-
-        eventBus.emit('player:dashStarted', { input: dashInput, seq: dashSeq });
+        eventBus.emit('player:dashStarted', { input: dashInput });
         this.desiredVelocity.x = this.dashDirection.x * 800;
         this.desiredVelocity.y = this.dashDirection.y * 800;
     }

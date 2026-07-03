@@ -27,6 +27,11 @@ export class SpiritFormComponent extends Component {
         this._velocity = { x: 0, y: 0 };
         this._breathT = 0;
         this._dirty = false;
+        this._suppressVelocityNextUpdate = false;
+        // Render offset used to smoothly absorb server corrections without popping.
+        // Set to -errX/-errY on correction, decays to 0 each render frame.
+        this._renderOffsetX = 0;
+        this._renderOffsetY = 0;
         this.requireComponent('transform');
     }
 
@@ -81,17 +86,64 @@ export class SpiritFormComponent extends Component {
         this.tryApplyVisibilityMask();
     }
 
+    /**
+     * Called on a server position correction to smoothly absorb the snap.
+     * offsetX/offsetY are the NEGATIVE of the correction vector (i.e. how far
+     * the visual is behind the new logical position). Both this render offset and
+     * the camera's followOffset are set to the same value so the player stays
+     * centred on screen while both glide to zero over ~3 render frames.
+     */
+    beginCorrectionBlend(offsetX, offsetY) {
+        this._renderOffsetX += offsetX;
+        this._renderOffsetY += offsetY;
+        this._suppressVelocityNextUpdate = true;
+    }
+
     syncToTransform(deltaMs = 16.67) {
         const transform = this.getRequiredComponent('transform');
         if (!transform) return;
         const x = transform.position.x;
         const y = transform.position.y;
-        const dt = Math.max(1, deltaMs) / 1000;
         const previous = this._lastPosition ?? { x, y };
-        this._velocity.x = (x - previous.x) / dt;
-        this._velocity.y = (y - previous.y) / dt;
+        const dx = x - previous.x;
+        const dy = y - previous.y;
         this._lastPosition = { x, y };
         this._breathT += deltaMs;
+
+        if (this._suppressVelocityNextUpdate) {
+            // Server position correction: the snap distance is not real movement.
+            // Zero velocity so orbit motes and emitter offsets don't spike for one frame.
+            this._suppressVelocityNextUpdate = false;
+            this._velocity.x = 0;
+            this._velocity.y = 0;
+        } else if (dx !== 0 || dy !== 0) {
+            // Position changed this frame (fixedUpdate ran and player moved).
+            // Use the fixed timestep constant rather than the variable render delta so that
+            // at high framerates (>60 Hz) — where fixedUpdate fires less than once per frame —
+            // velocity doesn't alternate between 2× and 0, which causes orbit-mote jitter.
+            const FIXED_DT_S = 0.01667;
+            this._velocity.x = dx / FIXED_DT_S;
+            this._velocity.y = dy / FIXED_DT_S;
+        } else {
+            // No movement this frame (player stood still, or no fixedUpdate ran at this
+            // render tick). Decay smoothly so the motes glide to rest instead of snapping.
+            const decay = Math.pow(0.78, deltaMs / 16.67);
+            this._velocity.x *= decay;
+            this._velocity.y *= decay;
+        }
+
+        // Decay the correction render offset. Absorbs ~80% per 16ms so a 5px correction
+        // blends out in ~3 frames (~50ms) — fast enough to be invisible.
+        if (this._renderOffsetX !== 0 || this._renderOffsetY !== 0) {
+            const decay = Math.pow(0.2, deltaMs / 16.67);
+            this._renderOffsetX *= decay;
+            this._renderOffsetY *= decay;
+            if (Math.abs(this._renderOffsetX) < 0.05) this._renderOffsetX = 0;
+            if (Math.abs(this._renderOffsetY) < 0.05) this._renderOffsetY = 0;
+        }
+        // vx/vy: visual render position (lags the logical position during a correction)
+        const vx = x + this._renderOffsetX;
+        const vy = y + this._renderOffsetY;
 
         const speed = Math.sqrt(this._velocity.x ** 2 + this._velocity.y ** 2);
         const direction = speed > 8
@@ -105,16 +157,16 @@ export class SpiritFormComponent extends Component {
         const glowScale = (1.15 + healthRatio * 0.38) * (1 + breath * 0.055) * (dashing ? 1.2 : 1);
         const coreAlpha = wounded ? 0.66 + Math.sin(this._breathT / 70) * 0.1 : 0.94 + breath * 0.04;
 
-        this.core?.setPosition(x, y).setScale(coreScale).setAlpha(Phaser.Math.Clamp(coreAlpha, 0.45, 1));
-        this.coreGlow?.setPosition(x, y).setScale(glowScale).setAlpha(0.18 + healthRatio * 0.2 + (dashing ? 0.14 : 0));
+        this.core?.setPosition(vx, vy).setScale(coreScale).setAlpha(Phaser.Math.Clamp(coreAlpha, 0.45, 1));
+        this.coreGlow?.setPosition(vx, vy).setScale(glowScale).setAlpha(0.18 + healthRatio * 0.2 + (dashing ? 0.14 : 0));
 
         const bodyLag = Math.min(dashing ? 18 : 8, speed * (dashing ? 0.045 : 0.025));
-        this.bodyEmitter?.setPosition(x - direction.x * bodyLag, y - direction.y * bodyLag);
-        this.trailEmitter?.setPosition(x - direction.x * 12, y - direction.y * 12);
+        this.bodyEmitter?.setPosition(vx - direction.x * bodyLag, vy - direction.y * bodyLag);
+        this.trailEmitter?.setPosition(vx - direction.x * 12, vy - direction.y * 12);
         if (speed > 28 || dashing) this.trailEmitter?.start?.();
         else this.trailEmitter?.stop?.();
 
-        this._updateOrbitMotes(x, y, direction, speed, healthRatio, deltaMs);
+        this._updateOrbitMotes(vx, vy, direction, speed, healthRatio, deltaMs);
     }
 
     applyStateModifier(key) {

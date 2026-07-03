@@ -6,15 +6,15 @@ const WS_URL = import.meta?.env?.VITE_WS_URL || 'ws://localhost:8787/room/defaul
 /**
  * NetworkManager – singleton WebSocket client.
  *
- * Clients send PLAYER_INPUT (key state) rather than positions.
- * The server runs the authoritative physics simulation and broadcasts
- * STATE_SNAPSHOT every tick.
+ * Clients send sequenced PLAYER_INPUT fixed-step commands rather than positions.
+ * The server runs the authoritative simulation and broadcasts STATE_SNAPSHOT
+ * with the last processed input sequence every tick.
  *
  * Events emitted on eventBus:
  *   network:connected      { sessionId }
  *   network:disconnected   {}
  *   network:gameState      { players: [{ sessionId, x, y, stageId, teamId, sightRadius }] }
- *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq, teamId, sightRadius }], self?: { sessionId, controlledEntityKey, resources, teamId, sightRadius }, worldEntities?: [], entityEquips?: [] }
+ *   network:stateSnapshot  { tick, players: [{ sessionId, x, y, levelId, seq, lastProcessedInputSeq, teamId, sightRadius }], self?: { sessionId, controlledEntityKey, resources, teamId, sightRadius }, worldEntities?: [], entityEquips?: [] }
  *   network:worldState     { entities: [{ entityKey, x, y, levelId, controllerSessionId, teamId, resources, hitRadius, decayMsRemaining, identity }] }
  *   network:entityState    { sessionId, entityKey, x, y, levelId, controllerSessionId, teamId, resources, possessionMsRemaining, hitRadius, decayMsRemaining, identity }
  *   network:forceControl   { controlledEntityKey, reason, previousControllerSessionId, winnerSessionId, possessionMsRemaining? }
@@ -32,8 +32,6 @@ class NetworkManager {
         this.ws              = null;
         this.sessionId       = null;
         this.connected       = false;
-        this._inputInterval  = 50; // send at most 20 input packets/sec (matches server tick)
-        this._nextInputAt    = 0;  // monotonic next send time (performance.now ms)
         this._seq            = 0;  // monotonic input sequence number
         this._lastServerTick = 0;  // most-recent tick acknowledged from server (for lag comp)
     }
@@ -276,66 +274,29 @@ class NetworkManager {
     }
 
     /**
-     * Send the local player's current input state to the server.
-     * Throttled to match the server tick rate.
-     * @param {object} inputState - { up, down, left, right, sprint, moveSpeedMultiplier, attackPushVx, attackPushVy }
-     * @returns {number} The seq number used, or -1 if the message was throttled/not sent.
+     * Send one fixed-step local input command to the authoritative server.
+     * Each command carries its own sequence number so server snapshots can ack
+     * exactly which predicted movement steps have been simulated.
+     * @param {object} inputState - { up, down, left, right, sprint, dash, moveSpeedMultiplier, attackPushVx, attackPushVy, dtMs }
+     * @returns {number} The seq number used, or -1 if not sent.
      */
     sendInput(inputState) {
         if (!this.connected) return -1;
-        const now = performance.now();
-        if (this._nextInputAt === 0) {
-            this._nextInputAt = now;
-        }
-        if (now < this._nextInputAt) return -1;
-
         const seq = ++this._seq;
         this.send({
             type:   MSG.PLAYER_INPUT,
             seq,
+            dtMs:   Number.isFinite(inputState.dtMs) ? inputState.dtMs : 16.67,
             up:     !!inputState.up,
             down:   !!inputState.down,
             left:   !!inputState.left,
             right:  !!inputState.right,
             sprint: !!inputState.sprint,
+            dash:   !!inputState.dash,
             moveSpeedMultiplier: Number.isFinite(inputState.moveSpeedMultiplier) ? inputState.moveSpeedMultiplier : 1,
             attackPushVx: Number.isFinite(inputState.attackPushVx) ? inputState.attackPushVx : 0,
             attackPushVy: Number.isFinite(inputState.attackPushVy) ? inputState.attackPushVy : 0,
         });
-
-        // Keep a stable 20 Hz cadence even if frame timing jitters.
-        this._nextInputAt += this._inputInterval;
-        while (this._nextInputAt <= now - this._inputInterval) {
-            this._nextInputAt += this._inputInterval;
-        }
-        return seq;
-    }
-
-    /**
-     * Send an immediate dash impulse to the server, bypassing the throttle.
-     * Call this once when the dash begins; the server will simulate dash velocity
-     * for PLAYER_DASH_DURATION ms.
-     * @param {object} inputState - Current input state (used to derive direction)
-     * @returns {number} The seq number used for this dash input.
-     */
-    sendDash(inputState) {
-        if (!this.connected) return -1;
-        const seq = ++this._seq;
-        this.send({
-            type:   MSG.PLAYER_INPUT,
-            seq,
-            up:     !!inputState.up,
-            down:   !!inputState.down,
-            left:   !!inputState.left,
-            right:  !!inputState.right,
-            sprint: !!inputState.sprint,
-            dash:   true,
-            moveSpeedMultiplier: Number.isFinite(inputState.moveSpeedMultiplier) ? inputState.moveSpeedMultiplier : 1,
-            attackPushVx: Number.isFinite(inputState.attackPushVx) ? inputState.attackPushVx : 0,
-            attackPushVy: Number.isFinite(inputState.attackPushVy) ? inputState.attackPushVy : 0,
-        });
-        // Keep post-dash timing aligned to the normal 20 Hz cadence.
-        this._nextInputAt = performance.now() + this._inputInterval;
         return seq;
     }
 

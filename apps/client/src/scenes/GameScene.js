@@ -48,15 +48,13 @@ import {
 
 // ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
 
-const REMOTE_INTERPOLATION_DELAY_MS = 100;
-const REMOTE_INTERPOLATION_DELAY_TICKS = 2; // 2 * 50 ms = 100 ms
-const REMOTE_MAX_EXTRAPOLATION_TICKS = 2;   // cap extrapolation to 100 ms
+const REMOTE_INTERPOLATION_DELAY_MS = 150;
+const REMOTE_INTERPOLATION_DELAY_TICKS = 3; // 3 * 50 ms = 150 ms — one full tick of jitter margin
+const REMOTE_MAX_EXTRAPOLATION_TICKS = 4;   // coast up to 200 ms before freezing
 const REMOTE_SNAPSHOT_BUFFER_SIZE = 40;
 const SERVER_TICK_MS = 50;
-const LOCAL_RECONCILE_DEADZONE_PX = 1.5;
-const LOCAL_RECONCILE_NUDGE_RATIO = 0.35;
-const LOCAL_RECONCILE_MAX_NUDGE_PX = 6;
-const LOCAL_RECONCILE_HARD_SNAP_PX = 96;
+const LOCAL_RECONCILE_DEADZONE_PX = 1.5;    // ignore sub-pixel drift
+const CSP_PENDING_INPUT_MAX = 360;          // 6 seconds at 60 Hz — safety cap
 
 // Fixed-step ECS order contract (see docs/ecs-architecture.md)
 const PHASE_INPUT_COMPONENTS = ['input', 'keyboard'];
@@ -163,6 +161,17 @@ export class GameScene extends Phaser.Scene {
         this._latestServerTickAtMs = 0;
         // Local dash state for deterministic client prediction.
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        // CSP input ring-buffer: { seq, input, preDash, dt } for every fixedUpdate
+        // command transmitted to the server. Snapshots ack the last command that the
+        // server has actually simulated, so replay can drop commands precisely.
+        this._pendingInputBuffer = [];
+        // True for exactly one frame: the fixedUpdate where a dash was initiated.
+        // Lets fixedUpdate tag that frame's buffer entry with dash:true.
+        this._localDashJustStarted = false;
+        // Dash state at the start of the current fixedUpdate frame, captured before any
+        // systems run so both regular and dash inputs get consistent preDash values.
+        this._framePreDash = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        this._lastLocalPlayerInputCommand = null;
         this._lastWorldEntitySyncAt = 0;
         this._possessionEndAtMs = 0;
         this._possessionDurationMs = 8000;
@@ -367,6 +376,9 @@ export class GameScene extends Phaser.Scene {
             this.lightingRenderer?.removeLightSource(this.player.id);
         }
         this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        this._pendingInputBuffer = [];
+        this._localDashJustStarted = false;
+        this._lastLocalPlayerInputCommand = null;
         this._syncReleasePossessionSpell(nextEntity);
         this.uiProjectionSystem?.publishImmediate();
         return true;
@@ -831,7 +843,10 @@ export class GameScene extends Phaser.Scene {
                     const isControllingPlayer = this.getLocallyControlledEntity()?.id === this.player?.id;
                     const serverLevelMatchesCurrent = !p.levelId || p.levelId === gameState.currentLevelId;
                     if (isControllingPlayer && serverLevelMatchesCurrent) {
-                        this._applyServerCorrection(p.x, p.y);
+                        const processedSeq = Number.isFinite(p.lastProcessedInputSeq)
+                            ? p.lastProcessedInputSeq
+                            : p.seq;
+                        this._applyServerCorrection(p.x, p.y, processedSeq);
                     }
                 } else {
                     this._pushRemoteSnapshot(
@@ -1018,6 +1033,9 @@ export class GameScene extends Phaser.Scene {
             }
             this._refreshAllRemotePlayerLightSources();
             this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+            this._pendingInputBuffer = [];
+            this._localDashJustStarted = false;
+            this._lastLocalPlayerInputCommand = null;
             const playerLevelId = this.player?.getComponent('transform')?.levelId ?? levelId;
             this._setEntityVisibility(this.player, playerLevelId === levelId);
         });
@@ -1030,6 +1048,7 @@ export class GameScene extends Phaser.Scene {
                     dashVy: dash.dashVy,
                     dashTimeLeftMs: dash.dashTimeLeftMs,
                 };
+                this._localDashJustStarted = true;
             }
         });
         // A remote player fired a projectile - spawn it locally if in the same level.
@@ -2229,12 +2248,14 @@ export class GameScene extends Phaser.Scene {
 
             const last = samples[samples.length - 1];
             if (renderTick >= last.tick) {
-                const prev = samples[samples.length - 2];
-                if (!prev || prev.stageId !== last.stageId || last.tick <= prev.tick) return last;
+                // Average velocity over the last N ticks to smooth out collision noise.
+                const lookback = Math.min(4, samples.length - 1);
+                const oldest = samples[samples.length - 1 - lookback];
+                if (!oldest || oldest.stageId !== last.stageId || last.tick <= oldest.tick) return last;
 
-                const dtTicks = last.tick - prev.tick;
-                const vxPerTick = (last.x - prev.x) / dtTicks;
-                const vyPerTick = (last.y - prev.y) / dtTicks;
+                const dtAvg = last.tick - oldest.tick;
+                const vxPerTick = (last.x - oldest.x) / dtAvg;
+                const vyPerTick = (last.y - oldest.y) / dtAvg;
                 const aheadTicks = Phaser.Math.Clamp(
                     renderTick - last.tick,
                     0,
@@ -2356,72 +2377,129 @@ export class GameScene extends Phaser.Scene {
         }
     }
 
+    _applyTerrainToMovementInput(input, x, y, grid) {
+        const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(grid, x, y);
+        return {
+            ...input,
+            moveSpeedMultiplier: (Number.isFinite(input?.moveSpeedMultiplier)
+                ? input.moveSpeedMultiplier
+                : 1) * terrainMoveSpeedMultiplier,
+        };
+    }
+
     /**
-     * Server reconciliation (Gambetta Part 2).
+     * Server reconciliation — Gambetta client-side prediction Part 2.
      *
-     * 1. Discard all pending inputs the server has already processed (seq ≤ serverSeq).
+     * 1. Discard all buffered commands the server has actually simulated.
      * 2. Start from the server's authoritative position.
-     * 3. Re-simulate every remaining pending input using the same movement math
-     *    as the server, producing the best estimate of our current position.
-     * 4. Snap the Phaser body to that estimate.
+     * 3. Re-simulate every remaining (unacknowledged) command at its fixed dt
+     *    using the same stepPlayerKinematics function the server uses, producing the
+     *    best estimate of our actual current position.
+     * 4. Snap the Phaser body to that replayed position.
      *
-     * This eliminates rubber-banding while keeping client-side prediction.
+     * When the simulation is fully deterministic the replayed position should be
+     * within a pixel of our locally-predicted position, eliminating rubberbanding.
+     * The deadzone guards against redundant snaps when they match exactly.
      */
-    _applyServerCorrection(serverX, serverY) {
+    _applyServerCorrection(serverX, serverY, serverProcessedSeq) {
         if (!this.player) return;
         const circle = this.player.getComponent('circle');
-        if (!circle || !circle.gameObject) return;
+        if (!circle?.gameObject) return;
         const transform = this.player.getComponent('transform');
-        // Use authoritative server position directly as the correction target.
-        const x = serverX;
-        const y = serverY;
 
-        // Reconciliation target minus current local state.
-        // Apply bounded micro-corrections to avoid periodic hard teleports.
-        const go   = circle.gameObject;
+        // 1. Drop every command included in the authoritative position.
+        if (Number.isFinite(serverProcessedSeq)) {
+            let ackCount = 0;
+            while (
+                ackCount < this._pendingInputBuffer.length &&
+                this._pendingInputBuffer[ackCount].seq <= serverProcessedSeq
+            ) {
+                ackCount++;
+            }
+            if (ackCount > 0) this._pendingInputBuffer.splice(0, ackCount);
+        }
+
+        // 2. Seed replay from the server's authoritative position.
+        const grid = gameState.levels?.[gameState.currentLevelId]?.grid ?? null;
+        let rx = serverX;
+        let ry = serverY;
+        // Use the first pending entry's preDash as the best estimate of the server's
+        // dash state after the last acknowledged tick (server doesn't send dash state).
+        let replayDash = this._pendingInputBuffer.length > 0
+            ? { ...this._pendingInputBuffer[0].preDash }
+            : { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+
+        // 3. Re-simulate all unacknowledged frames at their exact local sub-step dt.
+        for (const entry of this._pendingInputBuffer) {
+            // Mirror the server's dash-start logic (GameRoom PLAYER_INPUT handler):
+            // start a new dash if the input requests one and no dash is currently running.
+            if (entry.input.dash && replayDash.dashTimeLeftMs <= 0) {
+                const dashInit = dashStateFromInput(entry.input);
+                if (dashInit) replayDash = dashInit;
+            }
+            const replayInput = this._applyTerrainToMovementInput(entry.input, rx, ry, grid);
+            const stepped = stepPlayerKinematics(
+                { x: rx, y: ry, ...replayDash },
+                replayInput,
+                entry.dt,  // exact local sub-step dt — matches local prediction fidelity
+                grid
+            );
+            rx = stepped.x;
+            ry = stepped.y;
+            replayDash = {
+                dashVx: stepped.dashVx,
+                dashVy: stepped.dashVy,
+                dashTimeLeftMs: stepped.dashTimeLeftMs,
+            };
+        }
+
+        // 4. Apply the replayed position if it differs meaningfully from current.
+        const go = circle.gameObject;
         const body = go.body;
         const currentX = body ? body.x + body.halfWidth : go.x;
         const currentY = body ? body.y + body.halfHeight : go.y;
-        const errX = x - currentX;
-        const errY = y - currentY;
+        const errX = rx - currentX;
+        const errY = ry - currentY;
         const dist = Math.sqrt(errX * errX + errY * errY);
+
         if (dist < LOCAL_RECONCILE_DEADZONE_PX) {
+            this._localDashState = { ...replayDash };
             return;
         }
 
         const vx = body ? body.velocity.x : 0;
         const vy = body ? body.velocity.y : 0;
-        let targetX = x;
-        let targetY = y;
 
-        // Smooth correction for normal drift.
-        if (dist < LOCAL_RECONCILE_HARD_SNAP_PX) {
-            let stepX = errX * LOCAL_RECONCILE_NUDGE_RATIO;
-            let stepY = errY * LOCAL_RECONCILE_NUDGE_RATIO;
-            const stepDist = Math.sqrt(stepX * stepX + stepY * stepY);
-            if (stepDist > LOCAL_RECONCILE_MAX_NUDGE_PX) {
-                const s = LOCAL_RECONCILE_MAX_NUDGE_PX / stepDist;
-                stepX *= s;
-                stepY *= s;
-            }
-            targetX = currentX + stepX;
-            targetY = currentY + stepY;
-        }
-
-        go.x = targetX;
-        go.y = targetY;
+        go.x = rx;
+        go.y = ry;
         if (body) {
-            body.x = targetX - body.halfWidth;
-            body.y = targetY - body.halfHeight;
+            body.x = rx - body.halfWidth;
+            body.y = ry - body.halfHeight;
             body.prev.x = body.x;
             body.prev.y = body.y;
             body.velocity.set(vx, vy);
         }
         if (transform) {
-            transform.position.x = targetX;
-            transform.position.y = targetY;
+            transform.position.x = rx;
+            transform.position.y = ry;
         }
+        // Sync the local dash state to the replayed result so the next prediction
+        // frame continues from the corrected trajectory rather than the old one.
+        this._localDashState = { ...replayDash };
         circle._skipNextPositionUpdate = true;
+
+        // Smoothly absorb the correction so neither the viewport nor the visual body jumps.
+        // The SpiritForm render offset and the camera follow offset both start at -err and
+        // decay at the same rate each render frame, keeping the player centred on screen.
+        const spiritForm = this.player.getComponent('spiritForm');
+        if (spiritForm) {
+            spiritForm.beginCorrectionBlend(-errX, -errY);
+        }
+        const cam = this.cameras.main;
+        if (cam) {
+            const fo = cam.followOffset;
+            cam.setFollowOffset((fo?.x ?? 0) - errX, (fo?.y ?? 0) - errY);
+        }
     }
 
     setupCollisions() {
@@ -2430,6 +2508,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     _simulateLocalPlayerMovement(deltaTime) {
+        this._lastLocalPlayerInputCommand = null;
         const controlled = this.getLocallyControlledEntity();
         if (!controlled) return;
         if (!AuthoritySystem.canSimulateOnClient(controlled)) return;
@@ -2445,26 +2524,29 @@ export class GameScene extends Phaser.Scene {
 
         const levelData = gameState.levels?.[gameState.currentLevelId];
         const grid = levelData?.grid ?? null;
-        const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(
-            grid,
-            transform.position.x,
-            transform.position.y
-        );
-        const effectiveMoveSpeedMultiplier = (movementInfluence?.speedMultiplier ?? 1) * terrainMoveSpeedMultiplier;
-        const input = intent ? {
+        const commandInput = intent ? {
             up: (intent.moveY ?? 0) < -0.0001,
             down: (intent.moveY ?? 0) > 0.0001,
             left: (intent.moveX ?? 0) < -0.0001,
             right: (intent.moveX ?? 0) > 0.0001,
             sprint: !!intent.wantsSprint,
-            dash: !!intent.wantsDash,
-            moveSpeedMultiplier: effectiveMoveSpeedMultiplier,
+            dash: !!this._localDashJustStarted,
+            moveSpeedMultiplier: movementInfluence?.speedMultiplier ?? 1,
             attackPushVx: movementInfluence?.attackPushVx ?? 0,
             attackPushVy: movementInfluence?.attackPushVy ?? 0,
         } : (keyboard?.inputState ?? {
             up: false, down: false, left: false, right: false, sprint: false, dash: false,
             moveSpeedMultiplier: 1, attackPushVx: 0, attackPushVy: 0,
         });
+        const simulationInput = this._applyTerrainToMovementInput(
+            commandInput,
+            transform.position.x,
+            transform.position.y,
+            grid
+        );
+        if (controlled.id === this.player?.id) {
+            this._lastLocalPlayerInputCommand = { ...commandInput };
+        }
 
         const stepped = stepPlayerKinematics(
             {
@@ -2474,7 +2556,7 @@ export class GameScene extends Phaser.Scene {
                 dashVy: this._localDashState.dashVy,
                 dashTimeLeftMs: this._localDashState.dashTimeLeftMs,
             },
-            input,
+            simulationInput,
             deltaTime,
             grid
         );
@@ -2562,6 +2644,9 @@ export class GameScene extends Phaser.Scene {
      */
     fixedUpdate(deltaTime) {
         const nowMs = performance.now();
+        // Snapshot dash state before any systems run. Both regular and dash inputs
+        // use this as their preDash so CSP replay seeds the correct starting state.
+        this._framePreDash = { ...this._localDashState };
         // Process all actions
         actionManager.processActions();
 
@@ -2583,28 +2668,29 @@ export class GameScene extends Phaser.Scene {
         this.uiProjectionSystem?.update();
         this._syncControlledWorldEntityState(nowMs);
 
-        // Send current input state to the authoritative server.
-        // Always use the player body's intent, not the locally controlled entity's.
-        // During possession the locally controlled entity is the golem — sending its
-        // movement intent as PLAYER_INPUT would cause the server to move the player
-        // body in lockstep with the possessed entity.
-        if (this.player) {
-            const intent = this.player.getComponent('intent');
-            const combat = this.player.getComponent('playerCombat');
-            const movementInfluence = combat?.getMovementInfluence?.() ?? null;
-            if (intent) {
-                networkManager.sendInput({
-                    up: (intent.moveY ?? 0) < -0.0001,
-                    down: (intent.moveY ?? 0) > 0.0001,
-                    left: (intent.moveX ?? 0) < -0.0001,
-                    right: (intent.moveX ?? 0) > 0.0001,
-                    sprint: !!intent.wantsSprint,
-                    moveSpeedMultiplier: movementInfluence?.speedMultiplier ?? 1,
-                    attackPushVx: movementInfluence?.attackPushVx ?? 0,
-                    attackPushVy: movementInfluence?.attackPushVy ?? 0,
+        // Send the exact fixed-step command that local prediction just simulated.
+        // During possession, the player body is dormant and reconciliation is skipped,
+        // so we do not enqueue player-body commands from the possessed entity's input.
+        const localCommand = this._lastLocalPlayerInputCommand;
+        if (this.player && localCommand && this.getLocallyControlledEntity()?.id === this.player.id) {
+            const inputToSend = {
+                ...localCommand,
+                dtMs: deltaTime,
+            };
+            const sentSeq = networkManager.sendInput(inputToSend);
+            if (sentSeq >= 0) {
+                this._pendingInputBuffer.push({
+                    seq: sentSeq,
+                    input: { ...localCommand },
+                    preDash: { ...this._framePreDash },
+                    dt: deltaTime,
                 });
+                if (this._pendingInputBuffer.length > CSP_PENDING_INPUT_MAX) {
+                    this._pendingInputBuffer.shift();
+                }
             }
         }
+        this._localDashJustStarted = false;
     }
 
     /**
@@ -2621,6 +2707,18 @@ export class GameScene extends Phaser.Scene {
         const zoomT = 1 - Math.pow(0.01, delta / 150);
         cam.setZoom(Phaser.Math.Linear(cam.zoom, this.targetZoom, zoomT));
         this.levelManager?.update?.(cam);
+
+        // Decay the camera follow offset that was set during a server correction.
+        // Matches the decay rate in SpiritFormComponent so the player stays centred
+        // while both the viewport and the visual body glide to the corrected position.
+        const fo = cam.followOffset;
+        if (fo && (fo.x !== 0 || fo.y !== 0)) {
+            const decay = Math.pow(0.2, delta / 16.67);
+            cam.setFollowOffset(
+                Math.abs(fo.x * decay) < 0.05 ? 0 : fo.x * decay,
+                Math.abs(fo.y * decay) < 0.05 ? 0 : fo.y * decay
+            );
+        }
 
         const renderTick = this._latestServerTick > 0
             ? (this._latestServerTick + ((performance.now() - this._latestServerTickAtMs) / SERVER_TICK_MS)) - REMOTE_INTERPOLATION_DELAY_TICKS

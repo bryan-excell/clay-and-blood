@@ -13,7 +13,7 @@ function makePlayer() {
         intent: { up: false, down: false, left: false, right: true, sprint: false },
         motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
         stats: { hp: 100 },
-        net: { lastSeq: 7 },
+        net: { lastSeq: 7, lastReceivedInputSeq: 9, lastProcessedInputSeq: 8 },
         teamId: 'players',
         sightRadius: 320,
     };
@@ -32,7 +32,9 @@ function testAdapterPipeline() {
 
     const snapshotPlayers = phaseBuildSnapshotPlayers(players);
     assert.equal(snapshotPlayers.length, 1);
-    assert.equal(snapshotPlayers[0].seq, 7);
+    assert.equal(snapshotPlayers[0].seq, 8);
+    assert.equal(snapshotPlayers[0].lastReceivedInputSeq, 9);
+    assert.equal(snapshotPlayers[0].lastProcessedInputSeq, 8);
     assert.equal(snapshotPlayers[0].levelId, 'town-square');
     assert.equal(snapshotPlayers[0].teamId, 'players');
     assert.equal(snapshotPlayers[0].sightRadius, 320);

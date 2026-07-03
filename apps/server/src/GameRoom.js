@@ -49,13 +49,16 @@ import {
     summarizeResources,
 } from '@clay-and-blood/shared';
 import {
-    phaseInputIntent,
-    phaseLocomotionDash,
-    phasePhysicsTransform,
     phaseBuildHistoryPositions,
 } from '@clay-and-blood/shared/server-tick';
 
-const TICK_MS = 50; // 20 Hz server tick
+const TICK_MS = 50; // 20 Hz server snapshot/simulation cadence
+const CLIENT_INPUT_DT_MS = 1000 / 60;
+const MAX_INPUT_DT_MS = 50;
+const MAX_INPUT_QUEUE_SIZE = 240; // ~4 seconds at 60 Hz
+const MAX_INPUT_COMMANDS_PER_SERVER_TICK = 12; // catch up without unbounded bursts
+const ACTIVE_TICK_MAX_STEPS = 5;
+const TICK_WATCHDOG_MS = 5000;
 const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
 const POSSESSION_DURATION_MS = 8000;
 const DEBUG_WORLD_SYNC = false;
@@ -323,9 +326,9 @@ function resolveCollisions(x, y, grid) {
 /**
  * GameRoom – Cloudflare Durable Object
  *
- * Authoritative game server. Clients send PLAYER_INPUT; the server runs the
- * physics simulation on a 20 Hz fixed tick (DO alarm) and broadcasts
- * STATE_SNAPSHOT to all clients each tick.
+ * Authoritative game server. Clients send sequenced PLAYER_INPUT commands; the
+ * server consumes those commands into a 20 Hz authoritative simulation loop and
+ * broadcasts STATE_SNAPSHOT to all clients each tick.
  *
  * Player state is in-memory. The DO stays alive while WebSocket sessions are
  * open (Hibernatable WS API). If the DO is evicted after the last player
@@ -341,7 +344,7 @@ export class GameRoom {
         //   intent:    { up, down, left, right, sprint },
         //   motion:    { dashVx, dashVy, dashTimeLeftMs },
         //   resources: { hp, stamina, mana },
-        //   net:       { lastSeq }
+        //   net:       { lastSeq, lastReceivedInputSeq, lastProcessedInputSeq, inputQueue }
         // }
         this.players = new Map();
         this.entityEquips = new Map(); // entityKey -> { entityKey, levelId, equipped, ownerSessionId }
@@ -356,6 +359,9 @@ export class GameRoom {
         this.grids   = new Map();
         this.gridCacheOrder = [];
         this.tickCount = 0;
+        this._tickTimer = null;
+        this._lastTickAtMs = 0;
+        this._tickAccumulatorMs = 0;
         // Lag-compensation history: array of { tick, positions: Map<sessionId,{x,y,levelId}> }
 
     // Capped at LAG_COMP_HISTORY_SIZE entries (sliding window ~1 second).
@@ -400,7 +406,12 @@ export class GameRoom {
                     },
                     motion:    { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
                     resources: createEntityResources('player'),
-                    net:       { lastSeq: 0 },
+                    net:       {
+                        lastSeq: 0,
+                        lastReceivedInputSeq: 0,
+                        lastProcessedInputSeq: 0,
+                        inputQueue: [],
+                    },
                     equipped:  null, // populated on first PLAYER_EQUIP message
                     loadoutSnapshot: null,
                     controlledEntityKey: `player:${sessionId}`,
@@ -442,10 +453,8 @@ export class GameRoom {
                 // Notify the others that someone new arrived
                 this.#broadcast({ type: MSG.PLAYER_JOIN, sessionId }, ws);
 
-                // Start the tick loop when the first player joins
-                if (this.players.size === 1) {
-                    await this.state.storage.setAlarm(Date.now() + TICK_MS);
-                }
+                this._ensureTickLoop();
+                await this.state.storage.setAlarm(Date.now() + TICK_WATCHDOG_MS);
                 break;
             }
 
@@ -505,50 +514,8 @@ export class GameRoom {
             }
 
             case MSG.PLAYER_INPUT: {
-                const player = this.players.get(sessionId);
-                if (!player) break;
-                const playerEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
-                const incapacitated = this._isEntityIncapacitated(playerEntityKey, Date.now());
-
-                // Preserve existing dash state unless a new dash is requested
-                let { dashVx, dashVy, dashTimeLeftMs } = player.motion;
-
-                if (data.dash && dashTimeLeftMs <= 0) {
-                    const dash = dashStateFromInput(data);
-                    if (dash && this._payEntityCosts(playerEntityKey, { stamina: DASH_STAMINA_COST, mana: 0 }, Date.now())) {
-                        dashVx = dash.dashVx;
-                        dashVy = dash.dashVy;
-                        dashTimeLeftMs = dash.dashTimeLeftMs;
-                    }
-                }
-
-                const latestPlayer = this.players.get(sessionId) ?? player;
-                this._updatePlayer(sessionId, (currentPlayer) => ({
-                    ...currentPlayer,
-                    intent: {
-                        up:     !incapacitated && !!data.up,
-                        down:   !incapacitated && !!data.down,
-                        left:   !incapacitated && !!data.left,
-                        right:  !incapacitated && !!data.right,
-                        sprint: !incapacitated && !!data.sprint,
-                        moveSpeedMultiplier: (Number.isFinite(data.moveSpeedMultiplier)
-                            ? Math.max(0, Math.min(1, data.moveSpeedMultiplier))
-                            : 1) * this._resolveSpellWindupMoveMultiplier(latestPlayer, Date.now())
-                            * this._resolveActiveEffectMoveMultiplier(playerEntityKey),
-                        attackPushVx: !incapacitated && Number.isFinite(data.attackPushVx)
-                            ? Math.max(-800, Math.min(800, data.attackPushVx))
-                            : 0,
-                        attackPushVy: !incapacitated && Number.isFinite(data.attackPushVy)
-                            ? Math.max(-800, Math.min(800, data.attackPushVy))
-                            : 0,
-                    },
-                    motion: {
-                        dashVx,
-                        dashVy,
-                        dashTimeLeftMs,
-                    },
-                    net: { ...currentPlayer.net, lastSeq: data.seq ?? currentPlayer.net.lastSeq },
-                }));
+                this._enqueuePlayerInputCommand(sessionId, data);
+                this._ensureTickLoop();
                 break;
             }
 
@@ -1129,22 +1096,65 @@ export class GameRoom {
     async alarm() {
         if (this.players.size === 0) return; // no players – let loop die
 
-        this._runTick();
+        this._ensureTickLoop();
+        await this.state.storage.setAlarm(Date.now() + TICK_WATCHDOG_MS);
+    }
 
-        // Reschedule
-        await this.state.storage.setAlarm(Date.now() + TICK_MS);
+    _ensureTickLoop() {
+        if (this.players.size === 0) return;
+        if (this._tickTimer) return;
+
+        const now = Date.now();
+        if (!Number.isFinite(this._lastTickAtMs) || this._lastTickAtMs <= 0) {
+            this._lastTickAtMs = now;
+            this._tickAccumulatorMs = TICK_MS;
+        }
+
+        this._scheduleTickLoop(0);
+    }
+
+    _scheduleTickLoop(delayMs = TICK_MS) {
+        if (this._tickTimer || this.players.size === 0) return;
+        const delay = Math.max(0, Math.floor(delayMs));
+        this._tickTimer = setTimeout(() => {
+            this._tickTimer = null;
+            this._runActiveTickLoop();
+        }, delay);
+    }
+
+    _runActiveTickLoop() {
+        if (this.players.size === 0) {
+            this._lastTickAtMs = 0;
+            this._tickAccumulatorMs = 0;
+            return;
+        }
+
+        const now = Date.now();
+        const elapsedMs = Math.max(0, now - (this._lastTickAtMs || now));
+        this._lastTickAtMs = now;
+        this._tickAccumulatorMs = Math.min(
+            this._tickAccumulatorMs + elapsedMs,
+            TICK_MS * ACTIVE_TICK_MAX_STEPS
+        );
+
+        let steps = 0;
+        while (this._tickAccumulatorMs >= TICK_MS && steps < ACTIVE_TICK_MAX_STEPS) {
+            this._runTick();
+            this._tickAccumulatorMs -= TICK_MS;
+            steps++;
+        }
+
+        this._scheduleTickLoop(Math.max(1, TICK_MS - this._tickAccumulatorMs));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
     _runTick() {
         this._phaseExpirePossessions();
-        this._phaseUpdateResources();
         this._phaseUpdatePoiseAndReactions();
         this._phaseDecayCorpses();
-        const inputPhase = this._phaseInputIntent();
-        const locomotionPhase = this._phaseLocomotionDash(inputPhase);
-        this._phasePhysicsTransform(locomotionPhase);
+        this._phaseProcessPlayerInputCommands();
+        this._phaseUpdateResources();
         this._phaseZombieAi();
         this._phaseZombieMovement();
         this._phaseActiveEffects();
@@ -1227,23 +1237,207 @@ export class GameRoom {
      * Phase 1: capture the authoritative input/intent state for each player.
      * (Intent is represented by the stored per-player lastInput payload.)
      */
-    _phaseInputIntent() {
-        return phaseInputIntent(this.players, (levelId) => this._getGrid(levelId));
+    _sanitizePlayerInputCommand(sessionId, data) {
+        const player = this.players.get(sessionId);
+        if (!player) return null;
+
+        const previousReceivedSeq = player.net?.lastReceivedInputSeq ?? player.net?.lastSeq ?? 0;
+        const rawSeq = Number.isFinite(data?.seq)
+            ? Math.floor(data.seq)
+            : previousReceivedSeq + 1;
+        if (rawSeq <= previousReceivedSeq) return null;
+
+        const rawDtMs = Number.isFinite(data?.dtMs) ? data.dtMs : CLIENT_INPUT_DT_MS;
+        const dtMs = Math.max(1, Math.min(MAX_INPUT_DT_MS, rawDtMs));
+
+        return {
+            seq: rawSeq,
+            dtMs,
+            up: !!data?.up,
+            down: !!data?.down,
+            left: !!data?.left,
+            right: !!data?.right,
+            sprint: !!data?.sprint,
+            dash: !!data?.dash,
+            moveSpeedMultiplier: Number.isFinite(data?.moveSpeedMultiplier)
+                ? Math.max(0, Math.min(1, data.moveSpeedMultiplier))
+                : 1,
+            attackPushVx: Number.isFinite(data?.attackPushVx)
+                ? Math.max(-800, Math.min(800, data.attackPushVx))
+                : 0,
+            attackPushVy: Number.isFinite(data?.attackPushVy)
+                ? Math.max(-800, Math.min(800, data.attackPushVy))
+                : 0,
+        };
     }
 
-    /**
-     * Phase 2: run locomotion + dash simulation from input intent.
-     */
-    _phaseLocomotionDash(inputPhaseEntries) {
-        return phaseLocomotionDash(inputPhaseEntries, TICK_MS);
+    _enqueuePlayerInputCommand(sessionId, data) {
+        const command = this._sanitizePlayerInputCommand(sessionId, data);
+        if (!command) return false;
+
+        this._updatePlayer(sessionId, (currentPlayer) => {
+            const queue = Array.isArray(currentPlayer.net?.inputQueue)
+                ? currentPlayer.net.inputQueue.slice()
+                : [];
+            queue.push(command);
+            if (queue.length > MAX_INPUT_QUEUE_SIZE) {
+                queue.splice(0, queue.length - MAX_INPUT_QUEUE_SIZE);
+            }
+
+            return {
+                ...currentPlayer,
+                net: {
+                    ...currentPlayer.net,
+                    lastSeq: command.seq,
+                    lastReceivedInputSeq: command.seq,
+                    lastProcessedInputSeq: currentPlayer.net?.lastProcessedInputSeq ?? 0,
+                    inputQueue: queue,
+                },
+            };
+        });
+        return true;
     }
 
-    /**
-     * Phase 3/4: apply physics result to authoritative transform/state.
-     * (Physics integration and transform write-back are a single operation here.)
-     */
-    _phasePhysicsTransform(locomotionPhaseEntries) {
-        phasePhysicsTransform(this.players, locomotionPhaseEntries);
+    _phaseProcessPlayerInputCommands() {
+        for (const [sessionId] of this.players.entries()) {
+            let player = this.players.get(sessionId);
+            if (!player) continue;
+
+            const queue = Array.isArray(player.net?.inputQueue)
+                ? player.net.inputQueue.slice()
+                : [];
+            if (queue.length === 0) {
+                this.players.set(sessionId, {
+                    ...player,
+                    intent: {
+                        ...(player.intent ?? {}),
+                        up: false,
+                        down: false,
+                        left: false,
+                        right: false,
+                        sprint: false,
+                        moveSpeedMultiplier: 0,
+                        attackPushVx: 0,
+                        attackPushVy: 0,
+                    },
+                });
+                continue;
+            }
+
+            const previouslyProcessedSeq = player.net?.lastProcessedInputSeq ?? 0;
+            let processedSeq = previouslyProcessedSeq;
+            let processedCount = 0;
+            let remainingQueue = [];
+
+            for (const command of queue) {
+                if (!command || command.seq <= processedSeq) continue;
+                if (processedCount >= MAX_INPUT_COMMANDS_PER_SERVER_TICK) {
+                    remainingQueue.push(command);
+                    continue;
+                }
+
+                player = this.players.get(sessionId) ?? player;
+                const nextPlayer = this._processPlayerInputCommand(sessionId, player, command);
+                if (!nextPlayer) continue;
+
+                processedSeq = Math.max(processedSeq, command.seq);
+                processedCount++;
+                player = nextPlayer;
+                this.players.set(sessionId, player);
+            }
+
+            player = this.players.get(sessionId) ?? player;
+            this.players.set(sessionId, {
+                ...player,
+                net: {
+                    ...player.net,
+                    lastProcessedInputSeq: processedSeq,
+                    inputQueue: remainingQueue,
+                },
+            });
+        }
+    }
+
+    _processPlayerInputCommand(sessionId, player, command) {
+        if (!player || !command) return null;
+
+        const nowMs = Date.now();
+        const playerEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
+        const incapacitated = this._isEntityIncapacitated(playerEntityKey, nowMs);
+        const commandIntent = {
+            up:     !incapacitated && !!command.up,
+            down:   !incapacitated && !!command.down,
+            left:   !incapacitated && !!command.left,
+            right:  !incapacitated && !!command.right,
+            sprint: !incapacitated && !!command.sprint,
+            moveSpeedMultiplier: (Number.isFinite(command.moveSpeedMultiplier)
+                ? Math.max(0, Math.min(1, command.moveSpeedMultiplier))
+                : 1) * this._resolveSpellWindupMoveMultiplier(player, nowMs)
+                * this._resolveActiveEffectMoveMultiplier(playerEntityKey),
+            attackPushVx: !incapacitated && Number.isFinite(command.attackPushVx)
+                ? Math.max(-800, Math.min(800, command.attackPushVx))
+                : 0,
+            attackPushVy: !incapacitated && Number.isFinite(command.attackPushVy)
+                ? Math.max(-800, Math.min(800, command.attackPushVy))
+                : 0,
+        };
+
+        let dashVx = player.motion?.dashVx ?? 0;
+        let dashVy = player.motion?.dashVy ?? 0;
+        let dashTimeLeftMs = Math.max(0, player.motion?.dashTimeLeftMs ?? 0);
+
+        if (!incapacitated && command.dash && dashTimeLeftMs <= 0) {
+            const dash = dashStateFromInput(commandIntent);
+            if (dash && this._payEntityCosts(playerEntityKey, { stamina: DASH_STAMINA_COST, mana: 0 }, nowMs)) {
+                dashVx = dash.dashVx;
+                dashVy = dash.dashVy;
+                dashTimeLeftMs = dash.dashTimeLeftMs;
+                player = this.players.get(sessionId) ?? player;
+            }
+        }
+
+        const transform = player.transform ?? { x: 0, y: 0, levelId: 'inn' };
+        const grid = this._getGrid(transform.levelId ?? 'inn');
+        const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(
+            grid,
+            transform.x,
+            transform.y
+        );
+        const stepped = stepPlayerKinematics(
+            {
+                x: transform.x,
+                y: transform.y,
+                dashVx,
+                dashVy,
+                dashTimeLeftMs,
+            },
+            {
+                ...commandIntent,
+                moveSpeedMultiplier: commandIntent.moveSpeedMultiplier * terrainMoveSpeedMultiplier,
+            },
+            command.dtMs,
+            grid
+        );
+
+        return {
+            ...player,
+            intent: commandIntent,
+            transform: {
+                ...transform,
+                x: stepped.x,
+                y: stepped.y,
+            },
+            motion: {
+                ...player.motion,
+                dashVx: stepped.dashVx,
+                dashVy: stepped.dashVy,
+                dashTimeLeftMs: stepped.dashTimeLeftMs,
+            },
+            net: {
+                ...player.net,
+                lastProcessedInputSeq: command.seq,
+            },
+        };
     }
 
     /**
@@ -1257,7 +1451,9 @@ export class GameRoom {
                 x: player.transform.x,
                 y: player.transform.y,
                 levelId: player.transform.levelId,
-                seq: player.net.lastSeq,
+                seq: player.net?.lastProcessedInputSeq ?? player.net?.lastSeq ?? 0,
+                lastReceivedInputSeq: player.net?.lastReceivedInputSeq ?? player.net?.lastSeq ?? 0,
+                lastProcessedInputSeq: player.net?.lastProcessedInputSeq ?? player.net?.lastSeq ?? 0,
                 teamId: typeof player.teamId === 'string' ? player.teamId : null,
                 sightRadius: this._resolveSightRadiusForPlayer(sessionId),
             });

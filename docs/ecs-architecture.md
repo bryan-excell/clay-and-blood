@@ -57,7 +57,8 @@ Current implementation anchor:
 - Systems run local simulation only when `AuthoritySystem.canSimulateOnClient(entity)` is true.
 - `GameRoom` server tick now runs explicit phase functions in order: input/intent -> locomotion+dash -> physics/transform -> snapshot/history -> broadcast.
 - `GameRoom` player state is now component-like (`transform`, `intent`, `motion`, `stats`, `net`) to mirror ECS semantics.
-- Server phase logic is centralized in shared adapter functions (`@clay-and-blood/shared/server-tick`).
+- Shared server helpers (`@clay-and-blood/shared/server-tick`) own pure phase utilities; `GameRoom` owns network command queueing, resource-gated dash acceptance, and authoritative input-command processing.
+- Player movement networking uses sequenced fixed-step input commands. The server snapshots `lastProcessedInputSeq`; clients reconcile local prediction by discarding processed commands and replaying only the unprocessed command tail.
 - `EntityManager.updateComponents()` applies ordered phase updates.
 - No fallback phase is used in `fixedUpdate`; all runtime-updated behavior must be explicitly phased or system-driven.
 

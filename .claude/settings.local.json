@@ -13,7 +13,9 @@
       "Bash(Get-ChildItem -Path \"c:\\\\Code\\\\ClayAndBlood\" -Recurse -Force)",
       "Bash(Select-Object -First 50)",
       "Bash(Format-Table -Property FullName)",
-      "Bash(xargs grep -l \"particle\\\\|effect\\\\|emitter\" -i)"
+      "Bash(xargs grep -l \"particle\\\\|effect\\\\|emitter\" -i)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Code\\\\ClayAndBlood\" -Recurse -Attributes Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)"
     ]
   }
 }
