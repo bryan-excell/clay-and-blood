@@ -22,6 +22,7 @@ import { uiStateStore } from '../core/UiStateStore.js';
 import { ensureParticleTextures } from '../world/ParticleTextureFactory.js';
 import { particleBudget } from '../world/ParticleBudget.js';
 import { zonePalette } from '../world/ZonePalette.js';
+import { RemoteSpiritVisual } from '../world/RemoteSpiritVisual.js';
 import {
     GAME_FONT_FAMILY,
     PLAYER_RADIUS,
@@ -152,7 +153,7 @@ export class GameScene extends Phaser.Scene {
         // Camera bounds are set per-level by EntityLevelManager.setupLevel()
 
         // --- Multiplayer ---
-        // Map of remote sessionId -> Phaser.GameObjects.Arc (circle)
+        // Map of remote sessionId -> { circle: structural anchor, visual: spirit rig }
         this.remotePlayers = new Map();
         this._localTeamId = TEAM_IDS.players;
 
@@ -1000,7 +1001,9 @@ export class GameScene extends Phaser.Scene {
             const rp = this.remotePlayers.get(sessionId);
             if (rp) {
                 rp.stageId = levelId;
-                rp.circle.setVisible(levelId === gameState.currentLevelId);
+                const visible = levelId === gameState.currentLevelId;
+                rp.circle.setVisible(visible);
+                rp.visual?.setVisible(visible);
                 this._refreshRemotePlayerLightSource(sessionId);
             }
         });
@@ -1009,7 +1012,9 @@ export class GameScene extends Phaser.Scene {
         // (sendLevelChange is now called by ExitManager with the final position)
         eventBus.on('level:transition', ({ levelId }) => {
             for (const rp of this.remotePlayers.values()) {
-                rp.circle.setVisible(rp.stageId === levelId);
+                const visible = rp.stageId === levelId;
+                rp.circle.setVisible(visible);
+                rp.visual?.setVisible(visible);
             }
             this._refreshAllRemotePlayerLightSources();
             this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
@@ -1290,6 +1295,7 @@ export class GameScene extends Phaser.Scene {
             const rp = this.remotePlayers.get(sessionId);
             if (rp) {
                 this.lightingRenderer?.removeLightSource(this._remotePlayerLightSourceId(sessionId));
+                rp.visual?.destroy?.();
                 rp.circle.destroy();
                 this.remotePlayers.delete(sessionId);
                 this._clearReplicationTrack(this._remotePlayerTrackKey(sessionId));
@@ -1312,6 +1318,11 @@ export class GameScene extends Phaser.Scene {
             for (const sessionId of this.remotePlayers.keys()) {
                 this.lightingRenderer?.removeLightSource(this._remotePlayerLightSourceId(sessionId));
             }
+            for (const rp of this.remotePlayers.values()) {
+                rp.visual?.destroy?.();
+                rp.circle?.destroy?.();
+            }
+            this.remotePlayers.clear();
             for (const entityKey of this._worldEntityStateCache.keys()) {
                 this.lightingRenderer?.removeLightSource(this._worldEntityLightSourceId(entityKey));
             }
@@ -2056,14 +2067,17 @@ export class GameScene extends Phaser.Scene {
 
     _addRemotePlayer(sessionId, x, y, stageId = 'inn', teamId = null, sightRadius = null) {
         if (this.remotePlayers.has(sessionId)) return;
-        const circle = this.add.circle(x, y, PLAYER_RADIUS, 0x6688cc, 0.9);
-        circle.setStrokeStyle(3, 0x223355);
+        const circle = this.add.circle(x, y, PLAYER_RADIUS, 0x6688cc, 0);
+        circle.setAlpha(0);
         circle.setDepth(STAGE_RENDER_DEPTH.actors);
+        const visual = new RemoteSpiritVisual(this, x, y, { radius: PLAYER_RADIUS });
         const isVisible = stageId === gameState.currentLevelId;
         circle.setVisible(isVisible);
+        visual.setVisible(isVisible);
         this.lightingRenderer?.maskGameObject(circle);
         this.remotePlayers.set(sessionId, {
             circle,
+            visual,
             stageId,
             teamId: typeof teamId === 'string' ? teamId : null,
             sightRadius: Number.isFinite(sightRadius) ? sightRadius : ARCHETYPE_CONFIG.player.sightRadius,
@@ -2089,7 +2103,9 @@ export class GameScene extends Phaser.Scene {
         if (Number.isFinite(sightRadius)) {
             rp.sightRadius = sightRadius;
         }
-        rp.circle.setVisible(stageId === gameState.currentLevelId);
+        const visible = stageId === gameState.currentLevelId;
+        rp.circle.setVisible(visible);
+        rp.visual?.setVisible(visible);
         this._pushReplicationTrack(this._remotePlayerTrackKey(sessionId), x, y, stageId, tick, nowMs);
         this._refreshRemotePlayerLightSource(sessionId, x, y);
     }
@@ -2616,6 +2632,8 @@ export class GameScene extends Phaser.Scene {
             if (sample) {
                 rp.circle.x = sample.x;
                 rp.circle.y = sample.y;
+                rp.visual?.setPosition(sample.x, sample.y, delta);
+                rp.visual?.tryApplyVisibilityMask?.();
                 this._refreshRemotePlayerLightSource(sessionId, sample.x, sample.y);
             }
         }

@@ -16,6 +16,15 @@ export class ParticleEventSystem {
                     ? this.scene.player
                     : null;
                 this._emitDamageBurst(target, damage);
+                if (sessionId !== networkManager.sessionId) {
+                    const remote = this.scene.remotePlayers?.get?.(sessionId);
+                    const amount = Number.isFinite(damage) ? Math.max(0, damage) : 0;
+                    if (amount > 0) {
+                        remote?.visual?.emitBurst?.('damaged', {
+                            quantity: Math.min(40, 5 + Math.floor(amount / 5)),
+                        });
+                    }
+                }
             }),
             eventBus.on('network:worldEntityDamaged', ({ entityKey, damage, died, x, y, levelId }) => {
                 if (levelId && levelId !== gameState.currentLevelId) return;
