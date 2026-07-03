@@ -56,9 +56,9 @@ Current implementation anchor:
 - `PlayerStateMachine` now owns locomotion/dash only; weapon/combat state lives in `PlayerCombatComponent`.
 - Systems run local simulation only when `AuthoritySystem.canSimulateOnClient(entity)` is true.
 - `GameRoom` server tick now runs explicit phase functions in order: input/intent -> locomotion+dash -> physics/transform -> snapshot/history -> broadcast.
-- `GameRoom` player state is now component-like (`transform`, `intent`, `motion`, `stats`, `net`) to mirror ECS semantics.
+- `GameRoom` player state is now component-like (`transform`, `intent`, `motion`, `stats`, `net`) to mirror ECS semantics. `motion` is the authoritative movement-state component: dash state now lives there, and server-owned pushes/knockback/environmental velocity should use the same component rather than separate ad-hoc correction paths.
 - Shared server helpers (`@clay-and-blood/shared/server-tick`) own pure phase utilities; `GameRoom` owns network command queueing, resource-gated dash acceptance, and authoritative input-command processing.
-- Player movement networking uses sequenced fixed-step input commands. The server snapshots `lastProcessedInputSeq`; clients reconcile local prediction by discarding processed commands and replaying only the unprocessed command tail.
+- Player movement networking uses sequenced fixed-step input commands. The server snapshots `lastProcessedInputSeq` plus authoritative `movementState`; clients reconcile local prediction by restoring the server position/movement state, discarding processed commands, and replaying only the unprocessed command tail.
 - `EntityManager.updateComponents()` applies ordered phase updates.
 - No fallback phase is used in `fixedUpdate`; all runtime-updated behavior must be explicitly phased or system-driven.
 

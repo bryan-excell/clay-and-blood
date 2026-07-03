@@ -5,6 +5,8 @@ import {
     PLAYER_DASH_SPEED,
     PLAYER_DASH_DURATION,
     dashStateFromInput,
+    movementStateForSnapshot,
+    normalizeMovementState,
     stepPlayerKinematics,
 } from '../src/index.js';
 
@@ -58,10 +60,48 @@ function testLocomotionResumesAfterDashExpires() {
     assert.ok(out.y < afterDashTick.y, 'entity should move upward once dash ends');
 }
 
+function testExternalVelocityAddsToMovementState() {
+    const start = {
+        x: 100,
+        y: 100,
+        externalVx: 120,
+        externalVy: -40,
+        externalTimeLeftMs: 50,
+    };
+
+    const out = stepPlayerKinematics(start, {}, 50, null);
+
+    assert.ok(nearlyEqual(out.vx, 120), `expected external vx 120, got ${out.vx}`);
+    assert.ok(nearlyEqual(out.vy, -40), `expected external vy -40, got ${out.vy}`);
+    assert.ok(nearlyEqual(out.x, 106), `expected x 106, got ${out.x}`);
+    assert.ok(nearlyEqual(out.y, 98), `expected y 98, got ${out.y}`);
+    assert.equal(out.externalTimeLeftMs, 0);
+}
+
+function testMovementStateSnapshotRoundTrip() {
+    const snapshot = movementStateForSnapshot({
+        dashVx: PLAYER_DASH_SPEED,
+        dashVy: 0,
+        dashTimeLeftMs: 125,
+        externalVx: -90,
+        externalVy: 30,
+        externalTimeLeftMs: 75,
+    });
+    const normalized = normalizeMovementState(snapshot);
+
+    assert.equal(normalized.dashVx, PLAYER_DASH_SPEED);
+    assert.equal(normalized.dashTimeLeftMs, 125);
+    assert.equal(normalized.externalVx, -90);
+    assert.equal(normalized.externalVy, 30);
+    assert.equal(normalized.externalTimeLeftMs, 75);
+}
+
 function run() {
     testDashStateFromInputNormalized();
     testDashOverridesWalkIntentDuringDashWindow();
     testLocomotionResumesAfterDashExpires();
+    testExternalVelocityAddsToMovementState();
+    testMovementStateSnapshotRoundTrip();
     console.log('shared tick pipeline tests passed');
 }
 

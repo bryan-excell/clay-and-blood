@@ -1,5 +1,7 @@
 import {
     getTerrainMovementMultiplierAtWorldPosition,
+    movementStateForSnapshot,
+    normalizeMovementState,
     stepPlayerKinematics,
 } from './index.js';
 
@@ -46,9 +48,7 @@ export function phaseLocomotionDash(inputEntries, tickMs) {
             {
                 x: player.transform.x,
                 y: player.transform.y,
-                dashVx: motion.dashVx,
-                dashVy: motion.dashVy,
-                dashTimeLeftMs: motion.dashTimeLeftMs,
+                ...normalizeMovementState(motion),
             },
             intent,
             tickMs,
@@ -72,12 +72,7 @@ export function phasePhysicsTransform(players, locomotionEntries) {
                 x: stepped.x,
                 y: stepped.y,
             },
-            motion: {
-                ...player.motion,
-                dashVx: stepped.dashVx,
-                dashVy: stepped.dashVy,
-                dashTimeLeftMs: stepped.dashTimeLeftMs,
-            },
+            motion: normalizeMovementState({ ...player.motion, ...stepped }),
         });
     }
 }
@@ -85,7 +80,7 @@ export function phasePhysicsTransform(players, locomotionEntries) {
 /**
  * Phase 5: build snapshot payload from authoritative state.
  * @param {Map<string, object>} players
- * @returns {Array<{sessionId:string,x:number,y:number,levelId:string,seq:number,lastReceivedInputSeq:number,lastProcessedInputSeq:number,teamId:string|null,sightRadius:number|null}>}
+ * @returns {Array<{sessionId:string,x:number,y:number,levelId:string,seq:number,lastReceivedInputSeq:number,lastProcessedInputSeq:number,movementState:object,teamId:string|null,sightRadius:number|null}>}
  */
 export function phaseBuildSnapshotPlayers(players) {
     const snapshotPlayers = [];
@@ -98,6 +93,7 @@ export function phaseBuildSnapshotPlayers(players) {
             seq: p.net?.lastProcessedInputSeq ?? p.net?.lastSeq ?? 0,
             lastReceivedInputSeq: p.net?.lastReceivedInputSeq ?? p.net?.lastSeq ?? 0,
             lastProcessedInputSeq: p.net?.lastProcessedInputSeq ?? p.net?.lastSeq ?? 0,
+            movementState: movementStateForSnapshot(p.motion),
             teamId: typeof p.teamId === 'string' ? p.teamId : null,
             sightRadius: Number.isFinite(p.sightRadius) ? p.sightRadius : null,
         });

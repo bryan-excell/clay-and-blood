@@ -11,7 +11,14 @@ function makePlayer() {
     return {
         transform: { x: 100, y: 100, levelId: 'town-square' },
         intent: { up: false, down: false, left: false, right: true, sprint: false },
-        motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+        motion: {
+            dashVx: 0,
+            dashVy: 0,
+            dashTimeLeftMs: 0,
+            externalVx: 40,
+            externalVy: 0,
+            externalTimeLeftMs: 100,
+        },
         stats: { hp: 100 },
         net: { lastSeq: 7, lastReceivedInputSeq: 9, lastProcessedInputSeq: 8 },
         teamId: 'players',
@@ -29,6 +36,7 @@ function testAdapterPipeline() {
 
     const p1 = players.get('p1');
     assert.ok(p1.transform.x > 100, 'expected movement along +x');
+    assert.equal(p1.motion.externalTimeLeftMs, 50);
 
     const snapshotPlayers = phaseBuildSnapshotPlayers(players);
     assert.equal(snapshotPlayers.length, 1);
@@ -36,6 +44,8 @@ function testAdapterPipeline() {
     assert.equal(snapshotPlayers[0].lastReceivedInputSeq, 9);
     assert.equal(snapshotPlayers[0].lastProcessedInputSeq, 8);
     assert.equal(snapshotPlayers[0].levelId, 'town-square');
+    assert.deepEqual(snapshotPlayers[0].movementState.dash, { vx: 0, vy: 0, timeLeftMs: 0 });
+    assert.deepEqual(snapshotPlayers[0].movementState.externalVelocity, { vx: 40, vy: 0, timeLeftMs: 50 });
     assert.equal(snapshotPlayers[0].teamId, 'players');
     assert.equal(snapshotPlayers[0].sightRadius, 320);
 

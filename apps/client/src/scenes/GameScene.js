@@ -40,6 +40,7 @@ import {
     getInteractableDefinitionsForLevel,
     hasLineOfSight,
     dashStateFromInput,
+    normalizeMovementState,
     stepPlayerKinematics,
     resolveMeleeAttackProfile,
     resolveSpellConfig,
@@ -159,18 +160,18 @@ export class GameScene extends Phaser.Scene {
         // Latest server tick seen by this client, used for tick-based interpolation.
         this._latestServerTick = 0;
         this._latestServerTickAtMs = 0;
-        // Local dash state for deterministic client prediction.
-        this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
-        // CSP input ring-buffer: { seq, input, preDash, dt } for every fixedUpdate
+        // Local movement state for deterministic client prediction.
+        this._localMovementState = normalizeMovementState();
+        // CSP input ring-buffer: { seq, input, preMovementState, dt } for every fixedUpdate
         // command transmitted to the server. Snapshots ack the last command that the
         // server has actually simulated, so replay can drop commands precisely.
         this._pendingInputBuffer = [];
         // True for exactly one frame: the fixedUpdate where a dash was initiated.
         // Lets fixedUpdate tag that frame's buffer entry with dash:true.
         this._localDashJustStarted = false;
-        // Dash state at the start of the current fixedUpdate frame, captured before any
-        // systems run so both regular and dash inputs get consistent preDash values.
-        this._framePreDash = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        // Movement state at the start of the current fixedUpdate frame, captured before any
+        // systems run so replay can seed the exact pre-command state.
+        this._framePreMovementState = normalizeMovementState();
         this._lastLocalPlayerInputCommand = null;
         this._lastWorldEntitySyncAt = 0;
         this._possessionEndAtMs = 0;
@@ -375,7 +376,8 @@ export class GameScene extends Phaser.Scene {
         } else if (this.player?.id) {
             this.lightingRenderer?.removeLightSource(this.player.id);
         }
-        this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        this._localMovementState = normalizeMovementState();
+        this._framePreMovementState = normalizeMovementState();
         this._pendingInputBuffer = [];
         this._localDashJustStarted = false;
         this._lastLocalPlayerInputCommand = null;
@@ -846,7 +848,7 @@ export class GameScene extends Phaser.Scene {
                         const processedSeq = Number.isFinite(p.lastProcessedInputSeq)
                             ? p.lastProcessedInputSeq
                             : p.seq;
-                        this._applyServerCorrection(p.x, p.y, processedSeq);
+                        this._applyServerCorrection(p.x, p.y, processedSeq, p.movementState ?? p.motion ?? null);
                     }
                 } else {
                     this._pushRemoteSnapshot(
@@ -1032,7 +1034,8 @@ export class GameScene extends Phaser.Scene {
                 rp.visual?.setVisible(visible);
             }
             this._refreshAllRemotePlayerLightSources();
-            this._localDashState = { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+            this._localMovementState = normalizeMovementState();
+            this._framePreMovementState = normalizeMovementState();
             this._pendingInputBuffer = [];
             this._localDashJustStarted = false;
             this._lastLocalPlayerInputCommand = null;
@@ -1043,11 +1046,7 @@ export class GameScene extends Phaser.Scene {
         eventBus.on('player:dashStarted', ({ input }) => {
             const dash = dashStateFromInput(input);
             if (dash) {
-                this._localDashState = {
-                    dashVx: dash.dashVx,
-                    dashVy: dash.dashVy,
-                    dashTimeLeftMs: dash.dashTimeLeftMs,
-                };
+                this._localMovementState = normalizeMovementState({ ...this._localMovementState, ...dash });
                 this._localDashJustStarted = true;
             }
         });
@@ -2391,7 +2390,7 @@ export class GameScene extends Phaser.Scene {
      * Server reconciliation — Gambetta client-side prediction Part 2.
      *
      * 1. Discard all buffered commands the server has actually simulated.
-     * 2. Start from the server's authoritative position.
+     * 2. Start from the server's authoritative position and movement state.
      * 3. Re-simulate every remaining (unacknowledged) command at its fixed dt
      *    using the same stepPlayerKinematics function the server uses, producing the
      *    best estimate of our actual current position.
@@ -2401,7 +2400,7 @@ export class GameScene extends Phaser.Scene {
      * within a pixel of our locally-predicted position, eliminating rubberbanding.
      * The deadzone guards against redundant snaps when they match exactly.
      */
-    _applyServerCorrection(serverX, serverY, serverProcessedSeq) {
+    _applyServerCorrection(serverX, serverY, serverProcessedSeq, serverMovementState = null) {
         if (!this.player) return;
         const circle = this.player.getComponent('circle');
         if (!circle?.gameObject) return;
@@ -2419,38 +2418,34 @@ export class GameScene extends Phaser.Scene {
             if (ackCount > 0) this._pendingInputBuffer.splice(0, ackCount);
         }
 
-        // 2. Seed replay from the server's authoritative position.
+        // 2. Seed replay from the server's authoritative position and movement state.
         const grid = gameState.levels?.[gameState.currentLevelId]?.grid ?? null;
         let rx = serverX;
         let ry = serverY;
-        // Use the first pending entry's preDash as the best estimate of the server's
-        // dash state after the last acknowledged tick (server doesn't send dash state).
-        let replayDash = this._pendingInputBuffer.length > 0
-            ? { ...this._pendingInputBuffer[0].preDash }
-            : { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 };
+        let replayMovementState = serverMovementState
+            ? normalizeMovementState(serverMovementState)
+            : (this._pendingInputBuffer.length > 0
+                ? normalizeMovementState(this._pendingInputBuffer[0].preMovementState)
+                : normalizeMovementState());
 
         // 3. Re-simulate all unacknowledged frames at their exact local sub-step dt.
         for (const entry of this._pendingInputBuffer) {
             // Mirror the server's dash-start logic (GameRoom PLAYER_INPUT handler):
             // start a new dash if the input requests one and no dash is currently running.
-            if (entry.input.dash && replayDash.dashTimeLeftMs <= 0) {
+            if (entry.input.dash && replayMovementState.dashTimeLeftMs <= 0) {
                 const dashInit = dashStateFromInput(entry.input);
-                if (dashInit) replayDash = dashInit;
+                if (dashInit) replayMovementState = normalizeMovementState({ ...replayMovementState, ...dashInit });
             }
             const replayInput = this._applyTerrainToMovementInput(entry.input, rx, ry, grid);
             const stepped = stepPlayerKinematics(
-                { x: rx, y: ry, ...replayDash },
+                { x: rx, y: ry, ...replayMovementState },
                 replayInput,
                 entry.dt,  // exact local sub-step dt — matches local prediction fidelity
                 grid
             );
             rx = stepped.x;
             ry = stepped.y;
-            replayDash = {
-                dashVx: stepped.dashVx,
-                dashVy: stepped.dashVy,
-                dashTimeLeftMs: stepped.dashTimeLeftMs,
-            };
+            replayMovementState = normalizeMovementState(stepped);
         }
 
         // 4. Apply the replayed position if it differs meaningfully from current.
@@ -2463,7 +2458,7 @@ export class GameScene extends Phaser.Scene {
         const dist = Math.sqrt(errX * errX + errY * errY);
 
         if (dist < LOCAL_RECONCILE_DEADZONE_PX) {
-            this._localDashState = { ...replayDash };
+            this._localMovementState = normalizeMovementState(replayMovementState);
             return;
         }
 
@@ -2483,9 +2478,9 @@ export class GameScene extends Phaser.Scene {
             transform.position.x = rx;
             transform.position.y = ry;
         }
-        // Sync the local dash state to the replayed result so the next prediction
+        // Sync local movement state to the replayed result so the next prediction
         // frame continues from the corrected trajectory rather than the old one.
-        this._localDashState = { ...replayDash };
+        this._localMovementState = normalizeMovementState(replayMovementState);
         circle._skipNextPositionUpdate = true;
 
         // Smoothly absorb the correction so neither the viewport nor the visual body jumps.
@@ -2552,9 +2547,7 @@ export class GameScene extends Phaser.Scene {
             {
                 x: transform.position.x,
                 y: transform.position.y,
-                dashVx: this._localDashState.dashVx,
-                dashVy: this._localDashState.dashVy,
-                dashTimeLeftMs: this._localDashState.dashTimeLeftMs,
+                ...this._localMovementState,
             },
             simulationInput,
             deltaTime,
@@ -2563,9 +2556,7 @@ export class GameScene extends Phaser.Scene {
 
         const newX = stepped.x;
         const newY = stepped.y;
-        this._localDashState.dashVx = stepped.dashVx;
-        this._localDashState.dashVy = stepped.dashVy;
-        this._localDashState.dashTimeLeftMs = stepped.dashTimeLeftMs;
+        this._localMovementState = normalizeMovementState(stepped);
 
         transform.setPosition(newX, newY);
         circle.gameObject.setPosition(newX, newY);
@@ -2644,9 +2635,9 @@ export class GameScene extends Phaser.Scene {
      */
     fixedUpdate(deltaTime) {
         const nowMs = performance.now();
-        // Snapshot dash state before any systems run. Both regular and dash inputs
-        // use this as their preDash so CSP replay seeds the correct starting state.
-        this._framePreDash = { ...this._localDashState };
+        // Snapshot movement state before any systems run so CSP replay seeds the
+        // exact state that existed before this command was predicted.
+        this._framePreMovementState = normalizeMovementState(this._localMovementState);
         // Process all actions
         actionManager.processActions();
 
@@ -2682,7 +2673,7 @@ export class GameScene extends Phaser.Scene {
                 this._pendingInputBuffer.push({
                     seq: sentSeq,
                     input: { ...localCommand },
-                    preDash: { ...this._framePreDash },
+                    preMovementState: normalizeMovementState(this._framePreMovementState),
                     dt: deltaTime,
                 });
                 if (this._pendingInputBuffer.length > CSP_PENDING_INPUT_MAX) {

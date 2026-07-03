@@ -31,6 +31,61 @@ export const PLAYER_DASH_SPEED = 800;
 export const PLAYER_DASH_DURATION = 250; // ms
 const SWEEP_EPSILON = 1e-6;
 
+function finiteNumber(value, fallback = 0) {
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function finiteNonNegative(value, fallback = 0) {
+    return Math.max(0, finiteNumber(value, fallback));
+}
+
+/**
+ * Normalize every movement state representation into the flat shape consumed by
+ * shared kinematics. The snapshot form is nested for clarity, while the in-memory
+ * ECS component remains flat for cheap spread/merge operations.
+ *
+ * @param {object | null | undefined} state
+ * @returns {{dashVx:number,dashVy:number,dashTimeLeftMs:number,externalVx:number,externalVy:number,externalTimeLeftMs:number}}
+ */
+export function normalizeMovementState(state = {}) {
+    const dash = state?.dash ?? {};
+    const external = state?.externalVelocity ?? state?.external ?? {};
+    return {
+        dashVx: finiteNumber(state?.dashVx ?? dash?.vx ?? dash?.dashVx),
+        dashVy: finiteNumber(state?.dashVy ?? dash?.vy ?? dash?.dashVy),
+        dashTimeLeftMs: finiteNonNegative(state?.dashTimeLeftMs ?? dash?.timeLeftMs ?? dash?.dashTimeLeftMs),
+        externalVx: finiteNumber(state?.externalVx ?? external?.vx ?? external?.externalVx),
+        externalVy: finiteNumber(state?.externalVy ?? external?.vy ?? external?.externalVy),
+        externalTimeLeftMs: finiteNonNegative(
+            state?.externalTimeLeftMs ?? external?.timeLeftMs ?? external?.externalTimeLeftMs
+        ),
+    };
+}
+
+/**
+ * Snapshot-safe movement state. This is intentionally generic: dash is currently
+ * predicted locally, while externalVelocity is reserved for server-owned pushes
+ * such as knockback, wind, hazards, or future crowd-control movement.
+ *
+ * @param {object | null | undefined} state
+ * @returns {{dash:{vx:number,vy:number,timeLeftMs:number},externalVelocity:{vx:number,vy:number,timeLeftMs:number}}}
+ */
+export function movementStateForSnapshot(state = {}) {
+    const normalized = normalizeMovementState(state);
+    return {
+        dash: {
+            vx: normalized.dashVx,
+            vy: normalized.dashVy,
+            timeLeftMs: normalized.dashTimeLeftMs,
+        },
+        externalVelocity: {
+            vx: normalized.externalVx,
+            vy: normalized.externalVy,
+            timeLeftMs: normalized.externalTimeLeftMs,
+        },
+    };
+}
+
 /**
  * Compute movement velocity from held directional input.
  * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean,moveSpeedMultiplier?:number,attackPushVx?:number,attackPushVy?:number}} input
@@ -303,16 +358,20 @@ function sweepPlayerMove(x, y, dx, dy, grid) {
 /**
  * Shared movement integration for both client prediction and server authority.
  * Dash start is handled externally by updating dash state before calling this.
- * @param {{x:number,y:number,dashVx?:number,dashVy?:number,dashTimeLeftMs?:number}} state
+ * @param {{x:number,y:number,dashVx?:number,dashVy?:number,dashTimeLeftMs?:number,externalVx?:number,externalVy?:number,externalTimeLeftMs?:number}} state
  * @param {{up?:boolean,down?:boolean,left?:boolean,right?:boolean,sprint?:boolean,moveSpeedMultiplier?:number,attackPushVx?:number,attackPushVy?:number}} input
  * @param {number} dtMs
  * @param {number[][] | null | undefined} grid
- * @returns {{x:number,y:number,vx:number,vy:number,dashVx:number,dashVy:number,dashTimeLeftMs:number}}
+ * @returns {{x:number,y:number,vx:number,vy:number,dashVx:number,dashVy:number,dashTimeLeftMs:number,externalVx:number,externalVy:number,externalTimeLeftMs:number}}
  */
 export function stepPlayerKinematics(state, input, dtMs, grid) {
-    let dashVx = state.dashVx ?? 0;
-    let dashVy = state.dashVy ?? 0;
-    let dashTimeLeftMs = Math.max(0, state.dashTimeLeftMs ?? 0);
+    const movementState = normalizeMovementState(state);
+    let dashVx = movementState.dashVx;
+    let dashVy = movementState.dashVy;
+    let dashTimeLeftMs = movementState.dashTimeLeftMs;
+    let externalVx = movementState.externalVx;
+    let externalVy = movementState.externalVy;
+    let externalTimeLeftMs = movementState.externalTimeLeftMs;
 
     let vx = 0;
     let vy = 0;
@@ -324,6 +383,14 @@ export function stepPlayerKinematics(state, input, dtMs, grid) {
         ({ vx, vy } = movementVelocityFromInput(input));
         dashVx = 0;
         dashVy = 0;
+    }
+    if (externalTimeLeftMs > 0) {
+        vx += externalVx;
+        vy += externalVy;
+        externalTimeLeftMs = Math.max(0, externalTimeLeftMs - dtMs);
+    } else {
+        externalVx = 0;
+        externalVy = 0;
     }
 
     let x = state.x;
@@ -340,7 +407,7 @@ export function stepPlayerKinematics(state, input, dtMs, grid) {
         ({ x, y } = resolvePlayerCollisions(x, y, grid, vx, vy));
     }
 
-    return { x, y, vx, vy, dashVx, dashVy, dashTimeLeftMs };
+    return { x, y, vx, vy, dashVx, dashVy, dashTimeLeftMs, externalVx, externalVy, externalTimeLeftMs };
 }
 export const PLAYER_HEALTH_MAX = 100;
 

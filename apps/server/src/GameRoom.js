@@ -15,6 +15,8 @@ import {
     stepPlayerKinematics,
     getTerrainMovementMultiplierAtWorldPosition,
     dashStateFromInput,
+    movementStateForSnapshot,
+    normalizeMovementState,
     resolvePlayerCollisions,
     BULLET_DAMAGE,
     BULLET_MAX_RANGE,
@@ -342,7 +344,7 @@ export class GameRoom {
         // {
         //   transform: { x, y, levelId },
         //   intent:    { up, down, left, right, sprint },
-        //   motion:    { dashVx, dashVy, dashTimeLeftMs },
+        //   motion:    { dashVx, dashVy, dashTimeLeftMs, externalVx, externalVy, externalTimeLeftMs },
         //   resources: { hp, stamina, mana },
         //   net:       { lastSeq, lastReceivedInputSeq, lastProcessedInputSeq, inputQueue }
         // }
@@ -404,7 +406,7 @@ export class GameRoom {
                         up: false, down: false, left: false, right: false, sprint: false,
                         moveSpeedMultiplier: 1, attackPushVx: 0, attackPushVy: 0,
                     },
-                    motion:    { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                    motion:    normalizeMovementState(),
                     resources: createEntityResources('player'),
                     net:       {
                         lastSeq: 0,
@@ -955,7 +957,7 @@ export class GameRoom {
                         ...latestPlayer,
                         transform: { ...latestPlayer.transform, levelId, x, y },
                         intent: { up: false, down: false, left: false, right: false, sprint: false },
-                        motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                        motion: normalizeMovementState(),
                     }));
                     const traction = this._findTractionEffectBySource(movingEntityKey);
                     if (traction) {
@@ -1382,16 +1384,12 @@ export class GameRoom {
                 : 0,
         };
 
-        let dashVx = player.motion?.dashVx ?? 0;
-        let dashVy = player.motion?.dashVy ?? 0;
-        let dashTimeLeftMs = Math.max(0, player.motion?.dashTimeLeftMs ?? 0);
+        let movementState = normalizeMovementState(player.motion);
 
-        if (!incapacitated && command.dash && dashTimeLeftMs <= 0) {
+        if (!incapacitated && command.dash && movementState.dashTimeLeftMs <= 0) {
             const dash = dashStateFromInput(commandIntent);
             if (dash && this._payEntityCosts(playerEntityKey, { stamina: DASH_STAMINA_COST, mana: 0 }, nowMs)) {
-                dashVx = dash.dashVx;
-                dashVy = dash.dashVy;
-                dashTimeLeftMs = dash.dashTimeLeftMs;
+                movementState = normalizeMovementState({ ...movementState, ...dash });
                 player = this.players.get(sessionId) ?? player;
             }
         }
@@ -1407,9 +1405,7 @@ export class GameRoom {
             {
                 x: transform.x,
                 y: transform.y,
-                dashVx,
-                dashVy,
-                dashTimeLeftMs,
+                ...movementState,
             },
             {
                 ...commandIntent,
@@ -1427,12 +1423,7 @@ export class GameRoom {
                 x: stepped.x,
                 y: stepped.y,
             },
-            motion: {
-                ...player.motion,
-                dashVx: stepped.dashVx,
-                dashVy: stepped.dashVy,
-                dashTimeLeftMs: stepped.dashTimeLeftMs,
-            },
+            motion: normalizeMovementState({ ...player.motion, ...stepped }),
             net: {
                 ...player.net,
                 lastProcessedInputSeq: command.seq,
@@ -1454,6 +1445,7 @@ export class GameRoom {
                 seq: player.net?.lastProcessedInputSeq ?? player.net?.lastSeq ?? 0,
                 lastReceivedInputSeq: player.net?.lastReceivedInputSeq ?? player.net?.lastSeq ?? 0,
                 lastProcessedInputSeq: player.net?.lastProcessedInputSeq ?? player.net?.lastSeq ?? 0,
+                movementState: movementStateForSnapshot(player.motion),
                 teamId: typeof player.teamId === 'string' ? player.teamId : null,
                 sightRadius: this._resolveSightRadiusForPlayer(sessionId),
             });
@@ -1629,9 +1621,7 @@ export class GameRoom {
                 {
                     x: entity.x,
                     y: entity.y,
-                    dashVx: entity.motion?.dashVx ?? 0,
-                    dashVy: entity.motion?.dashVy ?? 0,
-                    dashTimeLeftMs: entity.motion?.dashTimeLeftMs ?? 0,
+                    ...normalizeMovementState(entity.motion),
                 },
                 {
                     ...(entity.intent ?? this._zombieIdleIntent()),
@@ -1645,11 +1635,7 @@ export class GameRoom {
 
             entity.x = stepped.x;
             entity.y = stepped.y;
-            entity.motion = {
-                dashVx: stepped.dashVx,
-                dashVy: stepped.dashVy,
-                dashTimeLeftMs: stepped.dashTimeLeftMs,
-            };
+            entity.motion = normalizeMovementState({ ...entity.motion, ...stepped });
             this.worldEntities.set(entityKey, entity);
         }
     }
@@ -2791,7 +2777,7 @@ export class GameRoom {
             return {
                 ...base,
                 intent: this._zombieIdleIntent(),
-                motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                motion: normalizeMovementState(),
                 home: { x, y, levelId: definition.levelId },
                 ai: {
                     state: 'shamble_pause',
@@ -3221,7 +3207,7 @@ export class GameRoom {
             resources: this._defaultResourcesForKind('player'),
             controlledEntityKey: `player:${sessionId}`,
             returnEntityKey: `player:${sessionId}`,
-            motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+            motion: normalizeMovementState(),
             intent: {
                 up: false, down: false, left: false, right: false, sprint: false,
                 moveSpeedMultiplier: 0, attackPushVx: 0, attackPushVy: 0,
@@ -3377,7 +3363,7 @@ export class GameRoom {
                     up: false, down: false, left: false, right: false, sprint: false,
                     moveSpeedMultiplier: 0, attackPushVx: 0, attackPushVy: 0,
                 },
-                motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                motion: normalizeMovementState(),
             }));
             return;
         }
@@ -3387,7 +3373,7 @@ export class GameRoom {
             const next = {
                 ...world,
                 intent: this._zombieIdleIntent(),
-                motion: { dashVx: 0, dashVy: 0, dashTimeLeftMs: 0 },
+                motion: normalizeMovementState(),
             };
             if (next.kind === 'zombie' && next.ai) {
                 next.ai = {
