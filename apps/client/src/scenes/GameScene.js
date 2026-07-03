@@ -62,7 +62,7 @@ const PHASE_INPUT_COMPONENTS = ['input', 'keyboard'];
 const PHASE_PHYSICS = ['bullet', 'physics'];
 const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
-const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility', 'decay', 'decayBar', 'particle'];
+const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility', 'decay', 'decayBar'];
 const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
 const DEBUG_GOLEM_KEY = 'world:golem_town_square';
 const DAMAGE_TEXT_RISE_PX = 24;
@@ -223,6 +223,9 @@ export class GameScene extends Phaser.Scene {
         for (const entity of this.entityManager?.getEntitiesWithComponent?.('particle') ?? []) {
             entity.getComponent('particle')?.tryApplyVisibilityMask?.();
         }
+        for (const entity of this.entityManager?.getEntitiesWithComponent?.('spiritForm') ?? []) {
+            entity.getComponent('spiritForm')?.tryApplyVisibilityMask?.();
+        }
     }
 
     /**
@@ -374,6 +377,7 @@ export class GameScene extends Phaser.Scene {
             circle.gameObject.setVisible(!!isVisible);
         }
         entity?.getComponent('particle')?.setEmitterVisible(!!isVisible);
+        entity?.getComponent('spiritForm')?.setEmitterVisible(!!isVisible);
     }
 
     _isPointerInsideUiDrawer(pointer = this.input?.activePointer) {
@@ -1529,7 +1533,8 @@ export class GameScene extends Phaser.Scene {
         }
 
         const entity = this._resolveEntityByNetworkKey(entityKey);
-        entity?.getComponent?.('particle')?.emitBurst('flinch');
+        const visual = entity?.getComponent?.('spiritForm') ?? entity?.getComponent?.('particle');
+        visual?.emitBurst?.('flinch');
     }
 
     _onEntityStaggered(entityKey, durationMs, levelId = null) {

@@ -54,7 +54,7 @@ export class ParticleEventSystem {
     }
 
     _emitBurst(entity, burstKey, options = {}) {
-        const particle = entity?.getComponent?.('particle');
+        const particle = entity?.getComponent?.('spiritForm') ?? entity?.getComponent?.('particle');
         if (!particle) return;
         const transform = entity.getComponent?.('transform');
         const levelId = transform?.levelId ?? gameState.currentLevelId;

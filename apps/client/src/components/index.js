@@ -9,6 +9,7 @@ export { PhaserObjectComponent } from './PhaserObjectComponent.js';
 export { CircleComponent } from './CircleComponent.js';
 export { RectangleComponent } from './RectangleComponent.js';
 export { ParticleComponent } from './ParticleComponent.js';
+export { SpiritFormComponent } from './SpiritFormComponent.js';
 
 // Physics Components
 export { PhysicsCapability } from './PhysicsCapability.js'; // New

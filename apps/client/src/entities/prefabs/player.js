@@ -1,6 +1,6 @@
 import { TransformComponent } from "../../components/TransformComponent.js";
 import { CircleComponent } from '../../components/CircleComponent.js';
-import { ParticleComponent } from '../../components/ParticleComponent.js';
+import { SpiritFormComponent } from '../../components/SpiritFormComponent.js';
 import { KeyboardInputComponent } from '../../components/KeyboardInputComponent.js';
 import { PlayerStateMachine } from '../../components/PlayerStateMachine.js';
 import { PlayerCombatComponent } from '../../components/PlayerCombatComponent.js';
@@ -47,7 +47,7 @@ export function createPlayer(scene, config = {}) {
     const circle = new CircleComponent(radius, color, DEBUG_VISUAL_ANCHORS_DEFAULT ? 1 : 0, 0x5c3a00, 3);
     player.addComponent(circle);
     circle.gameObject?.setDepth(STAGE_RENDER_DEPTH.actors);
-    player.addComponent(new ParticleComponent('player'));
+    player.addComponent(new SpiritFormComponent({ radius }));
 
     // 3. Add control, authority, and resolved intent data
     player.addComponent(new ControlComponent({ controlMode, controllerId }));

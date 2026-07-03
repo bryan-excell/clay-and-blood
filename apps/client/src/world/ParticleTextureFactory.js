@@ -2,6 +2,8 @@ export const PARTICLE_TEXTURES = Object.freeze({
     soft: 'particle-soft',
     dot: 'particle-dot',
     streak: 'particle-streak',
+    spiritCore: 'spirit-core',
+    spiritMote: 'spirit-mote',
 });
 
 export function ensureParticleTextures(scene) {
@@ -14,6 +16,12 @@ export function ensureParticleTextures(scene) {
     }
     if (!scene.textures.exists(PARTICLE_TEXTURES.streak)) {
         _createStreakParticle(scene);
+    }
+    if (!scene.textures.exists(PARTICLE_TEXTURES.spiritCore)) {
+        _createSpiritCore(scene);
+    }
+    if (!scene.textures.exists(PARTICLE_TEXTURES.spiritMote)) {
+        _createSpiritMote(scene);
     }
 }
 
@@ -62,5 +70,39 @@ function _createStreakParticle(scene) {
         gfx.fillEllipse(cx, cy, ellipse.w, ellipse.h);
     }
     gfx.generateTexture(PARTICLE_TEXTURES.streak, width, height);
+    gfx.destroy();
+}
+
+function _createSpiritCore(scene) {
+    const size = 32;
+    const center = size / 2;
+    const gfx = scene.make.graphics({ add: false });
+    const rings = [
+        { radius: 15, alpha: 0.05 },
+        { radius: 12, alpha: 0.11 },
+        { radius: 9, alpha: 0.24 },
+        { radius: 6, alpha: 0.52 },
+        { radius: 3.4, alpha: 0.92 },
+        { radius: 1.8, alpha: 1 },
+    ];
+    for (const ring of rings) {
+        gfx.fillStyle(0xffffff, ring.alpha);
+        gfx.fillCircle(center, center, ring.radius);
+    }
+    gfx.generateTexture(PARTICLE_TEXTURES.spiritCore, size, size);
+    gfx.destroy();
+}
+
+function _createSpiritMote(scene) {
+    const size = 8;
+    const center = size / 2;
+    const gfx = scene.make.graphics({ add: false });
+    gfx.fillStyle(0xffffff, 0.12);
+    gfx.fillCircle(center, center, 4);
+    gfx.fillStyle(0xffffff, 0.44);
+    gfx.fillCircle(center, center, 2.4);
+    gfx.fillStyle(0xffffff, 1);
+    gfx.fillCircle(center, center, 1.1);
+    gfx.generateTexture(PARTICLE_TEXTURES.spiritMote, size, size);
     gfx.destroy();
 }
