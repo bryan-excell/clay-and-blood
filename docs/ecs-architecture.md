@@ -2,6 +2,9 @@
 
 This document defines the baseline rules for client-side ECS architecture.
 
+For multiplayer prediction, reconciliation, and replication rules, see
+[`networking-replication.md`](./networking-replication.md).
+
 ## Non-Negotiables
 
 - Entities are composition containers only, not behavior objects.
