@@ -74,20 +74,14 @@ function _createStreakParticle(scene) {
 }
 
 function _createSpiritCore(scene) {
-    const size = 32;
+    const size = 64;
     const center = size / 2;
     const gfx = scene.make.graphics({ add: false });
-    const rings = [
-        { radius: 15, alpha: 0.05 },
-        { radius: 12, alpha: 0.11 },
-        { radius: 9, alpha: 0.24 },
-        { radius: 6, alpha: 0.52 },
-        { radius: 3.4, alpha: 0.92 },
-        { radius: 1.8, alpha: 1 },
-    ];
-    for (const ring of rings) {
-        gfx.fillStyle(0xffffff, ring.alpha);
-        gfx.fillCircle(center, center, ring.radius);
+    for (let i = 28; i >= 1; i--) {
+        const t = i / 28;
+        const alpha = 0.018 + Math.pow(1 - t, 2.25) * 0.105;
+        gfx.fillStyle(0xffffff, alpha);
+        gfx.fillCircle(center, center, i);
     }
     gfx.generateTexture(PARTICLE_TEXTURES.spiritCore, size, size);
     gfx.destroy();

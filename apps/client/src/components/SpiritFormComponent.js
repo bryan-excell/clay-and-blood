@@ -3,9 +3,8 @@ import { Component } from './Component.js';
 import { STAGE_RENDER_DEPTH } from '../config.js';
 import { PARTICLE_SEMANTIC_COLORS } from '../world/ParticleColors.js';
 import { PARTICLE_TEXTURES } from '../world/ParticleTextureFactory.js';
-import { zonePalette } from '../world/ZonePalette.js';
 
-const ORBIT_MOTE_COUNT = 18;
+const BOUNDARY_EMISSION_COUNT = 64;
 const TWO_PI = Math.PI * 2;
 
 export class SpiritFormComponent extends Component {
@@ -18,9 +17,15 @@ export class SpiritFormComponent extends Component {
         };
         this.core = null;
         this.coreGlow = null;
+        this._coreGlowLobes = [];
         this.bodyEmitter = null;
         this.trailEmitter = null;
+        this._dashTrace = null;
+        this._dashTraceStart = null;
+        this._wasDashing = false;
         this._orbitMotes = [];
+        this._wakeMotes = new Set();
+        this._lastWakeDropMs = 0;
         this._activeModifiers = new Set();
         this._maskedObjects = new Set();
         this._lastPosition = null;
@@ -48,18 +53,19 @@ export class SpiritFormComponent extends Component {
             .setDepth(STAGE_RENDER_DEPTH.actors + 0.8)
             .setBlendMode('ADD')
             .setTint(0x8de8ff)
-            .setAlpha(0.34)
-            .setScale(1.35);
+            .setAlpha(0.22)
+            .setScale(0.98);
+        this._createCoreGlowLobes(scene, x, y);
         this.core = scene.add.image(x, y, PARTICLE_TEXTURES.spiritCore)
             .setDepth(STAGE_RENDER_DEPTH.actors + 1)
             .setBlendMode('ADD')
             .setTint(this.options.coreTint)
-            .setAlpha(0.98)
-            .setScale(0.68);
+            .setAlpha(0.82)
+            .setScale(0.46);
         this.core.entity = this.entity;
         this.coreGlow.entity = this.entity;
 
-        this._createOrbitMotes(scene, x, y);
+        this._createBoundaryEmissions(scene, x, y);
         this._createEmitters(scene, x, y);
         this.tryApplyVisibilityMask();
         return true;
@@ -69,14 +75,25 @@ export class SpiritFormComponent extends Component {
         this.clearVisibilityMask();
         this.core?.destroy?.();
         this.coreGlow?.destroy?.();
+        for (const lobe of this._coreGlowLobes) lobe.image?.destroy?.();
         this.bodyEmitter?.destroy?.();
         this.trailEmitter?.destroy?.();
+        this._destroyDashTrace();
+        for (const mote of this._wakeMotes) {
+            this.entity?.scene?.lightingRenderer?.unmaskGameObject?.(mote);
+            mote.destroy?.();
+        }
         for (const mote of this._orbitMotes) mote.image?.destroy?.();
         this.core = null;
         this.coreGlow = null;
+        this._coreGlowLobes = [];
         this.bodyEmitter = null;
         this.trailEmitter = null;
+        this._dashTrace = null;
+        this._dashTraceStart = null;
+        this._wasDashing = false;
         this._orbitMotes = [];
+        this._wakeMotes.clear();
         this._activeModifiers.clear();
     }
 
@@ -152,21 +169,37 @@ export class SpiritFormComponent extends Component {
         const healthRatio = this._getHealthRatio();
         const wounded = healthRatio < 0.35;
         const dashing = this._activeModifiers.has('dashing');
-        const breath = Math.sin(this._breathT / 820);
-        const coreScale = (0.58 + healthRatio * 0.16) * (1 + breath * 0.035) * (dashing ? 0.88 : 1);
-        const glowScale = (1.15 + healthRatio * 0.38) * (1 + breath * 0.055) * (dashing ? 1.2 : 1);
-        const coreAlpha = wounded ? 0.66 + Math.sin(this._breathT / 70) * 0.1 : 0.94 + breath * 0.04;
+        const calmBreath = Math.sin(this._breathT / 980);
+        const breathIn = (calmBreath + 1) * 0.5;
+        const distress = Phaser.Math.Clamp((0.7 - healthRatio) / 0.7, 0, 1);
+        const sputter =
+            (Math.sin(this._breathT / 73) * 0.55 +
+            Math.sin(this._breathT / 117 + 1.7) * 0.35 +
+            Math.sin(this._breathT / 41 + 0.8) * 0.1) * distress;
+        const heartbeat = this._resolveHeartbeatPulse(healthRatio);
+        const coreBaseScale = 0.255 + healthRatio * 0.085;
+        const coreScale = coreBaseScale
+            * (1 + calmBreath * 0.035 + heartbeat * (0.82 + distress * 0.24) + sputter * 0.035)
+            * 1;
+        const glowScale = (0.72 + healthRatio * 0.22)
+            * (1 + breathIn * (0.12 + distress * 0.05) + Math.max(0, sputter) * 0.05);
+        const coreAlpha = wounded
+            ? 0.5 + heartbeat * 0.42 + sputter * 0.1
+            : 0.48 + heartbeat * 0.44;
 
         this.core?.setPosition(vx, vy).setScale(coreScale).setAlpha(Phaser.Math.Clamp(coreAlpha, 0.45, 1));
-        this.coreGlow?.setPosition(vx, vy).setScale(glowScale).setAlpha(0.18 + healthRatio * 0.2 + (dashing ? 0.14 : 0));
+        const glowAlpha = 0.12 + healthRatio * 0.12 + breathIn * 0.04;
+        this.coreGlow?.setPosition(vx, vy).setScale(glowScale * 0.86).setAlpha(glowAlpha);
+        this._updateCoreGlowLobes(vx, vy, glowScale, glowAlpha, breathIn, distress);
 
-        const bodyLag = Math.min(dashing ? 18 : 8, speed * (dashing ? 0.045 : 0.025));
+        const bodyLag = Math.min(8, speed * 0.025);
         this.bodyEmitter?.setPosition(vx - direction.x * bodyLag, vy - direction.y * bodyLag);
         this.trailEmitter?.setPosition(vx - direction.x * 12, vy - direction.y * 12);
-        if (speed > 28 || dashing) this.trailEmitter?.start?.();
-        else this.trailEmitter?.stop?.();
+        this.trailEmitter?.stop?.();
+        this._updateDashTrace(vx, vy, dashing);
+        if (!dashing && speed > 32) this._emitMovementWake(vx, vy, direction, speed, healthRatio);
 
-        this._updateOrbitMotes(vx, vy, direction, speed, healthRatio, deltaMs);
+        this._updateBoundaryEmissions(vx, vy, direction, speed, healthRatio, deltaMs);
     }
 
     applyStateModifier(key) {
@@ -233,41 +266,64 @@ export class SpiritFormComponent extends Component {
         this._maskedObjects.clear();
     }
 
-    _createOrbitMotes(scene, x, y) {
-        for (let i = 0; i < ORBIT_MOTE_COUNT; i++) {
+    _createBoundaryEmissions(scene, x, y) {
+        for (let i = 0; i < BOUNDARY_EMISSION_COUNT; i++) {
             const image = scene.add.image(x, y, PARTICLE_TEXTURES.spiritMote)
                 .setDepth(STAGE_RENDER_DEPTH.actors + 0.9)
                 .setBlendMode('ADD')
-                .setTint(i % 3 === 0 ? zonePalette.getActivePalette().accent : zonePalette.getActivePalette().base)
-                .setAlpha(0.72)
-                .setScale(0.65);
+                .setTint(0xf7fbff)
+                .setAlpha(0)
+                .setScale(0.34);
             image.entity = this.entity;
             this._orbitMotes.push({
                 image,
-                angle: (i / ORBIT_MOTE_COUNT) * TWO_PI,
-                radiusBias: 0.74 + (i % 5) * 0.085,
-                speedBias: 0.82 + (i % 4) * 0.12,
+                angle: ((i * 0.38196601125 + ((i * 7) % 5) * 0.137) % 1) * TWO_PI,
+                phase: i * 0.73,
+                lifeOffset: ((i * 487) + ((i * i) * 173)) % 2400,
+                radiusBias: 0.96 + (i % 3) * 0.025,
+                driftBias: 0.75 + (i % 4) * 0.1,
             });
         }
     }
 
+    _createCoreGlowLobes(scene, x, y) {
+        const configs = [
+            { angle: 0.04, radius: 3.8, scale: 0.78, phase: 0.2 },
+            { angle: 1.02, radius: 4.5, scale: 0.56, phase: 1.4 },
+            { angle: 2.25, radius: 3.4, scale: 0.72, phase: 2.5 },
+            { angle: 3.18, radius: 4.2, scale: 0.52, phase: 3.2 },
+            { angle: 4.05, radius: 3.7, scale: 0.62, phase: 4.1 },
+            { angle: 5.38, radius: 4.7, scale: 0.68, phase: 5.0 },
+        ];
+        this._coreGlowLobes = configs.map((config) => {
+            const image = scene.add.image(x, y, PARTICLE_TEXTURES.spiritCore)
+                .setDepth(STAGE_RENDER_DEPTH.actors + 0.75)
+                .setBlendMode('ADD')
+                .setTint(0xf0f8ff)
+                .setAlpha(0.18)
+                .setScale(0.58);
+            image.entity = this.entity;
+            return { image, ...config };
+        });
+    }
+
     _createEmitters(scene, x, y) {
-        const palette = zonePalette.getActivePalette();
         this.bodyEmitter = scene.add.particles(x, y, PARTICLE_TEXTURES.soft, this._buildBodyConfig());
         this.bodyEmitter.entity = this.entity;
         this.bodyEmitter.setDepth(STAGE_RENDER_DEPTH.actors + 0.3);
         this.bodyEmitter.setBlendMode('NORMAL');
+        this.bodyEmitter.stop?.();
 
-        this.trailEmitter = scene.add.particles(x, y, PARTICLE_TEXTURES.streak, {
+        this.trailEmitter = scene.add.particles(x, y, PARTICLE_TEXTURES.soft, {
             blendMode: 'ADD',
-            lifespan: { min: 140, max: 260 },
-            speed: { min: 8, max: 40 },
-            scale: { start: 0.42, end: 0 },
-            alpha: { start: 0.36, end: 0 },
-            frequency: 24,
-            quantity: 2,
-            tint: [palette.base, palette.accent],
-            maxAliveParticles: 80,
+            lifespan: { min: 420, max: 760 },
+            speed: { min: 0, max: 8 },
+            scale: { start: 0.26, end: 0.02 },
+            alpha: { start: 0.18, end: 0 },
+            frequency: 42,
+            quantity: 1,
+            tint: [0xf3f8ff, 0xffffff],
+            maxAliveParticles: 64,
             emitting: false,
         });
         this.trailEmitter.entity = this.entity;
@@ -275,28 +331,152 @@ export class SpiritFormComponent extends Component {
         this.trailEmitter.stop?.();
     }
 
-    _updateOrbitMotes(x, y, direction, speed, healthRatio, deltaMs) {
+    _updateBoundaryEmissions(x, y, direction, speed, healthRatio, deltaMs) {
         const dashing = this._activeModifiers.has('dashing');
         const lowHp = this._activeModifiers.has('low_hp');
         const controlled = this._activeModifiers.has('controlled');
-        const radiusBase = this.options.radius * (lowHp ? 1.18 : 0.98) * (dashing ? 0.76 : 1);
-        const orbitSpeed = (lowHp ? 0.0018 : 0.00115) * (controlled ? 1.2 : 1);
-        const pullBack = Math.min(dashing ? 22 : 10, speed * (dashing ? 0.055 : 0.025));
-        const breath = Math.sin(this._breathT / 780);
+        const radiusBase = this.options.radius * (lowHp ? 1.08 : 0.98);
+        const pullBack = Math.min(5, speed * 0.012);
+        const cycleMs = (lowHp ? 590 : 1100) * (controlled ? 0.96 : 1);
+        const startRadius = Math.max(3, this.options.radius * 0.16);
         for (let i = 0; i < this._orbitMotes.length; i++) {
             const mote = this._orbitMotes[i];
-            mote.angle += deltaMs * orbitSpeed * mote.speedBias;
-            const jitter = lowHp ? Math.sin(this._breathT / 60 + i) * 2.4 : 0;
-            const radius = radiusBase * mote.radiusBias * (1 + breath * 0.05) + jitter;
-            const ellipseY = radius * (dashing ? 0.58 : 0.82);
-            const px = Math.cos(mote.angle) * radius - direction.x * pullBack;
-            const py = Math.sin(mote.angle) * ellipseY - direction.y * pullBack;
-            const alpha = Phaser.Math.Clamp(0.35 + healthRatio * 0.48 + (lowHp ? Math.sin(this._breathT / 90 + i) * 0.18 : 0), 0.14, 0.92);
+            const t = ((this._breathT + mote.lifeOffset) % cycleMs) / cycleMs;
+            const travelT = Phaser.Math.Clamp(t / 0.8, 0, 1);
+            const caughtT = Phaser.Math.Clamp((t - 0.8) / 0.08, 0, 1);
+            const fadeT = Phaser.Math.Clamp((t - 0.88) / 0.12, 0, 1);
+            const easedTravel = 1 - Math.pow(1 - travelT, 2.4);
+            const catchFlash = Math.sin(caughtT * Math.PI);
+            const angleDrift = Math.sin(this._breathT / (3600 + i * 150) + mote.phase) * 0.16 * mote.driftBias;
+            const radiusJitter = Math.sin(this._breathT / (1900 + i * 120) + mote.phase) * 0.45 * mote.driftBias;
+            const boundaryRadius = radiusBase * mote.radiusBias + radiusJitter;
+            const radius = Phaser.Math.Linear(startRadius, boundaryRadius, easedTravel);
+            const angle = mote.angle + angleDrift;
+            const px = Math.cos(angle) * radius - direction.x * pullBack;
+            const py = Math.sin(angle) * radius - direction.y * pullBack;
+            const travelAlpha = Math.sin(travelT * Math.PI) * 0.18;
+            const catchAlpha = catchFlash * (0.1 + healthRatio * 0.14 + (lowHp ? 0.12 : 0));
+            const alpha = Phaser.Math.Clamp((travelAlpha + catchAlpha) * (1 - fadeT), 0, 0.58);
             mote.image
                 ?.setPosition(x + px, y + py)
                 .setAlpha(alpha)
-                .setScale((0.48 + healthRatio * 0.22) * (dashing ? 0.8 : 1));
+                .setScale(0.16 + travelT * 0.07 + catchFlash * 0.1 + healthRatio * 0.05);
         }
+    }
+
+    _updateDashTrace(x, y, dashing) {
+        const scene = this.entity?.scene;
+        if (!scene?.add) return;
+
+        if (dashing && !this._wasDashing) {
+            this._destroyDashTrace();
+            this._dashTraceStart = { x, y };
+            this._dashTrace = scene.add.graphics()
+                .setDepth(STAGE_RENDER_DEPTH.actors + 0.12)
+                .setBlendMode('ADD');
+            scene.lightingRenderer?.maskGameObject?.(this._dashTrace);
+        }
+
+        if (dashing && this._dashTrace && this._dashTraceStart) {
+            this._dashTrace.clear();
+            this._dashTrace.lineStyle(8, 0x9ee7ff, 0.14);
+            this._dashTrace.beginPath();
+            this._dashTrace.moveTo(this._dashTraceStart.x, this._dashTraceStart.y);
+            this._dashTrace.lineTo(x, y);
+            this._dashTrace.strokePath();
+            this._dashTrace.lineStyle(3, 0xf5fbff, 0.68);
+            this._dashTrace.beginPath();
+            this._dashTrace.moveTo(this._dashTraceStart.x, this._dashTraceStart.y);
+            this._dashTrace.lineTo(x, y);
+            this._dashTrace.strokePath();
+        }
+
+        if (!dashing && this._wasDashing && this._dashTrace) {
+            const trace = this._dashTrace;
+            this._dashTrace = null;
+            this._dashTraceStart = null;
+            scene.tweens?.add?.({
+                targets: trace,
+                alpha: 0,
+                duration: 220,
+                ease: 'Sine.easeOut',
+                onComplete: () => {
+                    scene.lightingRenderer?.unmaskGameObject?.(trace);
+                    trace.destroy?.();
+                },
+            });
+        }
+
+        this._wasDashing = dashing;
+    }
+
+    _destroyDashTrace() {
+        if (!this._dashTrace) {
+            this._dashTraceStart = null;
+            return;
+        }
+        this.entity?.scene?.lightingRenderer?.unmaskGameObject?.(this._dashTrace);
+        this._dashTrace.destroy?.();
+        this._dashTrace = null;
+        this._dashTraceStart = null;
+    }
+
+    _updateCoreGlowLobes(x, y, glowScale, glowAlpha, breathIn, distress) {
+        for (let i = 0; i < this._coreGlowLobes.length; i++) {
+            const lobe = this._coreGlowLobes[i];
+            const driftA = lobe.angle + Math.sin(this._breathT / (2400 + i * 180) + lobe.phase) * 0.58;
+            const driftR = lobe.radius
+                * (0.68 + breathIn * 0.36)
+                * (1 + Math.sin(this._breathT / (3000 + i * 220) + lobe.phase) * 0.22);
+            const wobble = 1 + Math.sin(this._breathT / (2600 + i * 210) + lobe.phase) * (0.13 + distress * 0.05);
+            lobe.image
+                ?.setPosition(x + Math.cos(driftA) * driftR, y + Math.sin(driftA) * driftR)
+                .setScale(glowScale * lobe.scale * wobble)
+                .setAlpha(Phaser.Math.Clamp(glowAlpha * (0.68 + breathIn * 0.26), 0.06, 0.42));
+        }
+    }
+
+    _emitMovementWake(x, y, direction, speed, healthRatio) {
+        const scene = this.entity?.scene;
+        if (!scene?.add || !scene?.time) return;
+        const now = scene.time.now ?? this._breathT;
+        const intervalMs = Phaser.Math.Clamp(82 - speed * 0.04, 38, 82);
+        if (now - this._lastWakeDropMs < intervalMs) return;
+        this._lastWakeDropMs = now;
+
+        const side = { x: -direction.y, y: direction.x };
+        const lateral = Phaser.Math.FloatBetween(-5.5, 5.5);
+        const back = Phaser.Math.FloatBetween(1.5, 6.5);
+        const mote = scene.add.image(
+            x - direction.x * back + side.x * lateral,
+            y - direction.y * back + side.y * lateral,
+            PARTICLE_TEXTURES.soft
+        )
+            .setDepth(STAGE_RENDER_DEPTH.actors + 0.05)
+            .setBlendMode('ADD')
+            .setTint(0xf3f8ff)
+            .setAlpha(0.28 + healthRatio * 0.08)
+            .setScale(0.26 + healthRatio * 0.08);
+
+        this._wakeMotes.add(mote);
+        scene.lightingRenderer?.maskGameObject?.(mote);
+
+        const driftX = Phaser.Math.FloatBetween(-3.5, 3.5);
+        const driftY = Phaser.Math.FloatBetween(-3.5, 3.5);
+        scene.tweens?.add?.({
+            targets: mote,
+            x: mote.x + driftX,
+            y: mote.y + driftY,
+            alpha: 0,
+            scale: 0.04,
+            duration: Phaser.Math.Between(1150, 1680),
+            ease: 'Sine.easeOut',
+            onComplete: () => {
+                scene.lightingRenderer?.unmaskGameObject?.(mote);
+                this._wakeMotes.delete(mote);
+                mote.destroy?.();
+            },
+        });
     }
 
     _applyEmitterState() {
@@ -304,55 +484,45 @@ export class SpiritFormComponent extends Component {
         this.bodyEmitter.clearEmitZones?.();
         this.bodyEmitter.setConfig(this._buildBodyConfig());
         this.bodyEmitter.setBlendMode('NORMAL');
-        if (this._activeModifiers.has('dashing')) {
-            this.trailEmitter?.setConfig({
-                blendMode: 'ADD',
-                lifespan: { min: 180, max: 330 },
-                speed: { min: 24, max: 90 },
-                scale: { start: 0.62, end: 0 },
-                alpha: { start: 0.62, end: 0 },
-                frequency: 10,
-                quantity: 4,
-                tint: [zonePalette.getActivePalette().base, PARTICLE_SEMANTIC_COLORS.CONTROLLED],
-                maxAliveParticles: 140,
-            });
+        if (this._activeModifiers.has('low_hp')) {
+            this.bodyEmitter.start?.();
         } else {
-            const palette = zonePalette.getActivePalette();
-            this.trailEmitter?.setConfig({
-                blendMode: 'ADD',
-                lifespan: { min: 140, max: 260 },
-                speed: { min: 8, max: 40 },
-                scale: { start: 0.42, end: 0 },
-                alpha: { start: 0.36, end: 0 },
-                frequency: 24,
-                quantity: 2,
-                tint: [palette.base, palette.accent],
-                maxAliveParticles: 80,
-            });
+            this.bodyEmitter.stop?.();
         }
+        this.trailEmitter?.setConfig({
+            blendMode: 'ADD',
+            lifespan: { min: 420, max: 760 },
+            speed: { min: 0, max: 8 },
+            scale: { start: 0.26, end: 0.02 },
+            alpha: { start: 0.18, end: 0 },
+            frequency: 42,
+            quantity: 1,
+            tint: [0xf3f8ff, 0xffffff],
+            maxAliveParticles: 64,
+        });
+        this.trailEmitter?.stop?.();
         this._dirty = false;
     }
 
     _buildBodyConfig() {
-        const palette = zonePalette.getActivePalette();
         const healthRatio = this._getHealthRatio();
         const lowHp = this._activeModifiers.has('low_hp');
-        const controlled = this._activeModifiers.has('controlled');
-        const dashing = this._activeModifiers.has('dashing');
+        const activeBody = lowHp;
         return {
             blendMode: 'NORMAL',
-            lifespan: lowHp ? { min: 760, max: 1300 } : { min: 560, max: 900 },
-            speed: lowHp ? { min: 12, max: 42 } : { min: 4, max: 18 },
-            scale: { start: 0.42 + healthRatio * 0.18 + (dashing ? 0.08 : 0), end: 0.02 },
-            alpha: { start: lowHp ? 0.55 : 0.68, end: 0 },
-            frequency: dashing ? 18 : (lowHp ? 44 : 30),
-            quantity: dashing ? 4 : (lowHp ? 2 : 3),
-            tint: controlled ? [palette.base, PARTICLE_SEMANTIC_COLORS.CONTROLLED] : [palette.base, palette.accent],
-            maxAliveParticles: 190,
+            lifespan: lowHp ? { min: 680, max: 1120 } : { min: 520, max: 820 },
+            speed: lowHp ? { min: 10, max: 34 } : { min: 3, max: 13 },
+            scale: { start: 0.28 + healthRatio * 0.1, end: 0.02 },
+            alpha: { start: lowHp ? 0.26 : 0.3, end: 0 },
+            frequency: lowHp ? 76 : 72,
+            quantity: 1,
+            tint: [0xf3f8ff, 0xffffff],
+            maxAliveParticles: 72,
+            emitting: activeBody,
             emitZone: {
                 type: lowHp ? 'random' : 'edge',
-                source: new Phaser.Geom.Circle(0, 0, this.options.radius * (lowHp ? 1.25 : 1.05)),
-                quantity: 18,
+                source: new Phaser.Geom.Circle(0, 0, this.options.radius * (lowHp ? 1.08 : 0.9)),
+                quantity: 8,
             },
         };
     }
@@ -416,10 +586,21 @@ export class SpiritFormComponent extends Component {
         return Phaser.Math.Clamp(stats.hp / stats.hpMax, 0, 1);
     }
 
+    _resolveHeartbeatPulse(healthRatio) {
+        const distress = Phaser.Math.Clamp((0.7 - healthRatio) / 0.7, 0, 1);
+        const cycleMs = Phaser.Math.Linear(1180, 760, distress);
+        const t = (this._breathT % cycleMs) / cycleMs;
+        const lub = Math.exp(-Math.pow((t - 0.08) / 0.038, 2));
+        const dub = Math.exp(-Math.pow((t - 0.22) / 0.052, 2)) * 0.58;
+        const afterglow = Math.exp(-Math.pow((t - 0.34) / 0.12, 2)) * 0.12;
+        return Phaser.Math.Clamp(lub + dub + afterglow, 0, 1);
+    }
+
     _allMaskableObjects() {
         return [
             this.core,
             this.coreGlow,
+            ...this._coreGlowLobes.map((lobe) => lobe.image),
             this.bodyEmitter,
             this.trailEmitter,
             ...this._orbitMotes.map((mote) => mote.image),

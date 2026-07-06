@@ -146,8 +146,7 @@ export class GameScene extends Phaser.Scene {
         this._applyParticleMasksToExistingEntities();
         this.particleEventSystem = new ParticleEventSystem(this);
         this.particleEventSystem.start();
-        this.zoneAmbientParticleSystem = new ZoneAmbientParticleSystem(this);
-        this.zoneAmbientParticleSystem.start();
+        this.zoneAmbientParticleSystem = null;
 
         // Camera bounds are set per-level by EntityLevelManager.setupLevel()
 
