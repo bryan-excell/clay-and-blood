@@ -12,6 +12,105 @@ gameplay grid -> terrain fields -> material textures -> response decoration -> a
 
 Do not add a second renderer that treats grass, water, or ground as independent sprite-tile systems. If a visual belongs to a surface type, route it through the field and material pipeline.
 
+## Layer Stack
+
+The environment is built in layers. Each layer has one job, and higher layers should not rewrite the responsibilities of lower layers.
+
+### 1. Gameplay Truth
+
+The shared tile grid is the source of gameplay truth.
+
+This layer answers:
+
+- can the player walk here?
+- does this tile block vision?
+- does this tile change movement speed?
+- is this an exit?
+- is this broadly floor, wall, tall grass, or shallow water?
+
+This layer should remain renderer-agnostic. It should not know about texture files, glow, edge treatment, particle behavior, or art direction.
+
+### 2. Terrain Fields
+
+`TerrainFieldCompiler` converts gameplay truth into render-friendly fields.
+
+This layer answers:
+
+- what visual material should this cell use?
+- is this cell part of a grass or water region?
+- how close is this cell to a grass, water, or wall edge?
+- how open or enclosed is this cell?
+- what deterministic noise values can renderers sample?
+
+Fields are the bridge between generation and art. If a future visual needs spatial knowledge, prefer adding or deriving a field instead of hard-coding neighbor logic in a renderer.
+
+### 3. Material/Base Environment
+
+`ChunkedBaseRenderer` draws the actual terrain material.
+
+This layer answers:
+
+- which material texture is visible at this cell?
+- how do ground, path, tall grass, and water fill the world?
+- where are simple wall blocks visible?
+
+This is the main environment art layer. It currently draws tileable material textures through `TerrainMaterialRegistry` and does not add decorative response effects.
+
+### 4. Decoration/Response
+
+`TerrainDecorationRenderer` is reserved for field-driven environmental response.
+
+This layer may eventually answer:
+
+- should grass sway here?
+- should water ripple here?
+- should a boundary glow, dim, or shimmer?
+- should a spiritual force change local motion or particles?
+
+This layer is currently disabled. When re-enabled, it should add small, intentional behavior over the material layer, not become a second grass/water/path rendering system.
+
+### 5. Atmosphere/Depth
+
+`EnvironmentalDepthRenderer` and `ZoneAmbientParticleSystem` are reserved for zone-level mood and depth.
+
+This layer may eventually own:
+
+- distant silhouettes
+- veils
+- ambient motes
+- slow parallax
+- zone-level spiritual weather
+
+This layer is currently disabled while terrain materials are being evaluated. When re-enabled, it must stay quieter than gameplay surfaces and the player.
+
+### 6. Lighting And Fog Of War
+
+`LightingRenderer` sits above environment rendering and controls what the player can see.
+
+This layer answers:
+
+- what parts of the world are visible?
+- what entities are hidden outside field of view?
+- how dark is unexplored or unseen space?
+
+Lighting is presentation, but it communicates gameplay visibility. It should not paint terrain details.
+
+### 7. Entities And UI
+
+Characters, interactables, projectiles, spirit particles, and UI sit above the environment.
+
+The player-controlled Intelligence must remain visually sovereign. Environment layers should support the player silhouette and gameplay readability, not compete with them.
+
+## Current Baseline
+
+The active baseline is intentionally minimal:
+
+```txt
+gameplay grid -> terrain fields -> material textures -> simple walls -> lighting/FOV -> entities/UI
+```
+
+Decoration and atmosphere layers exist as reserved extension points, but they are not currently active. This keeps evaluation focused on whether the terrain material foundation is working.
+
 ## Ownership
 
 ### Gameplay Grid
