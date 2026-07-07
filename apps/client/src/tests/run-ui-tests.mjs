@@ -9,6 +9,10 @@ import {
     runUiProjectionImmediateControlChangedTest,
 } from '../world/ui-projection.test.mjs';
 import {
+    runCameraWorldViewZoomedFollowTest,
+    runCameraWorldViewZoomChangedWithoutPrerenderTest,
+} from '../world/camera-world-view.test.mjs';
+import {
     runLoadoutKitAssignmentTest,
     runLoadoutKitActivationAndCyclingTest,
     runLoadoutActiveSlotReassignTest,
@@ -26,6 +30,8 @@ run('UiProjection basic projection', runUiProjectionBasicProjectionTest);
 run('UiProjection network override', runUiProjectionNetworkOverrideTest);
 run('UiProjection possession guard', runUiProjectionPossessionGuardTest);
 run('UiProjection immediate control update', runUiProjectionImmediateControlChangedTest);
+run('CameraWorldView zoomed follow bounds', runCameraWorldViewZoomedFollowTest);
+run('CameraWorldView stale preRender zoom bounds', runCameraWorldViewZoomChangedWithoutPrerenderTest);
 run('Loadout kit assignment', runLoadoutKitAssignmentTest);
 run('Loadout kit activation and cycling', runLoadoutKitActivationAndCyclingTest);
 run('Loadout active slot reassignment', runLoadoutActiveSlotReassignTest);

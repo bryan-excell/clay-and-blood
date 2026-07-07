@@ -7,6 +7,7 @@ import {
 import { TERRAIN_MATERIAL, sampleField } from './TerrainFieldCompiler.js';
 import { getTerrainMaterialTextureKey } from './TerrainMaterialRegistry.js';
 import { zonePalette } from './ZonePalette.js';
+import { resolveCameraWorldView } from './CameraWorldView.js';
 
 const FLOOR_STYLE_BY_PREFAB = Object.freeze({
     floor_dirt: Object.freeze({ fill: 0x162038 }),
@@ -23,6 +24,7 @@ const WALL_STYLE = Object.freeze({
     fill: 0x10182b,
 });
 const CHUNK_OVERDRAW_PX = 1;
+const CAMERA_CHUNK_MARGIN = 2;
 
 export class ChunkedBaseRenderer {
     constructor(scene, stageData, options = {}) {
@@ -41,15 +43,13 @@ export class ChunkedBaseRenderer {
 
     update(camera) {
         if (!camera || !this.stageData?.grid) return;
+        if (this._chunkColumns <= 0 || this._chunkRows <= 0) return;
         const chunkWorldSize = this.chunkTiles * TILE_SIZE;
-        const scrollX = camera.scrollX;
-        const scrollY = camera.scrollY;
-        const viewW = camera.width / camera.zoom;
-        const viewH = camera.height / camera.zoom;
-        const minChunkX = Math.max(0, Math.floor(scrollX / chunkWorldSize) - 1);
-        const maxChunkX = Math.min(this._chunkColumns - 1, Math.floor((scrollX + viewW - 1) / chunkWorldSize) + 1);
-        const minChunkY = Math.max(0, Math.floor(scrollY / chunkWorldSize) - 1);
-        const maxChunkY = Math.min(this._chunkRows - 1, Math.floor((scrollY + viewH - 1) / chunkWorldSize) + 1);
+        const view = resolveCameraWorldView(camera);
+        const minChunkX = Math.max(0, Math.floor(view.x / chunkWorldSize) - CAMERA_CHUNK_MARGIN);
+        const maxChunkX = Math.min(this._chunkColumns - 1, Math.floor((view.x + view.width - 1) / chunkWorldSize) + CAMERA_CHUNK_MARGIN);
+        const minChunkY = Math.max(0, Math.floor(view.y / chunkWorldSize) - CAMERA_CHUNK_MARGIN);
+        const maxChunkY = Math.min(this._chunkRows - 1, Math.floor((view.y + view.height - 1) / chunkWorldSize) + CAMERA_CHUNK_MARGIN);
         const visibleKey = `${minChunkX}:${maxChunkX}:${minChunkY}:${maxChunkY}`;
         if (this._lastVisibleKey === visibleKey) return;
         this._lastVisibleKey = visibleKey;
