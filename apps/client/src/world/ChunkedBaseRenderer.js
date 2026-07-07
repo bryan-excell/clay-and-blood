@@ -1,26 +1,26 @@
-import Phaser from 'phaser';
 import { getTileProperties, tileHasTag } from '@clay-and-blood/shared';
 import {
     BASE_RENDER_CHUNK_TILES,
     STAGE_RENDER_DEPTH,
     TILE_SIZE,
 } from '../config.js';
+import { TERRAIN_MATERIAL, sampleField } from './TerrainFieldCompiler.js';
+import { getTerrainMaterialTextureKey } from './TerrainMaterialRegistry.js';
+import { zonePalette } from './ZonePalette.js';
 
 const FLOOR_STYLE_BY_PREFAB = Object.freeze({
-    floor_dirt: Object.freeze({ fill: 0x2a1808 }),
-    floor_grass: Object.freeze({ fill: 0x24381b }),
+    floor_dirt: Object.freeze({ fill: 0x162038 }),
+    floor_grass: Object.freeze({ fill: 0x1a2d35 }),
 });
 
 const TILE_FILL_BY_ID = Object.freeze({
-    exit: 0x345821,
-    tall_grass: 0x29441f,
+    exit: 0x294a6e,
+    tall_grass: 0x1f3b46,
     shallow_water: 0x1b3046,
 });
 
 const WALL_STYLE = Object.freeze({
-    fill: 0x1e2418,
-    stroke: 0x131a0e,
-    strokeWidth: 2,
+    fill: 0x10182b,
 });
 const CHUNK_OVERDRAW_PX = 1;
 
@@ -28,6 +28,7 @@ export class ChunkedBaseRenderer {
     constructor(scene, stageData, options = {}) {
         this.scene = scene;
         this.stageData = stageData;
+        this.terrainFields = options.terrainFields ?? stageData?.terrainFields ?? null;
         this.chunkTiles = Math.max(1, Math.floor(options.chunkTiles ?? BASE_RENDER_CHUNK_TILES));
         this.floorStyle = FLOOR_STYLE_BY_PREFAB[stageData?.floorTile] ?? FLOOR_STYLE_BY_PREFAB.floor_dirt;
         this._builder = scene.make.graphics({ add: false });
@@ -35,6 +36,7 @@ export class ChunkedBaseRenderer {
         this._chunkColumns = Math.ceil((stageData?.width ?? 0) / this.chunkTiles);
         this._chunkRows = Math.ceil((stageData?.height ?? 0) / this.chunkTiles);
         this._lastVisibleKey = null;
+        this._materialFrameCache = new Map();
     }
 
     update(camera) {
@@ -77,6 +79,7 @@ export class ChunkedBaseRenderer {
             chunk.wall?.destroy();
         }
         this._activeChunks.clear();
+        this._materialFrameCache.clear();
         this._builder?.destroy();
         this._builder = null;
     }
@@ -112,36 +115,37 @@ export class ChunkedBaseRenderer {
             for (let x = tileStartX; x < tileEndX; x++) {
                 const tile = this.stageData.grid[y]?.[x];
                 const properties = getTileProperties(tile);
-                if (properties.solid || tileHasTag(tile, 'out_of_bounds')) continue;
+                if (this._isSolidAt(x, y, tile)) continue;
                 hasFloor = true;
-                const fill = TILE_FILL_BY_ID[properties.id] ?? this.floorStyle.fill;
-                this._builder.fillStyle(fill, 1);
+                const material = this._materialAt(x, y, tile);
+                const fill = this._resolveFloorFill(properties.id, material);
                 const localX = (x - tileStartX) * TILE_SIZE + bleedLeft;
                 const localY = (y - tileStartY) * TILE_SIZE + bleedTop;
-                this._builder.fillRect(
-                    localX - CHUNK_OVERDRAW_PX,
-                    localY - CHUNK_OVERDRAW_PX,
-                    TILE_SIZE + CHUNK_OVERDRAW_PX * 2,
-                    TILE_SIZE + CHUNK_OVERDRAW_PX * 2
-                );
+                if (!this._drawMaterialTextureTile(floorTexture, material, localX, localY, x, y)) {
+                    this._builder.fillStyle(fill, 1);
+                    this._builder.fillRect(
+                        localX - CHUNK_OVERDRAW_PX,
+                        localY - CHUNK_OVERDRAW_PX,
+                        TILE_SIZE + CHUNK_OVERDRAW_PX * 2,
+                        TILE_SIZE + CHUNK_OVERDRAW_PX * 2
+                    );
+                }
             }
         }
         if (hasFloor) floorTexture.draw(this._builder);
 
         this._builder.clear();
-        this._builder.fillStyle(WALL_STYLE.fill, 1);
-        this._builder.lineStyle(WALL_STYLE.strokeWidth, WALL_STYLE.stroke, 1);
         let hasWall = false;
         for (let y = tileStartY; y < tileEndY; y++) {
             for (let x = tileStartX; x < tileEndX; x++) {
                 const tile = this.stageData.grid[y]?.[x];
-                if (!getTileProperties(tile).solid || !tileHasTag(tile, 'structure')) continue;
+                if (!this._isStructuralWallAt(x, y, tile)) continue;
                 if (!this._isVisibleWall(x, y)) continue;
                 hasWall = true;
                 const localX = (x - tileStartX) * TILE_SIZE + bleedLeft;
                 const localY = (y - tileStartY) * TILE_SIZE + bleedTop;
+                this._builder.fillStyle(zonePalette.resolveColor('deep', WALL_STYLE.fill), 1);
                 this._builder.fillRect(localX, localY, TILE_SIZE, TILE_SIZE);
-                this._builder.strokeRect(localX, localY, TILE_SIZE, TILE_SIZE);
             }
         }
         if (hasWall) wallTexture.draw(this._builder);
@@ -150,6 +154,15 @@ export class ChunkedBaseRenderer {
     }
 
     _isVisibleWall(x, y) {
+        if (this.terrainFields) {
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0) continue;
+                    if (this._isOpenTile(x + dx, y + dy)) return true;
+                }
+            }
+            return false;
+        }
         for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
                 if (dx === 0 && dy === 0) continue;
@@ -163,4 +176,88 @@ export class ChunkedBaseRenderer {
         }
         return false;
     }
+
+    _drawMaterialTextureTile(renderTexture, material, localX, localY, tileX, tileY) {
+        const key = getTerrainMaterialTextureKey(material);
+        if (!key || !this.scene.textures.exists(key)) return false;
+        const frameName = this._getMaterialTileFrameName(key, tileX, tileY);
+        if (!frameName) return false;
+        renderTexture.drawFrame(key, frameName, localX, localY);
+        return true;
+    }
+
+    _getMaterialTileFrameName(key, tileX, tileY) {
+        const texture = this.scene.textures.get(key);
+        const baseFrame = this.scene.textures.getFrame(key, '__BASE') ?? this.scene.textures.getFrame(key);
+        if (!texture || !baseFrame?.width || !baseFrame?.height) return null;
+
+        const columns = Math.floor(baseFrame.width / TILE_SIZE);
+        const rows = Math.floor(baseFrame.height / TILE_SIZE);
+        if (columns <= 0 || rows <= 0) return null;
+
+        const frameX = positiveModulo(tileX, columns);
+        const frameY = positiveModulo(tileY, rows);
+        const frameName = `tile-${TILE_SIZE}-${frameX}-${frameY}`;
+        const cacheKey = `${key}:${frameName}`;
+        if (!this._materialFrameCache.has(cacheKey)) {
+            if (!texture.has(frameName)) {
+                texture.add(
+                    frameName,
+                    0,
+                    frameX * TILE_SIZE,
+                    frameY * TILE_SIZE,
+                    TILE_SIZE,
+                    TILE_SIZE
+                );
+            }
+            this._materialFrameCache.set(cacheKey, frameName);
+        }
+        return frameName;
+    }
+
+    _resolveFloorFill(tileId, material = null) {
+        const palette = zonePalette.getActivePalette();
+        if (tileId === 'exit') return palette.surface ?? TILE_FILL_BY_ID.exit;
+        if (material === TERRAIN_MATERIAL.grass || tileId === 'tall_grass') return 0x203746;
+        if (material === TERRAIN_MATERIAL.water || tileId === 'shallow_water') return 0x172b45;
+        return palette.shadow ?? this.floorStyle.fill;
+    }
+
+    _isOpenTile(x, y) {
+        if (x < 0 || y < 0 || x >= this.stageData.width || y >= this.stageData.height) return false;
+        if (this.terrainFields) return sampleField(this.terrainFields, 'solid', x, y, 1) === 0;
+        const tile = this.stageData.grid[y]?.[x];
+        const properties = getTileProperties(tile);
+        return !properties.solid && !tileHasTag(tile, 'out_of_bounds');
+    }
+
+    _materialAt(x, y, tile) {
+        if (this.terrainFields) {
+            return sampleField(this.terrainFields, 'material', x, y, TERRAIN_MATERIAL.floor);
+        }
+        const id = getTileProperties(tile).id;
+        if (id === 'tall_grass') return TERRAIN_MATERIAL.grass;
+        if (id === 'shallow_water') return TERRAIN_MATERIAL.water;
+        if (id === 'wall') return TERRAIN_MATERIAL.wall;
+        if (id === 'exit') return TERRAIN_MATERIAL.exit;
+        if (id === 'floor') return TERRAIN_MATERIAL.floor;
+        if (tileHasTag(tile, 'out_of_bounds')) return TERRAIN_MATERIAL.void;
+        return TERRAIN_MATERIAL.floor;
+    }
+
+    _isSolidAt(x, y, tile) {
+        if (this.terrainFields) return sampleField(this.terrainFields, 'solid', x, y, 1) === 1;
+        const properties = getTileProperties(tile);
+        return properties.solid || tileHasTag(tile, 'out_of_bounds');
+    }
+
+    _isStructuralWallAt(x, y, tile) {
+        if (this.terrainFields) return sampleField(this.terrainFields, 'material', x, y, TERRAIN_MATERIAL.void) === TERRAIN_MATERIAL.wall;
+        return getTileProperties(tile).solid && tileHasTag(tile, 'structure');
+    }
+
+}
+
+function positiveModulo(value, divisor) {
+    return ((value % divisor) + divisor) % divisor;
 }

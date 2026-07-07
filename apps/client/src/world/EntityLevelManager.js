@@ -5,6 +5,8 @@ import { STAGE_RENDER_DEPTH, TILE_SIZE } from "../config.js";
 import { ChunkedBaseRenderer } from "./ChunkedBaseRenderer.js";
 import { StageResidencyManager } from "./StageResidencyManager.js";
 import { TerrainDecorationRenderer } from "./TerrainDecorationRenderer.js";
+import { compileTerrainFields } from "./TerrainFieldCompiler.js";
+import { zonePalette } from "./ZonePalette.js";
 
 /**
  * Manages stage data and render state.
@@ -45,6 +47,7 @@ export class EntityLevelManager {
             .forEach((e) => e.destroy());
 
         const level = this.getLevel(levelId);
+        zonePalette.setFromLevelId(levelId);
 
         const levelW = level.width * TILE_SIZE;
         const levelH = level.height * TILE_SIZE;
@@ -59,7 +62,8 @@ export class EntityLevelManager {
         }
 
         if (this._background) this._background.destroy();
-        this._background = this.scene.add.rectangle(levelW / 2, levelH / 2, levelW, levelH, 0x0d120a, 1)
+        const palette = zonePalette.getActivePalette();
+        this._background = this.scene.add.rectangle(levelW / 2, levelH / 2, levelW, levelH, palette.deep ?? 0x11182c, 1)
             .setDepth(STAGE_RENDER_DEPTH.floor - 1);
 
         this.generateLevelContent(level);
@@ -75,11 +79,14 @@ export class EntityLevelManager {
     generateLevelContent(level) {
         console.log("Generating level content...");
         const { width: w, height: h } = level;
+        if (!level.terrainFields || level.terrainFields.width !== w || level.terrainFields.height !== h) {
+            level.terrainFields = compileTerrainFields(level);
+        }
 
         this._currentRenderState = {
             stageSlug: level.id,
-            baseRenderer: new ChunkedBaseRenderer(this.scene, level),
-            decorationRenderer: new TerrainDecorationRenderer(this.scene, level),
+            baseRenderer: new ChunkedBaseRenderer(this.scene, level, { terrainFields: level.terrainFields }),
+            decorationRenderer: new TerrainDecorationRenderer(this.scene, level, { terrainFields: level.terrainFields }),
         };
         this._currentRenderState.baseRenderer.update(this.scene.cameras.main);
         this._currentRenderState.decorationRenderer.update(this.scene.cameras.main);
@@ -112,6 +119,7 @@ export class EntityLevelManager {
     }
 
     clearCurrentLevel() {
+        this._currentRenderState?.depthRenderer?.destroy?.();
         this._currentRenderState?.baseRenderer?.destroy?.();
         this._currentRenderState?.decorationRenderer?.destroy?.();
         this._currentRenderState = null;
@@ -172,8 +180,9 @@ export class EntityLevelManager {
         console.log(`Connection established: ${level1Id}#${exit1Index} <-> ${level2Id}#${exit2Index}`);
     }
 
-    update(camera) {
+    update(camera, deltaMs = 16.67) {
+        this._currentRenderState?.depthRenderer?.update?.(camera, deltaMs);
         this._currentRenderState?.baseRenderer?.update?.(camera);
-        this._currentRenderState?.decorationRenderer?.update?.(camera);
+        this._currentRenderState?.decorationRenderer?.update?.(camera, deltaMs);
     }
 }

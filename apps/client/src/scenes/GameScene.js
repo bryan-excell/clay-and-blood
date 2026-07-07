@@ -5,7 +5,6 @@ import { ExitManager } from '../world/ExitManager.js';
 import { LightingRenderer } from '../world/LightingRenderer.js';
 import { ParticleEventSystem } from '../world/ParticleEventSystem.js';
 import { ParticleModifierSystem } from '../world/ParticleModifierSystem.js';
-import { ZoneAmbientParticleSystem } from '../world/ZoneAmbientParticleSystem.js';
 import { VisibilitySystem } from '../world/VisibilitySystem.js';
 import { InputIntentSystem } from '../world/InputIntentSystem.js';
 import { LocomotionSystem } from '../world/LocomotionSystem.js';
@@ -23,6 +22,7 @@ import { ensureParticleTextures } from '../world/ParticleTextureFactory.js';
 import { particleBudget } from '../world/ParticleBudget.js';
 import { zonePalette } from '../world/ZonePalette.js';
 import { RemoteSpiritVisual } from '../world/RemoteSpiritVisual.js';
+import { TERRAIN_MATERIAL_ASSETS } from '../world/TerrainMaterialRegistry.js';
 import {
     GAME_FONT_FAMILY,
     PLAYER_RADIUS,
@@ -79,6 +79,14 @@ const HOVER_TARGETABLE_ENTITY_TYPES = Object.freeze(['golem', 'zombie', 'corpse'
 export class GameScene extends Phaser.Scene {
     constructor() {
         super('GameScene');
+    }
+
+    preload() {
+        for (const asset of TERRAIN_MATERIAL_ASSETS) {
+            if (!this.textures.exists(asset.key)) {
+                this.load.image(asset.key, asset.url);
+            }
+        }
     }
 
     create() {
@@ -2696,7 +2704,7 @@ export class GameScene extends Phaser.Scene {
         const cam = this.cameras.main;
         const zoomT = 1 - Math.pow(0.01, delta / 150);
         cam.setZoom(Phaser.Math.Linear(cam.zoom, this.targetZoom, zoomT));
-        this.levelManager?.update?.(cam);
+        this.levelManager?.update?.(cam, delta);
 
         // Decay the camera follow offset that was set during a server correction.
         // Matches the decay rate in SpiritFormComponent so the player stays centred

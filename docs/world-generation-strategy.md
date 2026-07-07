@@ -13,6 +13,8 @@ The current direction is a hybrid authored/generated world:
 
 The Great Northern Road is the first reference implementation for this strategy.
 
+Environment visuals are intentionally a separate pipeline from gameplay generation. See `docs/environment-rendering-strategy.md` for the terrain field, material texture, decoration, and atmosphere contract.
+
 ## Core Vocabulary
 
 ### Stage
