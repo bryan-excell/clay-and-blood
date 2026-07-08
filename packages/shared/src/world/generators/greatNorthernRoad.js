@@ -169,7 +169,7 @@ export function buildGreatNorthernRoadStages(options = {}) {
     const compiled = compileRouteChain(stages.map((entry) => entry.stage));
     const firstBackExit = getExitByRole(compiled[0], 'back');
     compiled[0] = withExitConnection(compiled[0], firstBackExit, {
-        levelId: 'northern-gate',
+        levelId: 'lunavik-north',
         exitId: 'north-road',
         exitIndex: 1,
         arrivalDirection: 'south',

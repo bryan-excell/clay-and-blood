@@ -320,9 +320,9 @@ export function buildTheMeadowsStageEntries(options = {}) {
 
             if (side === 'west' && isEntryCoord(entry.coord.x, entry.coord.y)) {
                 connectionsByExitId[sourceExit.id] = Object.freeze({
-                    levelId: 'town-square',
+                    levelId: 'lunavik-east',
                     exitId: 'east-road',
-                    exitIndex: 3,
+                    exitIndex: 1,
                     arrivalDirection: 'west',
                 });
                 continue;

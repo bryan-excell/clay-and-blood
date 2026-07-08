@@ -323,7 +323,7 @@ export function buildRollingHillsStageEntries(options = {}) {
         const connectionsByExitId = { ...(entry.stage.connectionsByExitId ?? {}) };
         if (entry.node.slot === 1) {
             connectionsByExitId['lunavik-road'] = Object.freeze({
-                levelId: 'west-gate',
+                levelId: 'lunavik-west',
                 exitId: 'west-road',
                 exitIndex: 0,
                 arrivalDirection: 'east',

@@ -50,6 +50,7 @@ import {
 // ── Reconciliation helpers (mirror GameRoom._runTick logic exactly) ───────────
 
 const REMOTE_INTERPOLATION_DELAY_MS = 150;
+const STARTING_STAGE_ID = 'nativity';
 const REMOTE_INTERPOLATION_DELAY_TICKS = 3; // 3 * 50 ms = 150 ms — one full tick of jitter margin
 const REMOTE_MAX_EXTRAPOLATION_TICKS = 4;   // coast up to 200 ms before freezing
 const REMOTE_SNAPSHOT_BUFFER_SIZE = 40;
@@ -64,7 +65,7 @@ const PHASE_TRANSFORM_SYNC = ['transform'];
 const PHASE_VISUAL_SYNC = ['phaserObject', 'circle', 'rectangle'];
 const PHASE_PRESENTATION = ['playerStateMachine', 'playerCombat', 'visibility', 'decay', 'decayBar'];
 const DEBUG_WORLD_SYNC = import.meta?.env?.VITE_DEBUG_WORLD_SYNC === '1';
-const DEBUG_GOLEM_KEY = 'world:golem_town_square';
+const DEBUG_GOLEM_KEY = 'world:golem_debug';
 const DAMAGE_TEXT_RISE_PX = 24;
 const DAMAGE_TEXT_LIFETIME_MS = 460;
 const HOVER_SELECT_PADDING_PX = 14;
@@ -128,8 +129,7 @@ export class GameScene extends Phaser.Scene {
             }
         });
 
-        // Always start in the town square on fresh load
-        const initialLevelId = 'inn';
+        const initialLevelId = STARTING_STAGE_ID;
         zonePalette.setFromLevelId(initialLevelId);
         const initialLevel = this.levelManager.setupLevel(initialLevelId);
 
@@ -261,7 +261,7 @@ export class GameScene extends Phaser.Scene {
         });
         const transform = this.player?.getComponent('transform');
         if (transform) {
-            transform.levelId = level?.id ?? gameState.currentLevelId ?? 'inn';
+            transform.levelId = level?.id ?? gameState.currentLevelId ?? STARTING_STAGE_ID;
         }
         
         console.log(`Player created at position (${safePosition.x}, ${safePosition.y})`);
@@ -275,7 +275,7 @@ export class GameScene extends Phaser.Scene {
     findSafePlayerPosition(level) {
         // Use the stage's declared spawn point if available; otherwise fall back
         // to the grid centre (procedural levels always carve a centre room).
-        const resolved = resolveStageSpawnPosition(level?.id ?? gameState.currentLevelId ?? 'inn');
+        const resolved = resolveStageSpawnPosition(level?.id ?? gameState.currentLevelId ?? STARTING_STAGE_ID);
         const tileX = resolved?.tileX ?? level.spawnPoint?.x ?? Math.floor(level.grid[0].length / 2);
         const tileY = resolved?.tileY ?? level.spawnPoint?.y ?? Math.floor(level.grid.length / 2);
         return {
@@ -285,54 +285,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     _spawnPracticeEntitiesForLevel(levelId) {
-        if (levelId !== 'town-square') return;
-
-        const level = this.levelManager.currentLevel || this.levelManager.getLevel(levelId);
-        if (!level?.grid) return;
+        void levelId;
 
         // ── Golem (possession target) ─────────────────────────────────────────
-        if (this.entityManager.getEntitiesByType('golem').length === 0) {
-            const cached = this._worldEntityStateCache?.get('world:golem');
-            if (DEBUG_WORLD_SYNC) {
-                console.log('[WorldSync] spawnPractice: cache lookup world:golem', {
-                    levelId,
-                    cached: cached ?? null,
-                });
-            }
-            let gx, gy;
-            if (
-                cached &&
-                cached.levelId === levelId &&
-                Number.isFinite(cached.x) &&
-                Number.isFinite(cached.y)
-            ) {
-                gx = cached.x;
-                gy = cached.y;
-            } else {
-                const tile = this._findNearestWalkableTile(level.grid, 24, 20, 10);
-                gx = tile.x * TILE_SIZE + TILE_SIZE / 2;
-                gy = tile.y * TILE_SIZE + TILE_SIZE / 2;
-            }
-
-            const golem = this.entityFactory.createFromPrefab('golem', {
-                x: gx,
-                y: gy,
-                controlMode: 'remote',
-            });
-            if (DEBUG_WORLD_SYNC) {
-                console.log('[WorldSync] spawnPractice: created golem entity', {
-                    levelId,
-                    entityId: golem?.id ?? null,
-                    x: gx,
-                    y: gy,
-                });
-            }
-            const golemCircle = golem?.getComponent('circle');
-            if (golemCircle?.gameObject) {
-                this.lightingRenderer?.maskGameObject(golemCircle.gameObject);
-            }
-        }
-
     }
 
     getLocallyControlledEntity() {
@@ -794,7 +749,7 @@ export class GameScene extends Phaser.Scene {
                     p.sessionId,
                     p.x,
                     p.y,
-                    p.stageId || 'inn',
+                    p.stageId || STARTING_STAGE_ID,
                     p.teamId ?? null,
                     p.sightRadius ?? null
                 );
@@ -803,7 +758,7 @@ export class GameScene extends Phaser.Scene {
 
         // Another player connected after us – assume same starting area
         eventBus.on('network:playerJoined', ({ sessionId }) => {
-            this._addRemotePlayer(sessionId, 0, 0, 'inn');
+            this._addRemotePlayer(sessionId, 0, 0, STARTING_STAGE_ID);
         });
 
         // Authoritative state snapshot from the server physics tick
@@ -862,7 +817,7 @@ export class GameScene extends Phaser.Scene {
                         p.sessionId,
                         p.x,
                         p.y,
-                        p.levelId || 'inn',
+                        p.levelId || STARTING_STAGE_ID,
                         tick,
                         p.teamId ?? null,
                         p.sightRadius ?? null
@@ -2096,7 +2051,7 @@ export class GameScene extends Phaser.Scene {
         gfx.fillRect(x, y, Math.round(width * ratio), height);
     }
 
-    _addRemotePlayer(sessionId, x, y, stageId = 'inn', teamId = null, sightRadius = null) {
+    _addRemotePlayer(sessionId, x, y, stageId = STARTING_STAGE_ID, teamId = null, sightRadius = null) {
         if (this.remotePlayers.has(sessionId)) return;
         const circle = this.add.circle(x, y, PLAYER_RADIUS, 0x6688cc, 0);
         circle.setAlpha(0);

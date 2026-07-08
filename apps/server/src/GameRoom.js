@@ -55,6 +55,7 @@ import {
 } from '@clay-and-blood/shared/server-tick';
 
 const TICK_MS = 50; // 20 Hz server snapshot/simulation cadence
+const STARTING_STAGE_ID = 'nativity';
 const CLIENT_INPUT_DT_MS = 1000 / 60;
 const MAX_INPUT_DT_MS = 50;
 const MAX_INPUT_QUEUE_SIZE = 240; // ~4 seconds at 60 Hz
@@ -64,7 +65,7 @@ const TICK_WATCHDOG_MS = 5000;
 const LAG_COMP_HISTORY_SIZE = 20; // 1 second of history at 20 Hz
 const POSSESSION_DURATION_MS = 8000;
 const DEBUG_WORLD_SYNC = false;
-const DEBUG_GOLEM_KEY = 'world:golem_town_square';
+const DEBUG_GOLEM_KEY = 'world:golem_debug';
 const ZOMBIE_DETECTION_RANGE = ARCHETYPE_CONFIG.zombie.ai.detectionRange;
 const ZOMBIE_LEASH_RANGE = ARCHETYPE_CONFIG.zombie.ai.leashRange;
 const ZOMBIE_ATTACK_RANGE = ARCHETYPE_CONFIG.zombie.ai.attackRange;
@@ -130,18 +131,7 @@ const UPGRADE_COST_BY_LEVEL = Object.freeze({
     1: Object.freeze({ gold: 200, materials: 2 }),
     2: Object.freeze({ gold: 300, materials: 3 }),
 });
-const SEEDED_WORLD_DROPS = Object.freeze([
-    // Spread the test loot across the walkable base of the inn so each pickup is easy to see.
-    Object.freeze({ entityKey: 'world:loot_inn_cape', definitionId: 'cape', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 2 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_longsword', definitionId: 'longsword', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 4 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_bow', definitionId: 'bow', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 6 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_leather_armor', definitionId: 'leather_armor', quantity: 1, upgradeLevel: 0, levelId: 'inn', x: 8 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_gold_pouch', definitionId: 'gold_pouch', quantity: 2, upgradeLevel: 0, levelId: 'inn', x: 10 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_healing_gem', definitionId: 'healing_gem', quantity: 3, upgradeLevel: 0, levelId: 'inn', x: 12 * TILE_SIZE + TILE_SIZE / 2, y: 8 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_magic_dew', definitionId: 'magic_dew', quantity: 3, upgradeLevel: 0, levelId: 'inn', x: 3 * TILE_SIZE + TILE_SIZE / 2, y: 9 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_weapon_material', definitionId: 'weapon_upgrade_material', quantity: 10, upgradeLevel: 0, levelId: 'inn', x: 6 * TILE_SIZE + TILE_SIZE / 2, y: 9 * TILE_SIZE + TILE_SIZE / 2 }),
-    Object.freeze({ entityKey: 'world:loot_inn_spell_material', definitionId: 'spell_upgrade_material', quantity: 10, upgradeLevel: 0, levelId: 'inn', x: 9 * TILE_SIZE + TILE_SIZE / 2, y: 9 * TILE_SIZE + TILE_SIZE / 2 }),
-]);
+const SEEDED_WORLD_DROPS = Object.freeze([]);
 
 function getItemDefinition(definitionId) {
     return typeof definitionId === 'string' ? ITEM_DEFINITIONS[definitionId] ?? null : null;
@@ -398,12 +388,12 @@ export class GameRoom {
         switch (data.type) {
 
             case MSG.PLAYER_JOIN: {
-                const spawn = resolveStageSpawnPosition('inn');
+                const spawn = resolveStageSpawnPosition(STARTING_STAGE_ID);
                 const spawnX = spawn?.x ?? (Math.floor(STAGE_WIDTH / 2) * TILE_SIZE + TILE_SIZE / 2);
                 const spawnY = spawn?.y ?? (Math.floor(STAGE_HEIGHT / 2) * TILE_SIZE + TILE_SIZE / 2);
 
                 this.players.set(sessionId, {
-                    transform: { x: spawnX, y: spawnY, levelId: 'inn' },
+                    transform: { x: spawnX, y: spawnY, levelId: STARTING_STAGE_ID },
                     intent:    {
                         up: false, down: false, left: false, right: false, sprint: false,
                         moveSpeedMultiplier: 1, attackPushVx: 0, attackPushVy: 0,
@@ -586,7 +576,7 @@ export class GameRoom {
                 const y = Number.isFinite(data.y) ? data.y : 0;
                 const levelId = typeof data.levelId === 'string'
                     ? data.levelId
-                    : (player.transform?.levelId ?? 'town-square');
+                    : (player.transform?.levelId ?? STARTING_STAGE_ID);
 
                 let target = this.worldEntities.get(targetEntityKey);
                 if (!target) {
@@ -902,7 +892,7 @@ export class GameRoom {
 
                 let levelId = typeof data.levelId === 'string'
                     ? data.levelId
-                    : (movingWorldEntity?.levelId ?? player.transform.levelId ?? 'town-square');
+                    : (movingWorldEntity?.levelId ?? player.transform.levelId ?? STARTING_STAGE_ID);
                 let toExitIndex = Number.isInteger(data.toExitIndex) ? data.toExitIndex : null;
                 const fromExitId = typeof data.fromExitId === 'string' ? data.fromExitId : null;
                 let toExitId = typeof data.toExitId === 'string' ? data.toExitId : null;
@@ -1396,8 +1386,8 @@ export class GameRoom {
             }
         }
 
-        const transform = player.transform ?? { x: 0, y: 0, levelId: 'inn' };
-        const grid = this._getGrid(transform.levelId ?? 'inn');
+        const transform = player.transform ?? { x: 0, y: 0, levelId: STARTING_STAGE_ID };
+        const grid = this._getGrid(transform.levelId ?? STARTING_STAGE_ID);
         const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(
             grid,
             transform.x,
@@ -1472,7 +1462,7 @@ export class GameRoom {
                 entity.home = {
                     x: entity.x,
                     y: entity.y,
-                    levelId: entity.levelId ?? 'west-gate',
+                    levelId: entity.levelId ?? STARTING_STAGE_ID,
                 };
             }
 
@@ -1613,7 +1603,7 @@ export class GameRoom {
         for (const [entityKey, entity] of this.worldEntities.entries()) {
             if (entity?.kind !== 'zombie') continue;
             if (entity.controllerSessionId) continue;
-            const grid = this._getGrid(entity.levelId ?? 'west-gate');
+            const grid = this._getGrid(entity.levelId ?? STARTING_STAGE_ID);
             const terrainMoveSpeedMultiplier = getTerrainMovementMultiplierAtWorldPosition(
                 grid,
                 entity.x,
@@ -1852,7 +1842,7 @@ export class GameRoom {
             : 0;
         let x = sourceCombatant.x - direction.x * followDistance;
         let y = sourceCombatant.y - direction.y * followDistance;
-        const grid = this._getGrid(options.levelId ?? sourceCombatant.levelId ?? targetEntity?.levelId ?? 'town-square');
+        const grid = this._getGrid(options.levelId ?? sourceCombatant.levelId ?? targetEntity?.levelId ?? STARTING_STAGE_ID);
         if (grid) ({ x, y } = resolveCollisions(x, y, grid));
         return { x, y };
     }
@@ -3073,7 +3063,7 @@ export class GameRoom {
             resources: nextResources,
         };
         if (died) {
-            nextPlayer = this._respawnPlayerToInn(victimSessionId, nextPlayer);
+            nextPlayer = this._respawnPlayerToNativity(victimSessionId, nextPlayer);
             nextHp = nextPlayer.resources?.hp?.current ?? 0;
         }
         this._updatePlayer(victimSessionId, () => nextPlayer);
@@ -3156,7 +3146,7 @@ export class GameRoom {
         });
     }
 
-    _respawnPlayerToInn(sessionId, player) {
+    _respawnPlayerToNativity(sessionId, player) {
         if (!player) return player;
 
         const latest = this.players.get(sessionId) ?? player;
@@ -3183,13 +3173,13 @@ export class GameRoom {
                 });
             }
         }
-        const spawn = resolveStageSpawnPosition('inn');
+        const spawn = resolveStageSpawnPosition(STARTING_STAGE_ID);
         const respawnX = spawn?.x ?? latest.transform?.x ?? 0;
         const respawnY = spawn?.y ?? latest.transform?.y ?? 0;
         this.#sendToSession(sessionId, {
             type: MSG.FORCE_CONTROL,
             controlledEntityKey: `player:${sessionId}`,
-            levelId: 'inn',
+            levelId: STARTING_STAGE_ID,
             x: respawnX,
             y: respawnY,
             winnerSessionId: null,
@@ -3204,7 +3194,7 @@ export class GameRoom {
                 ...latest.transform,
                 x: respawnX,
                 y: respawnY,
-                levelId: 'inn',
+                levelId: STARTING_STAGE_ID,
             },
             resources: this._defaultResourcesForKind('player'),
             controlledEntityKey: `player:${sessionId}`,
@@ -3619,7 +3609,7 @@ export class GameRoom {
         const sourceEntityKey = player.controlledEntityKey ?? `player:${sessionId}`;
         const sourceX = this._getEntityX(sourceEntityKey) ?? player.transform?.x ?? 0;
         const sourceY = this._getEntityY(sourceEntityKey) ?? player.transform?.y ?? 0;
-        const sourceLevelId = this._getEntityLevelId(sourceEntityKey) ?? player.transform?.levelId ?? 'inn';
+        const sourceLevelId = this._getEntityLevelId(sourceEntityKey) ?? player.transform?.levelId ?? STARTING_STAGE_ID;
 
         let removed = false;
         this._updatePlayer(sessionId, (currentPlayer) => {
@@ -4190,7 +4180,7 @@ export class GameRoom {
         if (!observer || !target) return false;
         if ((observer.levelId ?? null) !== (target.levelId ?? null)) return false;
 
-        const grid = this._getGrid(observer.levelId ?? 'inn');
+        const grid = this._getGrid(observer.levelId ?? STARTING_STAGE_ID);
         const result = canObserverDetectTarget(
             grid,
             observer,

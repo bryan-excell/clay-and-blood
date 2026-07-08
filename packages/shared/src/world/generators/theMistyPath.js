@@ -285,7 +285,7 @@ export function buildTheMistyPathStageEntries(options = {}) {
         const connectionsByExitId = { ...(entry.stage.connectionsByExitId ?? {}) };
         if (entry.node.slot === 1) {
             connectionsByExitId['lunavik-road'] = Object.freeze({
-                levelId: 'town-square',
+                levelId: 'lunavik-south',
                 exitId: 'south-road',
                 exitIndex: 1,
                 arrivalDirection: 'south',

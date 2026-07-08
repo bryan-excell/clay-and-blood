@@ -4,8 +4,6 @@ import {
     TILE_FLOOR,
     TILE_SHALLOW_WATER,
     TILE_TALL_GRASS,
-    TILE_VOID,
-    TILE_WALL,
     getAllAuthoredStageDefinitions,
     getStageData,
     isWalkableTile,
@@ -13,69 +11,84 @@ import {
     resolveExitSpawnPosition,
 } from '../src/index.js';
 
-const EXPECTED_STAGE_SUMMARIES = Object.freeze({
-    'town-square': Object.freeze({
-        width: 40,
-        height: 40,
-        spawnPoint: Object.freeze({ x: 20, y: 20 }),
-        exits: Object.freeze([
-            Object.freeze({ id: 'north-road', x: 20, y: 0, exitIndex: 0, side: 'north', arrival: Object.freeze({ x: 20, y: 1, facing: 'south' }) }),
-            Object.freeze({ id: 'south-road', x: 20, y: 39, exitIndex: 1, side: 'south', arrival: Object.freeze({ x: 20, y: 38, facing: 'north' }) }),
-            Object.freeze({ id: 'west-gate', x: 0, y: 20, exitIndex: 2, side: 'west', arrival: Object.freeze({ x: 1, y: 20, facing: 'east' }) }),
-            Object.freeze({ id: 'east-road', x: 39, y: 20, exitIndex: 3, side: 'east', arrival: Object.freeze({ x: 38, y: 20, facing: 'west' }) }),
-            Object.freeze({ id: 'inn-door', x: 7, y: 9, exitIndex: 4, side: 'interior', arrival: Object.freeze({ x: 7, y: 10, facing: 'south' }) }),
-            Object.freeze({ id: 'shop-door', x: 32, y: 9, exitIndex: 5, side: 'interior', arrival: Object.freeze({ x: 32, y: 10, facing: 'south' }) }),
-        ]),
-        tileCounts: Object.freeze({
-            [TILE_FLOOR]: 1298,
-            [TILE_WALL]: 198,
-            [TILE_EXIT]: 6,
-            [TILE_TALL_GRASS]: 54,
-            [TILE_SHALLOW_WATER]: 44,
-        }),
-    }),
-    'west-gate': Object.freeze({
+const EXPECTED_LUNAVIK_STAGE_SUMMARIES = Object.freeze({
+    nativity: Object.freeze({
         width: 20,
-        height: 9,
-        spawnPoint: Object.freeze({ x: 10, y: 4 }),
-        exits: Object.freeze([
-            Object.freeze({ id: 'west-road', x: 0, y: 4, exitIndex: 0, side: 'west', arrival: Object.freeze({ x: 1, y: 4, facing: 'east' }) }),
-            Object.freeze({ id: 'east-road', x: 19, y: 4, exitIndex: 1, side: 'east', arrival: Object.freeze({ x: 18, y: 4, facing: 'west' }) }),
-        ]),
-        tileCounts: Object.freeze({
-            [TILE_FLOOR]: 126,
-            [TILE_WALL]: 52,
-            [TILE_EXIT]: 2,
-        }),
+        height: 14,
+        spawnPoint: Object.freeze({ x: 10, y: 8 }),
+        exitIds: Object.freeze(['lunavik-west']),
     }),
-    inn: Object.freeze({
-        width: 16,
-        height: 12,
-        spawnPoint: Object.freeze({ x: 3, y: 9 }),
-        exits: Object.freeze([
-            Object.freeze({ id: 'front-door', x: 5, y: 11, exitIndex: 0, side: 'south', arrival: Object.freeze({ x: 5, y: 10, facing: 'north' }) }),
-        ]),
-        tileCounts: Object.freeze({
-            [TILE_FLOOR]: 92,
-            [TILE_WALL]: 51,
-            [TILE_EXIT]: 1,
-            [TILE_VOID]: 48,
-        }),
+    'lunavik-west': Object.freeze({
+        width: 32,
+        height: 18,
+        spawnPoint: Object.freeze({ x: 16, y: 9 }),
+        exitIds: Object.freeze(['west-road', 'nativity', 'construct-of-ego', 'coalescence']),
     }),
-    'shop-1': Object.freeze({
-        width: 12,
-        height: 10,
-        spawnPoint: Object.freeze({ x: 6, y: 8 }),
-        exits: Object.freeze([
-            Object.freeze({ id: 'front-door', x: 6, y: 9, exitIndex: 0, side: 'south', arrival: Object.freeze({ x: 6, y: 8, facing: 'north' }) }),
+    'construct-of-ego': Object.freeze({
+        width: 24,
+        height: 16,
+        spawnPoint: Object.freeze({ x: 11, y: 7 }),
+        exitIds: Object.freeze(['lunavik-west', 'coalescence']),
+    }),
+    'coalescence-of-lunavik': Object.freeze({
+        width: 28,
+        height: 28,
+        spawnPoint: Object.freeze({ x: 14, y: 14 }),
+        exitIds: Object.freeze([
+            'lunavik-west',
+            'construct-of-ego',
+            'lunavik-north',
+            'extrinsic-phylacteries',
+            'proliferation-of-talent',
+            'lunavik-east',
+            'convexity-of-lunavik',
         ]),
-        tileCounts: Object.freeze({
-            [TILE_FLOOR]: 73,
-            [TILE_WALL]: 46,
-            [TILE_EXIT]: 1,
-        }),
+    }),
+    'lunavik-north': Object.freeze({
+        width: 20,
+        height: 24,
+        spawnPoint: Object.freeze({ x: 9, y: 12 }),
+        exitIds: Object.freeze(['coalescence', 'north-road']),
+    }),
+    'extrinsic-phylacteries': Object.freeze({
+        width: 34,
+        height: 16,
+        spawnPoint: Object.freeze({ x: 16, y: 7 }),
+        exitIds: Object.freeze(['coalescence', 'proliferation-of-talent']),
+    }),
+    'proliferation-of-talent': Object.freeze({
+        width: 24,
+        height: 18,
+        spawnPoint: Object.freeze({ x: 11, y: 8 }),
+        exitIds: Object.freeze(['extrinsic-phylacteries', 'coalescence']),
+    }),
+    'lunavik-east': Object.freeze({
+        width: 32,
+        height: 14,
+        spawnPoint: Object.freeze({ x: 16, y: 6 }),
+        exitIds: Object.freeze(['coalescence', 'east-road']),
+    }),
+    'convexity-of-lunavik': Object.freeze({
+        width: 24,
+        height: 18,
+        spawnPoint: Object.freeze({ x: 12, y: 8 }),
+        exitIds: Object.freeze(['coalescence', 'lunavik-south']),
+    }),
+    'lunavik-south': Object.freeze({
+        width: 18,
+        height: 24,
+        spawnPoint: Object.freeze({ x: 9, y: 12 }),
+        exitIds: Object.freeze(['convexity-of-lunavik', 'south-road']),
     }),
 });
+
+const REMOVED_LUNAVIK_STAGE_IDS = Object.freeze([
+    'town-square',
+    'west-gate',
+    'inn',
+    'shop-1',
+    'northern-gate',
+]);
 
 function countTiles(stage) {
     const counts = {};
@@ -112,17 +125,29 @@ function testParserExtractsExitMarkers() {
     ]);
 }
 
-function testAuthoredStageSummaries() {
+function testLunavikStageSummaries() {
     const stages = Object.fromEntries(getAllAuthoredStageDefinitions().map((stage) => [stage.id, stage]));
-    for (const [stageId, expected] of Object.entries(EXPECTED_STAGE_SUMMARIES)) {
+    for (const removedStageId of REMOVED_LUNAVIK_STAGE_IDS) {
+        assert.equal(stages[removedStageId], undefined, `${removedStageId} should be removed from Lunavik`);
+    }
+
+    for (const [stageId, expected] of Object.entries(EXPECTED_LUNAVIK_STAGE_SUMMARIES)) {
         const stage = stages[stageId];
         assert.ok(stage, `missing stage ${stageId}`);
         assert.equal(stage.width, expected.width, `${stageId} width changed`);
         assert.equal(stage.height, expected.height, `${stageId} height changed`);
         assert.deepEqual(stage.spawnPoint, expected.spawnPoint, `${stageId} spawn changed`);
-        assert.deepEqual(stage.exits, expected.exits, `${stageId} exits changed`);
-        assert.deepEqual(countTiles(stage), expected.tileCounts, `${stageId} tile counts changed`);
+        assert.deepEqual(stage.exits.map((exit) => exit.id), expected.exitIds, `${stageId} exits changed`);
+
+        const tileCounts = countTiles(stage);
+        assert.equal(tileCounts[TILE_TALL_GRASS] ?? 0, 0, `${stageId} should not have tall grass yet`);
+        assert.equal(tileCounts[TILE_SHALLOW_WATER] ?? 0, 0, `${stageId} should not have water yet`);
+        assert.ok((tileCounts[TILE_FLOOR] ?? 0) > 0, `${stageId} should contain walkable floor`);
+        assert.equal(tileCounts[TILE_EXIT] ?? 0, expected.exitIds.length, `${stageId} should have one tile per exit`);
     }
+
+    const coalescence = stages['coalescence-of-lunavik'];
+    assert.ok(coalescence.width <= 28 && coalescence.height <= 28, 'Coalescence should be about 30% smaller than the old 40x40 town square');
 }
 
 function testAuthoredExitArrivalsAreSafe() {
@@ -159,7 +184,7 @@ function testAuthoredExitArrivalsAreSafe() {
 function run() {
     testParserRejectsRaggedMaps();
     testParserExtractsExitMarkers();
-    testAuthoredStageSummaries();
+    testLunavikStageSummaries();
     testAuthoredExitArrivalsAreSafe();
     console.log('shared authored stage tests passed');
 }

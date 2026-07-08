@@ -35,9 +35,44 @@ function testZoneStageIdsResolveToAuthoredStages() {
 }
 
 function testZoneMembershipResolvesFromAuthoredStages() {
-    assert.equal(getZoneIdFromStageId('town-square'), 'lunavik');
-    assert.equal(getStageDefinition('inn').zoneId, 'lunavik');
+    assert.equal(getZoneIdFromStageId('coalescence-of-lunavik'), 'lunavik');
+    assert.equal(getStageDefinition('nativity').zoneId, 'lunavik');
     assert.equal(getZoneDefinition('lunavik').displayName, 'Lunavik');
+}
+
+function testLunavikStaticTopology() {
+    const zone = getZoneDefinition('lunavik');
+    assert.ok(zone, 'expected Lunavik zone');
+    assert.equal(zone.hubStageId, 'coalescence-of-lunavik');
+    assert.deepEqual(zone.stageIds, [
+        'nativity',
+        'lunavik-west',
+        'construct-of-ego',
+        'coalescence-of-lunavik',
+        'lunavik-north',
+        'extrinsic-phylacteries',
+        'proliferation-of-talent',
+        'lunavik-east',
+        'convexity-of-lunavik',
+        'lunavik-south',
+    ]);
+
+    for (const stageId of zone.stageIds) {
+        const stage = getStageDefinition(stageId);
+        assert.equal(stage.zoneId, 'lunavik');
+        for (const [exitId, connection] of Object.entries(stage.connectionsByExitId)) {
+            const exit = stage.exits.find((candidate) => candidate.id === exitId);
+            assert.ok(exit, `${stageId} should have exit ${exitId}`);
+            if (!zone.stageIds.includes(connection.levelId)) continue;
+            const target = getStageDefinition(connection.levelId);
+            const returnConnection = target.connectionsByExitId?.[connection.exitId];
+            assert.equal(returnConnection?.levelId, stageId, `${stageId}:${exitId} should be reciprocated`);
+        }
+    }
+
+    assert.equal(resolveExitTransition('nativity', 0, 'lunavik-west').toLevelId, 'lunavik-west');
+    assert.equal(resolveExitTransition('construct-of-ego', 1, 'coalescence').toLevelId, 'coalescence-of-lunavik');
+    assert.equal(resolveExitTransition('proliferation-of-talent', 1, 'coalescence').toLevelId, 'coalescence-of-lunavik');
 }
 
 function testProceduralStageIdsCarryZone() {
@@ -63,13 +98,9 @@ function testGreatNorthernRoadRouteChain() {
     const caravan = getStageDefinition('great-northern-road::merchant-caravan');
     assert.equal(caravan.tags.includes('static'), true, 'merchant caravan should be a static landmark stage');
 
-    const townNorth = resolveExitTransition('town-square', 0, 'north-road');
-    assert.equal(townNorth.toLevelId, 'northern-gate');
+    const townNorth = resolveExitTransition('lunavik-north', 1, 'north-road');
+    assert.equal(townNorth.toLevelId, zone.stageIds[0]);
     assert.equal(townNorth.toExitId, 'south-road');
-
-    const gateNorth = resolveExitTransition('northern-gate', 1, 'north-road');
-    assert.equal(gateNorth.toLevelId, zone.stageIds[0]);
-    assert.equal(gateNorth.toExitId, 'south-road');
 
     for (let i = 0; i < zone.stageIds.length - 1; i++) {
         const current = zone.stageIds[i];
@@ -89,7 +120,7 @@ function testGreatNorthernRoadRouteChain() {
     }
 
     const firstBack = resolveExitTransition(zone.stageIds[0], 0, 'south-road');
-    assert.equal(firstBack.toLevelId, 'northern-gate');
+    assert.equal(firstBack.toLevelId, 'lunavik-north');
     assert.equal(firstBack.toExitId, 'north-road');
 
     assert.equal(getExitById(zone.stageIds.at(-1), 'north-road'), null, 'final road stage should not leak to dynamic wilds');
@@ -114,12 +145,12 @@ function testTheMeadowsGridTopology() {
     assert.equal(clearing.tags.includes('static'), true, 'A Clearing should be a static landmark stage');
     assert.ok(clearing.width < 40 && clearing.height < 30, 'A Clearing should be smaller than generated meadow stages');
 
-    const townEast = resolveExitTransition('town-square', 3, 'east-road');
+    const townEast = resolveExitTransition('lunavik-east', 1, 'east-road');
     assert.equal(townEast.toLevelId, getTheMeadowsEntryStageId());
     assert.equal(townEast.toExitId, 'west-path');
 
     const entryWest = resolveExitTransition(getTheMeadowsEntryStageId(), 3, 'west-path');
-    assert.equal(entryWest.toLevelId, 'town-square');
+    assert.equal(entryWest.toLevelId, 'lunavik-east');
     assert.equal(entryWest.toExitId, 'east-road');
 
     const stageIds = new Set(zone.stageIds);
@@ -184,12 +215,12 @@ function testTheMistyPathTopology() {
     assert.equal(zone.stageIds.length, 14);
     assert.equal(zone.hubStageId, getTheMistyPathEntryStageId());
 
-    const townSouth = resolveExitTransition('town-square', 1, 'south-road');
+    const townSouth = resolveExitTransition('lunavik-south', 1, 'south-road');
     assert.equal(townSouth.toLevelId, getTheMistyPathEntryStageId());
     assert.equal(townSouth.toExitId, 'lunavik-road');
 
     const pathNorth = resolveExitTransition(getTheMistyPathEntryStageId(), 0, 'lunavik-road');
-    assert.equal(pathNorth.toLevelId, 'town-square');
+    assert.equal(pathNorth.toLevelId, 'lunavik-south');
     assert.equal(pathNorth.toExitId, 'south-road');
 
     let fourExitStages = 0;
@@ -204,7 +235,7 @@ function testTheMistyPathTopology() {
         for (const [exitId, connection] of Object.entries(stage.connectionsByExitId)) {
             const exit = stage.exits.find((candidate) => candidate.id === exitId);
             assert.ok(exit, `${stageId} should have exit ${exitId}`);
-            if (connection.levelId === 'town-square') continue;
+            if (connection.levelId === 'lunavik-south') continue;
             assert.ok(zone.stageIds.includes(connection.levelId), `${stageId}:${exitId} should stay in the misty path graph`);
             const target = getStageDefinition(connection.levelId);
             const returnConnection = target.connectionsByExitId?.[connection.exitId];
@@ -221,12 +252,12 @@ function testRollingHillsBraidedTopology() {
     assert.equal(zone.stageIds.length, 20);
     assert.equal(zone.hubStageId, getRollingHillsEntryStageId());
 
-    const westGate = resolveExitTransition('west-gate', 0, 'west-road');
-    assert.equal(westGate.toLevelId, getRollingHillsEntryStageId());
-    assert.equal(westGate.toExitId, 'lunavik-road');
+    const westRoad = resolveExitTransition('lunavik-west', 0, 'west-road');
+    assert.equal(westRoad.toLevelId, getRollingHillsEntryStageId());
+    assert.equal(westRoad.toExitId, 'lunavik-road');
 
     const entryEast = resolveExitTransition(getRollingHillsEntryStageId(), 1, 'lunavik-road');
-    assert.equal(entryEast.toLevelId, 'west-gate');
+    assert.equal(entryEast.toLevelId, 'lunavik-west');
     assert.equal(entryEast.toExitId, 'west-road');
     assert.ok(
         getStageDefinition(getRollingHillsEntryStageId()).generationConfig.gridX >
@@ -245,7 +276,7 @@ function testRollingHillsBraidedTopology() {
         assert.ok(stage.exits.length >= expectedMinimumExits && stage.exits.length <= 4, `${stageId} should have ${expectedMinimumExits}-4 exits`);
 
         const outbound = Object.entries(stage.connectionsByExitId)
-            .filter(([, connection]) => connection.levelId !== 'west-gate');
+            .filter(([, connection]) => connection.levelId !== 'lunavik-west');
         if (outbound.length >= 3) splitStages++;
 
         const inbound = zone.stageIds.filter((otherId) => {
@@ -258,7 +289,7 @@ function testRollingHillsBraidedTopology() {
         for (const [exitId, connection] of Object.entries(stage.connectionsByExitId)) {
             const exit = stage.exits.find((candidate) => candidate.id === exitId);
             assert.ok(exit, `${stageId} should have exit ${exitId}`);
-            if (connection.levelId === 'west-gate') continue;
+            if (connection.levelId === 'lunavik-west') continue;
             assert.ok(zone.stageIds.includes(connection.levelId), `${stageId}:${exitId} should stay in the rolling hills graph`);
             const target = getStageDefinition(connection.levelId);
             const returnConnection = target.connectionsByExitId?.[connection.exitId];
@@ -288,6 +319,7 @@ function run() {
     testAuthoredStagesHaveValidZones();
     testZoneStageIdsResolveToAuthoredStages();
     testZoneMembershipResolvesFromAuthoredStages();
+    testLunavikStaticTopology();
     testProceduralStageIdsCarryZone();
     testDynamicExitDestinationIsZoneAware();
     testGreatNorthernRoadRouteChain();

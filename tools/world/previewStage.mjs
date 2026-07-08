@@ -28,7 +28,7 @@ function parseArgs(argv) {
 
 function printUsage() {
     console.log([
-        'Usage: npm run world:preview-stage -- town-square',
+        'Usage: npm run world:preview-stage -- coalescence-of-lunavik',
         '',
         'Options:',
         '  --list',

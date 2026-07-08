@@ -48,23 +48,23 @@ function testApproachDirectionTracksEnteredEdge() {
 }
 
 function testStaticTransitionUsesExitIdConnections() {
-    const resolved = resolveExitTransition('town-square', 2, 'west-gate');
-    assert.equal(resolved.toLevelId, 'west-gate');
-    assert.equal(resolved.toExitId, 'east-road');
+    const resolved = resolveExitTransition('coalescence-of-lunavik', 0, 'lunavik-west');
+    assert.equal(resolved.toLevelId, 'lunavik-west');
+    assert.equal(resolved.toExitId, 'coalescence');
     assert.equal(resolved.arrivalDirection, 'west');
 }
 
 function testSpawnUsesOppositeOfApproachDirection() {
     const spawn = resolveExitSpawnPosition({
-        toLevelId: 'inn',
-        toExitId: 'front-door',
-        approachDirection: 'south',
+        toLevelId: 'nativity',
+        toExitId: 'lunavik-west',
+        approachDirection: 'east',
     });
-    assert.ok(spawn, 'expected spawn for inn front door');
-    assert.equal(spawn.arrivalDirection, 'north');
-    assert.equal(spawn.tileX, 5);
-    assert.equal(spawn.tileY, 10);
-    assert.equal(spawn.facing, 'north');
+    assert.ok(spawn, 'expected spawn for Nativity west threshold');
+    assert.equal(spawn.arrivalDirection, 'west');
+    assert.equal(spawn.tileX, 18);
+    assert.equal(spawn.tileY, 6);
+    assert.equal(spawn.facing, 'west');
 }
 
 function testPreferredArrivalTileFallsBackDeterministically() {

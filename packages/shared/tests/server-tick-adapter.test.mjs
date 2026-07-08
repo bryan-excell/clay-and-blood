@@ -9,7 +9,7 @@ import {
 
 function makePlayer() {
     return {
-        transform: { x: 100, y: 100, levelId: 'town-square' },
+        transform: { x: 100, y: 100, levelId: 'nativity' },
         intent: { up: false, down: false, left: false, right: true, sprint: false },
         motion: {
             dashVx: 0,
@@ -43,7 +43,7 @@ function testAdapterPipeline() {
     assert.equal(snapshotPlayers[0].seq, 8);
     assert.equal(snapshotPlayers[0].lastReceivedInputSeq, 9);
     assert.equal(snapshotPlayers[0].lastProcessedInputSeq, 8);
-    assert.equal(snapshotPlayers[0].levelId, 'town-square');
+    assert.equal(snapshotPlayers[0].levelId, 'nativity');
     assert.deepEqual(snapshotPlayers[0].movementState.dash, { vx: 0, vy: 0, timeLeftMs: 0 });
     assert.deepEqual(snapshotPlayers[0].movementState.externalVelocity, { vx: 40, vy: 0, timeLeftMs: 50 });
     assert.equal(snapshotPlayers[0].teamId, 'players');
@@ -52,7 +52,7 @@ function testAdapterPipeline() {
     const history = phaseBuildHistoryPositions(players);
     const h = history.get('p1');
     assert.ok(h, 'history should include player');
-    assert.equal(h.levelId, 'town-square');
+    assert.equal(h.levelId, 'nativity');
 }
 
 function run() {
