@@ -29,6 +29,16 @@ export const SPELLS = Object.freeze({
     traction:           Object.freeze({ id: 'traction', name: 'Traction', mouseUsage: 'right' }),
 });
 
+export const ACTION_WEAPONS = Object.freeze({
+    ...WEAPONS,
+    possess:            Object.freeze({ ...SPELLS.possess,            category: 'weapon', actionKind: 'spell' }),
+    release_possession: Object.freeze({ ...SPELLS.release_possession, category: 'weapon', actionKind: 'spell' }),
+    imposing_flame:     Object.freeze({ ...SPELLS.imposing_flame,     category: 'weapon', actionKind: 'spell' }),
+    gelid_cradle:       Object.freeze({ ...SPELLS.gelid_cradle,       category: 'weapon', actionKind: 'spell' }),
+    arc_flash:          Object.freeze({ ...SPELLS.arc_flash,          category: 'weapon', actionKind: 'spell' }),
+    traction:           Object.freeze({ ...SPELLS.traction,           category: 'weapon', actionKind: 'spell' }),
+});
+
 export const ACCESSORIES = Object.freeze({
     cape: Object.freeze({ id: 'cape', name: 'Cape', category: 'accessory', spacebarAction: 'dash', baseSellable: true, baseDroppable: true, sellPrice: 40, buyPrice: 90 }),
 });
@@ -111,4 +121,8 @@ export const RESOURCES = Object.freeze({
  */
 export function getItemDef(id) {
     return WEAPONS[id] ?? SPELLS[id] ?? ACCESSORIES[id] ?? ARMOR_SETS[id] ?? CONSUMABLES[id] ?? RESOURCES[id] ?? null;
+}
+
+export function getActionWeaponDef(id) {
+    return ACTION_WEAPONS[id] ?? null;
 }

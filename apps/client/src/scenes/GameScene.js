@@ -1223,6 +1223,12 @@ export class GameScene extends Phaser.Scene {
         eventBus.on('ui:equipAccessory', ({ id }) => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.equipAccessory(id);
         });
+        eventBus.on('ui:assignActionSlot', ({ slotIndex, id }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.assignActionSlot(slotIndex, id);
+        });
+        eventBus.on('ui:activateActionSlot', ({ slotIndex }) => {
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.activateActionSlot(slotIndex);
+        });
         eventBus.on('ui:assignWeaponSlot', ({ slotIndex, id }) => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.assignWeaponSlot(slotIndex, id);
         });
@@ -1242,10 +1248,10 @@ export class GameScene extends Phaser.Scene {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.activateConsumableSlot(slotIndex);
         });
         eventBus.on('ui:cycleWeaponSlot', () => {
-            this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleWeaponSlot();
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleActionSlot();
         });
         eventBus.on('ui:cycleSpellSlot', () => {
-            this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleSpellSlot();
+            this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleActionSlot();
         });
         eventBus.on('ui:cycleConsumableSlot', () => {
             this.getLocallyControlledEntity()?.getComponent('loadout')?.cycleConsumableSlot();
@@ -1310,8 +1316,6 @@ export class GameScene extends Phaser.Scene {
             if (controlMode !== 'local') return;
             uiStateStore.patch({
                 pendingSlotAssignment: null,
-                quickRadialHover: null,
-                quickRadialOpen: false,
             });
         });
 
@@ -1732,9 +1736,11 @@ export class GameScene extends Phaser.Scene {
     _buildServerLoadoutSnapshot(loadout) {
         if (!loadout) return null;
         return {
-            weaponSlots: Array.isArray(loadout.weaponSlots) ? loadout.weaponSlots.slice(0, 3) : [],
-            spellSlots: Array.isArray(loadout.spellSlots) ? loadout.spellSlots.slice(0, 3) : [],
-            consumableSlots: Array.isArray(loadout.consumableSlots) ? loadout.consumableSlots.slice(0, 3) : [],
+            actionSlots: Array.isArray(loadout.actionSlots) ? loadout.actionSlots.slice(0, 4) : [],
+            weaponSlots: Array.isArray(loadout.weaponSlots) ? loadout.weaponSlots.slice(0, 4) : [],
+            spellSlots: Array.isArray(loadout.spellSlots) ? loadout.spellSlots.slice(0, 4) : [],
+            consumableSlots: Array.isArray(loadout.consumableSlots) ? loadout.consumableSlots.slice(0, 1) : [],
+            activeActionSlotIndex: Number.isFinite(loadout.activeActionSlotIndex) ? Math.max(0, Math.floor(loadout.activeActionSlotIndex)) : 0,
             activeWeaponSlotIndex: Number.isFinite(loadout.activeWeaponSlotIndex) ? Math.max(0, Math.floor(loadout.activeWeaponSlotIndex)) : 0,
             activeSpellSlotIndex: Number.isFinite(loadout.activeSpellSlotIndex) ? Math.max(0, Math.floor(loadout.activeSpellSlotIndex)) : 0,
             activeConsumableSlotIndex: Number.isFinite(loadout.activeConsumableSlotIndex) ? Math.max(0, Math.floor(loadout.activeConsumableSlotIndex)) : 0,

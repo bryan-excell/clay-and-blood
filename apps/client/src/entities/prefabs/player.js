@@ -78,10 +78,12 @@ export function createPlayer(scene, config = {}) {
     player.addComponent(new LoadoutComponent({
         weapons:     ['unarmed', 'bow', 'longsword'],
         spells:      ['nothing', 'possess', 'imposing_flame', 'gelid_cradle', 'arc_flash', 'traction'],
+        actionSlots: ['unarmed', 'possess', 'imposing_flame', 'gelid_cradle'],
+        activeActionSlotIndex: 0,
         consumables: ['nothing', 'gold_pouch', 'healing_gem', 'magic_dew'],
         armorSets:   ['leather_armor'],
         accessories: ['cape'],
-        equipped: { weaponId: 'unarmed', spellId: 'possess', armorSetId: null, accessoryId: null },
+        equipped: { weaponId: 'unarmed', spellId: 'nothing', armorSetId: null, accessoryId: null },
     }));
 
     // 4. Add input handling

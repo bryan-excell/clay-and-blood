@@ -57,6 +57,8 @@ export function createGolem(scene, config = {}) {
     golem.addComponent(new LoadoutComponent({
         weapons:     ['unarmed', 'bow', 'longsword'],
         spells:      [],
+        actionSlots: ['unarmed', 'bow', 'longsword', 'unarmed'],
+        activeActionSlotIndex: 0,
         consumables: ['nothing', 'gold_pouch', 'healing_gem', 'magic_dew'],
         armorSets:   [],
         accessories: [],

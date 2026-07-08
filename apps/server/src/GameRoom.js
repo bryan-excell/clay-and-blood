@@ -183,15 +183,17 @@ function sanitizeEquippedPayload(equipped) {
 
 function sanitizeLoadoutSnapshot(loadout) {
     if (!loadout || typeof loadout !== 'object') return null;
-    const sanitizeSlotArray = (value) => (
+    const sanitizeSlotArray = (value, limit = 4) => (
         Array.isArray(value)
-            ? value.slice(0, 3).map((entry) => sanitizeEquipId(entry)).filter(Boolean)
+            ? value.slice(0, limit).map((entry) => sanitizeEquipId(entry)).filter(Boolean)
             : []
     );
     return {
+        actionSlots: sanitizeSlotArray(loadout.actionSlots, 4),
         weaponSlots: sanitizeSlotArray(loadout.weaponSlots),
         spellSlots: sanitizeSlotArray(loadout.spellSlots),
-        consumableSlots: sanitizeSlotArray(loadout.consumableSlots),
+        consumableSlots: sanitizeSlotArray(loadout.consumableSlots, 1),
+        activeActionSlotIndex: Number.isFinite(loadout.activeActionSlotIndex) ? Math.max(0, Math.floor(loadout.activeActionSlotIndex)) : 0,
         activeWeaponSlotIndex: Number.isFinite(loadout.activeWeaponSlotIndex) ? Math.max(0, Math.floor(loadout.activeWeaponSlotIndex)) : 0,
         activeSpellSlotIndex: Number.isFinite(loadout.activeSpellSlotIndex) ? Math.max(0, Math.floor(loadout.activeSpellSlotIndex)) : 0,
         activeConsumableSlotIndex: Number.isFinite(loadout.activeConsumableSlotIndex) ? Math.max(0, Math.floor(loadout.activeConsumableSlotIndex)) : 0,
@@ -3571,6 +3573,7 @@ export class GameRoom {
     _isDefinitionAssignedForDrop(player, definitionId, category) {
         if (!player || typeof definitionId !== 'string') return false;
         const loadoutSnapshot = player.loadoutSnapshot ?? null;
+        if (loadoutSnapshot?.actionSlots?.includes(definitionId)) return true;
         if (category === INVENTORY_CATEGORY_WEAPON && loadoutSnapshot?.weaponSlots?.includes(definitionId)) return true;
         if (category === INVENTORY_CATEGORY_CONSUMABLE && loadoutSnapshot?.consumableSlots?.includes(definitionId)) return true;
         if (category === INVENTORY_CATEGORY_ARMOR && player.equipped?.armorSetId === definitionId) return true;

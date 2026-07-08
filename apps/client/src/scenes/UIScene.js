@@ -3,7 +3,6 @@ import { uiStateStore } from '../core/UiStateStore.js';
 import { eventBus } from '../core/EventBus.js';
 import { HpBarWidget } from '../ui/widgets/HpBarWidget.js';
 import { InventoryDrawerWidget, DRAWER_TOTAL_W } from '../ui/widgets/InventoryDrawerWidget.js';
-import { RadialKitWidget } from '../ui/widgets/RadialKitWidget.js';
 import { ToastFeedWidget } from '../ui/widgets/ToastFeedWidget.js';
 import { MerchantShopWidget } from '../ui/widgets/MerchantShopWidget.js';
 import { UpgraderWidget } from '../ui/widgets/UpgraderWidget.js';
@@ -14,15 +13,10 @@ export class UIScene extends Phaser.Scene {
         super({ key: 'UIScene', active: false });
         this._unsubscribeStore = null;
         this._onResize         = null;
-        this._onTabKeyDown     = null;
-        this._onTabKeyUp       = null;
         this._onEscKeyDown     = null;
-        this._onCycleWeaponKeyDown = null;
-        this._onCycleSpellKeyDown = null;
+        this._onActionSlotKeyDown = [];
         this._onUseConsumableKeyDown = null;
-        this._onCycleConsumableKeyDown = null;
         this._onToggleDebugOverlayKeyDown = null;
-        this._quickRadialWidget = null;
         this._escDebounceActive = false;
         this._showWorldDebug = DEBUG_WORLD_OVERLAY_DEFAULT;
         this._pendingState     = uiStateStore.getState();
@@ -115,23 +109,6 @@ export class UIScene extends Phaser.Scene {
             this.scale.height
         );
 
-        this._quickRadialWidget = new RadialKitWidget(
-            this,
-            this.scale.width / 2,
-            this.scale.height / 2,
-            'quick'
-        );
-        this._quickRadialWidget.hide();
-
-        // TAB holds the quick radial. Prevent the browser default focus change.
-        this._onTabKeyDown = (event) => {
-            event.preventDefault?.();
-            this._showQuickRadial();
-        };
-        this.input.keyboard.on('keydown-TAB', this._onTabKeyDown);
-        this._onTabKeyUp = () => this._confirmAndHideQuickRadial();
-        this.input.keyboard.on('keyup-TAB', this._onTabKeyUp);
-
         // ESC toggles the drawer; debounce prevents key repeat flicker.
         this._onEscKeyDown = () => {
             if (this._escDebounceActive) return;
@@ -149,17 +126,15 @@ export class UIScene extends Phaser.Scene {
         };
         this.input.keyboard.on('keydown-ESC', this._onEscKeyDown);
 
-        this._onCycleWeaponKeyDown = () => eventBus.emit('ui:cycleWeaponSlot');
-        this._onCycleSpellKeyDown = () => eventBus.emit('ui:cycleSpellSlot');
+        this._onActionSlotKeyDown = [0, 1, 2, 3].map((slotIndex) => (
+            () => eventBus.emit('ui:activateActionSlot', { slotIndex })
+        ));
         this._onUseConsumableKeyDown = () => eventBus.emit('ui:useConsumable');
-        this._onCycleConsumableKeyDown = () => eventBus.emit('ui:cycleConsumableSlot');
-        this.input.keyboard.on('keydown-ONE', this._onCycleWeaponKeyDown);
-        this.input.keyboard.on('keydown-LEFT', this._onCycleWeaponKeyDown);
-        this.input.keyboard.on('keydown-TWO', this._onCycleSpellKeyDown);
-        this.input.keyboard.on('keydown-RIGHT', this._onCycleSpellKeyDown);
+        this.input.keyboard.on('keydown-ONE', this._onActionSlotKeyDown[0]);
+        this.input.keyboard.on('keydown-TWO', this._onActionSlotKeyDown[1]);
+        this.input.keyboard.on('keydown-THREE', this._onActionSlotKeyDown[2]);
+        this.input.keyboard.on('keydown-FOUR', this._onActionSlotKeyDown[3]);
         this.input.keyboard.on('keydown-Q', this._onUseConsumableKeyDown);
-        this.input.keyboard.on('keydown-THREE', this._onCycleConsumableKeyDown);
-        this.input.keyboard.on('keydown-UP', this._onCycleConsumableKeyDown);
         this._onToggleDebugOverlayKeyDown = (event) => {
             event.preventDefault?.();
             this._showWorldDebug = !this._showWorldDebug;
@@ -192,36 +167,20 @@ export class UIScene extends Phaser.Scene {
             this._unsubscribeStore = null;
             this.scale.off('resize', this._onResize);
             this._onResize = null;
-            if (this._onTabKeyDown) {
-                this.input.keyboard.off('keydown-TAB', this._onTabKeyDown);
-                this._onTabKeyDown = null;
-            }
-            if (this._onTabKeyUp) {
-                this.input.keyboard.off('keyup-TAB', this._onTabKeyUp);
-                this._onTabKeyUp = null;
-            }
             if (this._onEscKeyDown) {
                 this.input.keyboard.off('keydown-ESC', this._onEscKeyDown);
                 this._onEscKeyDown = null;
             }
-            if (this._onCycleWeaponKeyDown) {
-                this.input.keyboard.off('keydown-ONE', this._onCycleWeaponKeyDown);
-                this.input.keyboard.off('keydown-LEFT', this._onCycleWeaponKeyDown);
-                this._onCycleWeaponKeyDown = null;
-            }
-            if (this._onCycleSpellKeyDown) {
-                this.input.keyboard.off('keydown-TWO', this._onCycleSpellKeyDown);
-                this.input.keyboard.off('keydown-RIGHT', this._onCycleSpellKeyDown);
-                this._onCycleSpellKeyDown = null;
+            if (this._onActionSlotKeyDown.length > 0) {
+                this.input.keyboard.off('keydown-ONE', this._onActionSlotKeyDown[0]);
+                this.input.keyboard.off('keydown-TWO', this._onActionSlotKeyDown[1]);
+                this.input.keyboard.off('keydown-THREE', this._onActionSlotKeyDown[2]);
+                this.input.keyboard.off('keydown-FOUR', this._onActionSlotKeyDown[3]);
+                this._onActionSlotKeyDown = [];
             }
             if (this._onUseConsumableKeyDown) {
                 this.input.keyboard.off('keydown-Q', this._onUseConsumableKeyDown);
                 this._onUseConsumableKeyDown = null;
-            }
-            if (this._onCycleConsumableKeyDown) {
-                this.input.keyboard.off('keydown-THREE', this._onCycleConsumableKeyDown);
-                this.input.keyboard.off('keydown-UP', this._onCycleConsumableKeyDown);
-                this._onCycleConsumableKeyDown = null;
             }
             if (this._onToggleDebugOverlayKeyDown) {
                 this.input.keyboard.off('keydown-P', this._onToggleDebugOverlayKeyDown);
@@ -245,13 +204,10 @@ export class UIScene extends Phaser.Scene {
             this._toastFeed?.destroy();
             this._merchantShop?.destroy();
             this._upgrader?.destroy();
-            this._quickRadialWidget?.destroy();
             // Clean up drawer state in the store.
             uiStateStore.set('drawerOpen', false);
             uiStateStore.set('drawerWidth', 0);
             uiStateStore.set('pendingSlotAssignment', null);
-            uiStateStore.set('quickRadialOpen', false);
-            uiStateStore.set('quickRadialHover', null);
             uiStateStore.set('merchantShopOpen', false);
             uiStateStore.set('merchantShopContext', null);
             uiStateStore.set('merchantShopBounds', null);
@@ -262,9 +218,6 @@ export class UIScene extends Phaser.Scene {
     }
 
     update() {
-        if (!this._quickRadialWidget?.visible) return;
-        const hover = this._quickRadialWidget.updateQuickHover();
-        uiStateStore.set('quickRadialHover', hover);
     }
 
     // ------------------------------------------------------------------
@@ -285,7 +238,6 @@ export class UIScene extends Phaser.Scene {
         this._worldDebugText?.setPosition(width - 24, topPadding);
         // Drawer height tracks the scene.
         this._drawer?.setHeight(height);
-        this._quickRadialWidget?.setPosition(width / 2, height / 2);
         this._toastFeed?.setPosition(width - 24, height - 24);
         this._merchantShop?.setPosition(width / 2, height / 2);
         this._upgrader?.setPosition(width / 2, height / 2);
@@ -317,31 +269,6 @@ export class UIScene extends Phaser.Scene {
         if (!open) uiStateStore.set('pendingSlotAssignment', null);
     }
 
-    _showQuickRadial() {
-        if (this._drawer?.isOpen || uiStateStore.get('merchantShopOpen') || uiStateStore.get('upgraderOpen')) return;
-        const loadout = uiStateStore.get('controlledEntity')?.loadout ?? null;
-        this._quickRadialWidget?.refresh(loadout, { hoverSelection: uiStateStore.get('quickRadialHover') });
-        this._quickRadialWidget?.show();
-        uiStateStore.set('quickRadialOpen', true);
-    }
-
-    _confirmAndHideQuickRadial() {
-        if (!this._quickRadialWidget?.visible) return;
-
-        const selection = this._quickRadialWidget.getHoveredSelection();
-        if (selection?.type === 'weapon') {
-            eventBus.emit('ui:activateWeaponSlot', { slotIndex: selection.slotIndex });
-        } else if (selection?.type === 'spell') {
-            eventBus.emit('ui:activateSpellSlot', { slotIndex: selection.slotIndex });
-        } else if (selection?.type === 'consumable') {
-            eventBus.emit('ui:activateConsumableSlot', { slotIndex: selection.slotIndex });
-        }
-
-        this._quickRadialWidget.hide();
-        uiStateStore.set('quickRadialOpen', false);
-        uiStateStore.set('quickRadialHover', null);
-    }
-
     _openMerchantShop(context) {
         if (uiStateStore.get('upgraderOpen')) this._closeUpgrader();
         if (this._drawer?.isOpen) {
@@ -350,7 +277,6 @@ export class UIScene extends Phaser.Scene {
             uiStateStore.set('drawerWidth', 0);
             uiStateStore.set('pendingSlotAssignment', null);
         }
-        this._quickRadialWidget?.hide();
         uiStateStore.patch({
             merchantShopOpen: true,
             merchantShopContext: {
@@ -358,8 +284,6 @@ export class UIScene extends Phaser.Scene {
                 title: context?.title ?? 'Shop',
                 stock: Array.isArray(context?.stock) ? context.stock : [],
             },
-            quickRadialOpen: false,
-            quickRadialHover: null,
         });
         this._merchantShop?.show();
         this._renderState();
@@ -381,7 +305,6 @@ export class UIScene extends Phaser.Scene {
             uiStateStore.set('drawerWidth', 0);
             uiStateStore.set('pendingSlotAssignment', null);
         }
-        this._quickRadialWidget?.hide();
         uiStateStore.patch({
             upgraderOpen: true,
             upgraderContext: {
@@ -389,8 +312,6 @@ export class UIScene extends Phaser.Scene {
                 type: context?.type ?? null,
                 title: context?.title ?? 'Upgrader',
             },
-            quickRadialOpen: false,
-            quickRadialHover: null,
         });
         this._upgrader?.show();
         this._renderState();
@@ -432,8 +353,6 @@ export class UIScene extends Phaser.Scene {
             debugLines.push(`Tile: ${worldDebug.tileX}, ${worldDebug.tileY}`);
         }
         this._worldDebugText?.setText(this._showWorldDebug ? debugLines.join('\n') : '');
-        if (!state.quickRadialOpen) this._quickRadialWidget?.hide();
-
         if (!hasEntity) {
             this._drawer?.update(null);
             this._merchantShop?.hide();
@@ -444,8 +363,15 @@ export class UIScene extends Phaser.Scene {
         this._hpBar?.update(controlled.hp, controlled.hpMax);
         this._staminaBar?.update(controlled.stamina, controlled.staminaMax);
         this._manaBar?.update(controlled.mana, controlled.manaMax);
-        this._equippedWeaponText?.setText(`⚔ ${controlled.loadout?.equipped?.weaponId ? (controlled.loadout.weapons?.find(item => item.id === controlled.loadout.equipped.weaponId)?.name ?? 'Unarmed') : 'Unarmed'}`);
-        this._equippedSpellText?.setText(`✦ ${controlled.loadout?.equipped?.spellId ? (controlled.loadout.spells?.find(item => item.id === controlled.loadout.equipped.spellId)?.name ?? 'Nothing') : 'Nothing'}`);
+        const actionSlots = controlled.loadout?.actionSlots ?? [];
+        const activeActionIndex = controlled.loadout?.activeActionSlotIndex ?? 0;
+        const activeAction = actionSlots[activeActionIndex] ?? null;
+        const slotSummary = actionSlots
+            .slice(0, 4)
+            .map((item, index) => `${index + 1}:${item?.name ?? item?.id ?? 'None'}`)
+            .join('  ');
+        this._equippedWeaponText?.setText(`Weapon ${activeActionIndex + 1}: ${activeAction?.name ?? 'Unarmed'}`);
+        this._equippedSpellText?.setText(slotSummary);
         const consumableSlot = controlled.loadout?.consumableSlots?.[controlled.loadout?.activeConsumableSlotIndex ?? 0] ?? null;
         this._equippedConsumableText?.setText(`Q ${consumableSlot?.name ?? 'Nothing'}${consumableSlot?.id && consumableSlot?.id !== 'nothing' ? ` x${consumableSlot?.quantity ?? 0}` : ''}`);
         this._drawer?.update(controlled);
@@ -461,8 +387,5 @@ export class UIScene extends Phaser.Scene {
         } else {
             this._upgrader?.hide();
         }
-        this._quickRadialWidget?.refresh(controlled.loadout ?? null, {
-            hoverSelection: uiStateStore.get('quickRadialHover'),
-        });
     }
 }

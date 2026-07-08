@@ -3,7 +3,7 @@ import { networkManager } from '../core/NetworkManager.js';
 import { uiStateStore } from '../core/UiStateStore.js';
 import { createDefaultControlledEntityState } from '../core/uiStateSchema.js';
 import { gameState } from '../core/GameState.js';
-import { WEAPONS, SPELLS, ACCESSORIES, ARMOR_SETS, CONSUMABLES, RESOURCES, getItemDef } from '../data/ItemRegistry.js';
+import { WEAPONS, SPELLS, ACTION_WEAPONS, ACCESSORIES, ARMOR_SETS, CONSUMABLES, RESOURCES, getItemDef } from '../data/ItemRegistry.js';
 import { TILE_SIZE, getStageDefinition, getZoneDefinition } from '@clay-and-blood/shared';
 
 const EMPTY_BUFFS = Object.freeze([]);
@@ -12,15 +12,31 @@ const EMPTY_BUFFS = Object.freeze([]);
 // Falls back to a minimal stub for any id not found in the registry.
 function resolveItems(ids, registry) {
     const list = Array.isArray(ids) ? ids : [];
-    return list.map(id => registry[id] ?? { id, name: id.charAt(0).toUpperCase() + id.slice(1) });
+    return list
+        .filter((id) => typeof id === 'string' && id)
+        .map(id => registry[id] ?? { id, name: id.charAt(0).toUpperCase() + id.slice(1) });
+}
+
+function resolveActionItems(ids, spellbookSource = null) {
+    const spellUpgrades = new Map(
+        (spellbookSource?.knownSpells ?? []).map((entry) => [entry.spellId, entry.upgradeLevel ?? 0])
+    );
+    return resolveItems(ids, ACTION_WEAPONS).map((item) => ({
+        ...item,
+        upgradeLevel: spellUpgrades.get(item.id) ?? item.upgradeLevel ?? 0,
+    }));
 }
 
 function resolveInventoryRows(entries = [], loadout = null) {
     const rows = entries.map((entry) => {
         const definition = getItemDef(entry.definitionId) ?? { id: entry.definitionId, name: entry.definitionId };
+        const slotHasDefinition = (slots) => (
+            Array.isArray(slots) && slots.some((item) => item?.id === entry.definitionId || item === entry.definitionId)
+        );
         const isAssigned = loadout
-            ? (loadout.weaponSlots?.includes(entry.definitionId) ||
-                loadout.consumableSlots?.includes(entry.definitionId) ||
+            ? (slotHasDefinition(loadout.actionSlots) ||
+                slotHasDefinition(loadout.weaponSlots) ||
+                slotHasDefinition(loadout.consumableSlots) ||
                 loadout.equipped?.armorSetId === entry.definitionId ||
                 loadout.equipped?.accessoryId === entry.definitionId)
             : false;
@@ -159,14 +175,38 @@ export class UiProjectionSystem {
         const buffs = canApplyNetworkSelf && Array.isArray(networkSelf?.buffs)
             ? networkSelf.buffs
             : EMPTY_BUFFS;
+        const projectedInventorySource = canApplyNetworkSelf
+            ? (networkSelf?.inventory ?? null)
+            : (inventory ? { gold: inventory.gold, entries: inventory.entries } : null);
+        const projectedSpellbookSource = canApplyNetworkSelf
+            ? (networkSelf?.spellbook ?? null)
+            : (spellbook ? { knownSpells: spellbook.knownSpells } : null);
+        const actionWeaponIds = loadout
+            ? (Array.isArray(loadout.actionWeapons)
+                ? loadout.actionWeapons
+                : [
+                    ...(Array.isArray(loadout.weapons) ? loadout.weapons : []),
+                    ...(Array.isArray(loadout.spells) ? loadout.spells.filter((id) => id !== 'nothing') : []),
+                ])
+            : [];
+        const actionSlotIds = loadout
+            ? (Array.isArray(loadout.actionSlots)
+                ? loadout.actionSlots
+                : (Array.isArray(loadout.weaponSlots) ? loadout.weaponSlots : []))
+            : [];
+        const activeActionSlotIndex = Number.isFinite(loadout?.activeActionSlotIndex)
+            ? loadout.activeActionSlotIndex
+            : (Number.isFinite(loadout?.activeWeaponSlotIndex) ? loadout.activeWeaponSlotIndex : 0);
         const projectedLoadout = loadout ? {
             weapons: resolveItems(loadout.weapons, WEAPONS),
             spells: resolveItems(loadout.spells, SPELLS),
+            actionWeapons: resolveActionItems(actionWeaponIds, projectedSpellbookSource),
             armorSets: resolveItems(loadout.armorSets, ARMOR_SETS),
             accessories: resolveItems(loadout.accessories, ACCESSORIES),
             consumables: resolveItems(loadout.consumables, CONSUMABLES),
             weaponSlots: resolveItems(loadout.weaponSlots, WEAPONS),
             spellSlots: resolveItems(loadout.spellSlots, SPELLS),
+            actionSlots: resolveActionItems(actionSlotIds, projectedSpellbookSource),
             consumableSlots: (loadout.consumableSlots ?? []).map((id) => {
                 const definition = CONSUMABLES[id] ?? null;
                 const quantity = canApplyNetworkSelf
@@ -181,18 +221,13 @@ export class UiProjectionSystem {
                     isDepleted: quantity <= 0 && id !== 'nothing',
                 };
             }),
+            activeActionSlotIndex,
             activeWeaponSlotIndex: loadout.activeWeaponSlotIndex,
             activeSpellSlotIndex: loadout.activeSpellSlotIndex,
             activeConsumableSlotIndex: loadout.activeConsumableSlotIndex,
             equipped: loadout.equipped,
             selectedConsumableDefinitionId: loadout.consumableSlots?.[loadout.activeConsumableSlotIndex] ?? 'nothing',
         } : null;
-        const projectedInventorySource = canApplyNetworkSelf
-            ? (networkSelf?.inventory ?? null)
-            : (inventory ? { gold: inventory.gold, entries: inventory.entries } : null);
-        const projectedSpellbookSource = canApplyNetworkSelf
-            ? (networkSelf?.spellbook ?? null)
-            : (spellbook ? { knownSpells: spellbook.knownSpells } : null);
         const inventoryRows = projectedInventorySource
             ? resolveInventoryRows(projectedInventorySource.entries ?? [], projectedLoadout)
             : { weapons: [], armor: [], accessories: [], consumables: [], resources: [] };

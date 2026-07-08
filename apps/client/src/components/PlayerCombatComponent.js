@@ -412,6 +412,12 @@ export class PlayerCombatComponent extends Component {
 
     handlePrimaryInput({ down, held, up, targetX, targetY }) {
         this._refreshActiveWeapon();
+        const activeAction = this._getActiveActionWeapon();
+        if (activeAction?.actionKind === 'spell') {
+            this._handleSpellInput(activeAction, { down, held, up, targetX, targetY });
+            return;
+        }
+
         const weaponMachine = this._getActiveWeaponStateMachine();
         if (down && weaponMachine instanceof ComboWeaponStateMachine &&
             (uiStateStore.get('controlledEntity')?.stamina ?? 0) <= 0) {
@@ -421,17 +427,16 @@ export class PlayerCombatComponent extends Component {
     }
 
     handleSecondaryInput({ down, held, up, targetX, targetY }) {
+        this._refreshActiveWeapon();
         const loadout = this.entity.getComponent('loadout');
-        const weapon = loadout?.getEquippedWeapon() ?? WEAPONS.unarmed;
+        const activeAction = loadout?.getActiveActionWeapon?.() ?? loadout?.getEquippedWeapon?.() ?? WEAPONS.unarmed;
 
-        if (weapon.mouseUsage === 'both') {
-            const weaponMachine = this._getActiveWeaponStateMachine();
-            weaponMachine?.handleSecondary?.({ down, held, up, targetX, targetY });
-            return;
-        }
+        const weaponMachine = activeAction?.actionKind === 'spell' ? null : this._getActiveWeaponStateMachine();
+        weaponMachine?.handleSecondary?.({ down, held, up, targetX, targetY });
+    }
 
-        const spell = loadout?.getEquippedSpell() ?? SPELLS.nothing;
-        const spellCfg = resolveSpellConfig(spell.id);
+    _handleSpellInput(spell, { down, held, up, targetX, targetY }) {
+        const spellCfg = resolveSpellConfig(spell?.id);
         if (spell.id === 'possess') {
             if (!down) return;
             if (!this._canAffordSpellLocally(spellCfg)) return;
@@ -491,10 +496,17 @@ export class PlayerCombatComponent extends Component {
         this._handleSpellPrimary(spell, targetX, targetY);
     }
 
+    _getActiveActionWeapon() {
+        const loadout = this.entity.getComponent('loadout');
+        return loadout?.getActiveActionWeapon?.() ?? loadout?.getEquippedWeapon?.() ?? WEAPONS.unarmed;
+    }
+
     _refreshActiveWeapon(force = false) {
         const loadout = this.entity.getComponent('loadout');
-        const equipped = loadout?.getEquippedWeapon() ?? WEAPONS.unarmed;
-        const nextWeaponId = this.weaponStateMachines[equipped.id] ? equipped.id : 'unarmed';
+        const activeAction = loadout?.getActiveActionWeapon?.() ?? loadout?.getEquippedWeapon?.() ?? WEAPONS.unarmed;
+        const nextWeaponId = activeAction?.actionKind === 'spell'
+            ? 'unarmed'
+            : (this.weaponStateMachines[activeAction.id] ? activeAction.id : 'unarmed');
 
         if (!force && nextWeaponId === this.activeWeaponId) return;
 

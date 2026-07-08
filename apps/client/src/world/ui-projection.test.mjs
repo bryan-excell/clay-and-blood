@@ -16,13 +16,22 @@ function makeEntity(id, type, components = {}) {
 
 // Minimal mock that matches the shape LoadoutComponent exposes.
 function makeLoadout(weapons, spells, accessories, equipped) {
+    const actionSlots = [
+        equipped.weaponId ?? 'unarmed',
+        equipped.spellId && equipped.spellId !== 'nothing' ? equipped.spellId : 'unarmed',
+        'unarmed',
+        'unarmed',
+    ];
     return {
         weapons,
         spells,
+        actionWeapons: [...weapons, ...spells.filter((id) => id !== 'nothing')],
         armorSets: [],
         accessories,
-        weaponSlots: [equipped.weaponId ?? 'unarmed', 'unarmed', 'unarmed'],
-        spellSlots: [equipped.spellId ?? 'nothing', 'nothing', 'nothing'],
+        actionSlots,
+        weaponSlots: actionSlots,
+        spellSlots: actionSlots.filter((id) => spells.includes(id) && id !== 'nothing'),
+        activeActionSlotIndex: 0,
         activeWeaponSlotIndex: 0,
         activeSpellSlotIndex: 0,
         equipped,
@@ -71,12 +80,10 @@ export function runUiProjectionBasicProjectionTest() {
     assert.equal(state.loadout.equipped.spellId, 'possess');
     assert.equal(state.loadout.weapons.length, 2);
     assert.equal(state.loadout.weapons[1].id, 'bow');
-    assert.equal(state.loadout.spells[1].id, 'possess');
-    assert.equal(state.loadout.weaponSlots[0].id, 'bow');
-    assert.equal(state.loadout.weaponSlots[1].id, 'unarmed');
-    assert.equal(state.loadout.activeWeaponSlotIndex, 0);
-    assert.equal(state.loadout.spellSlots[0].id, 'possess');
-    assert.equal(state.loadout.activeSpellSlotIndex, 0);
+    assert.equal(state.loadout.actionWeapons.some((item) => item.id === 'possess'), true);
+    assert.equal(state.loadout.actionSlots[0].id, 'bow');
+    assert.equal(state.loadout.actionSlots[1].id, 'possess');
+    assert.equal(state.loadout.activeActionSlotIndex, 0);
 }
 
 export function runUiProjectionNetworkOverrideTest() {
@@ -154,7 +161,7 @@ export function runUiProjectionPossessionGuardTest() {
     // Golem's loadout is projected
     assert.ok(state.loadout, 'golem should have a loadout');
     assert.equal(state.loadout.equipped.weaponId, 'unarmed');
-    assert.equal(state.loadout.weapons.length, 1);
+    assert.equal(state.loadout.actionWeapons.length, 1);
 }
 
 export function runUiProjectionImmediateControlChangedTest() {

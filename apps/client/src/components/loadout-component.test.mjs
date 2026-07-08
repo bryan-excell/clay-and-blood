@@ -5,14 +5,15 @@ function makeLoadout() {
     return new LoadoutComponent({
         weapons: ['bow', 'longsword'],
         spells: ['possess', 'imposing_flame'],
+        actionSlots: ['bow', 'possess', 'unarmed', 'unarmed'],
         consumables: ['gold_pouch', 'healing_gem'],
-        accessories: [],
-        armorSets: [],
+        accessories: ['cape'],
+        armorSets: ['leather_armor'],
         equipped: {
             weaponId: 'bow',
-            spellId: 'possess',
-            armorSetId: null,
-            accessoryId: null,
+            spellId: 'nothing',
+            armorSetId: 'leather_armor',
+            accessoryId: 'cape',
         },
     });
 }
@@ -20,48 +21,54 @@ function makeLoadout() {
 export function runLoadoutKitAssignmentTest() {
     const loadout = makeLoadout();
 
-    assert.deepEqual(loadout.weaponSlots, ['bow', 'unarmed', 'unarmed']);
-    assert.deepEqual(loadout.spellSlots, ['possess', 'nothing', 'nothing']);
+    assert.deepEqual(loadout.actionSlots, ['bow', 'possess', 'unarmed', 'unarmed']);
+    assert.deepEqual(loadout.weaponSlots, ['bow', 'possess', 'unarmed', 'unarmed']);
 
-    loadout.assignWeaponSlot(1, 'longsword');
-    loadout.assignSpellSlot(2, 'imposing_flame');
+    loadout.assignActionSlot(2, 'longsword');
+    loadout.assignActionSlot(3, 'imposing_flame');
 
-    assert.deepEqual(loadout.weaponSlots, ['bow', 'longsword', 'unarmed']);
-    assert.deepEqual(loadout.spellSlots, ['possess', 'nothing', 'imposing_flame']);
+    assert.deepEqual(loadout.actionSlots, ['bow', 'possess', 'longsword', 'imposing_flame']);
     assert.equal(loadout.equipped.weaponId, 'bow');
-    assert.equal(loadout.equipped.spellId, 'possess');
+    assert.equal(loadout.equipped.spellId, 'nothing');
 }
 
 export function runLoadoutKitActivationAndCyclingTest() {
     const loadout = makeLoadout();
 
-    loadout.assignWeaponSlot(1, 'longsword');
-    loadout.assignSpellSlot(1, 'imposing_flame');
-    loadout.activateWeaponSlot(1);
-    loadout.activateSpellSlot(1);
+    loadout.assignActionSlot(2, 'longsword');
+    loadout.activateActionSlot(1);
 
-    assert.equal(loadout.activeWeaponSlotIndex, 1);
-    assert.equal(loadout.activeSpellSlotIndex, 1);
-    assert.equal(loadout.equipped.weaponId, 'longsword');
-    assert.equal(loadout.equipped.spellId, 'imposing_flame');
-
-    loadout.cycleWeaponSlot();
-    loadout.cycleSpellSlot();
-
-    assert.equal(loadout.activeWeaponSlotIndex, 2);
-    assert.equal(loadout.activeSpellSlotIndex, 2);
+    assert.equal(loadout.activeActionSlotIndex, 1);
     assert.equal(loadout.equipped.weaponId, 'unarmed');
+    assert.equal(loadout.equipped.spellId, 'possess');
+
+    loadout.cycleActionSlot();
+
+    assert.equal(loadout.activeActionSlotIndex, 2);
+    assert.equal(loadout.equipped.weaponId, 'longsword');
     assert.equal(loadout.equipped.spellId, 'nothing');
 }
 
 export function runLoadoutActiveSlotReassignTest() {
     const loadout = makeLoadout();
 
-    loadout.assignWeaponSlot(0, 'unarmed');
-    loadout.assignSpellSlot(0, 'nothing');
+    loadout.assignActionSlot(0, 'imposing_flame');
 
     assert.equal(loadout.equipped.weaponId, 'unarmed');
+    assert.equal(loadout.equipped.spellId, 'imposing_flame');
+    assert.deepEqual(loadout.actionSlots, ['imposing_flame', 'possess', 'unarmed', 'unarmed']);
+
+    loadout.assignActionSlot(0, 'unarmed');
+    assert.equal(loadout.equipped.weaponId, 'unarmed');
     assert.equal(loadout.equipped.spellId, 'nothing');
-    assert.deepEqual(loadout.weaponSlots, ['unarmed', 'unarmed', 'unarmed']);
-    assert.deepEqual(loadout.spellSlots, ['nothing', 'nothing', 'nothing']);
+
+    loadout.assignConsumableSlot(0, 'healing_gem');
+    assert.deepEqual(loadout.consumableSlots, ['healing_gem']);
+    loadout.assignConsumableSlot(0, 'nothing');
+    assert.deepEqual(loadout.consumableSlots, ['nothing']);
+
+    loadout.equipArmor(null);
+    loadout.equipAccessory(null);
+    assert.equal(loadout.equipped.armorSetId, null);
+    assert.equal(loadout.equipped.accessoryId, null);
 }
